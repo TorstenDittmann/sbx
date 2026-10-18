@@ -1,0 +1,16 @@
+{
+  "name": "@sbx/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript client for the sbx sandbox API.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

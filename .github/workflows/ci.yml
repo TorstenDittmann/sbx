@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+      - name: vet
+        run: go vet ./...
+      - name: unit tests
+        run: go test -count=1 -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+      - name: coverage
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          {
+            echo "### Go coverage"
+            echo '```'
+            tail -n 1 coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          awk '/^total:/ { gsub("%","",$NF); if ($NF+0 < 80) { print "coverage " $NF "% is below 80%"; exit 1 } }' coverage.txt
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: docker integration
+        run: SBX_INTEGRATION=1 go test -count=1 -timeout 20m ./internal/driver/docker/ ./test/e2e/
+
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: sdk tests
+        run: npm test --prefix sdk/typescript
+      - name: example parses
+        run: node --experimental-strip-types --check examples/quickstart.ts
+
+  website:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build site image
+        run: docker build -t sbx-website ./website

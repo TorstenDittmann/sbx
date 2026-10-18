@@ -1,0 +1,610 @@
+// Package store is the single-node SQLite state. The same Go types are what a
+// later Postgres implementation would persist; cluster mode is not in v0.1.
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+// ErrNotFound is returned when a row does not exist.
+var ErrNotFound = errors.New("not found")
+
+// APIKey is a stored credential. Hash is the sha256 hex of the secret.
+type APIKey struct {
+	ID         string
+	Name       string
+	Hash       string
+	Prefix     string
+	Scopes     []string
+	CreatedAt  time.Time
+	LastUsedAt *time.Time
+}
+
+// HasScope reports whether the key may perform an action. admin implies every scope.
+func (k APIKey) HasScope(scope string) bool {
+	for _, s := range k.Scopes {
+		if s == "admin" || s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// Admin reports whether the key has the admin scope.
+func (k APIKey) Admin() bool {
+	return k.HasScope("admin")
+}
+
+// Template is a named image plus optional resource defaults.
+type Template struct {
+	Name        string
+	Image       string
+	Description string
+	CPU         float64
+	MemoryMB    int
+	DiskMB      int
+	Env         map[string]string
+	Builtin     bool
+	CreatedAt   time.Time
+}
+
+// Sandbox is one sandbox row. Status is creating, running, paused, stopped, or error.
+type Sandbox struct {
+	ID                 string
+	Template           string
+	Image              string
+	Backend            string
+	Status             string
+	CPU                float64
+	MemoryMB           int
+	DiskMB             int
+	PIDs               int
+	Env                map[string]string
+	Network            string
+	Labels             map[string]string
+	OwnerKeyID         string
+	CreatedAt          time.Time
+	ExpiresAt          time.Time
+	IdleTimeoutSeconds int
+	LastActivityAt     time.Time
+	FinishedAt         *time.Time
+	ContainerID        string
+	Error              string
+}
+
+// SandboxFilter selects rows. Empty fields are ignored.
+type SandboxFilter struct {
+	Status  string
+	Backend string
+	OwnerID string
+	Labels  map[string]string
+}
+
+// Store is a process-local SQLite database.
+type Store struct {
+	db *sql.DB
+}
+
+// Open creates or migrates the database at path.
+func Open(path string) (*Store, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
+// Close closes the database.
+func (s *Store) Close() error {
+	return s.db.Close()
+}
+
+func migrate(db *sql.DB) error {
+	_, err := db.Exec(schema)
+	return err
+}
+
+const schema = `
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL UNIQUE,
+    prefix TEXT NOT NULL,
+    scopes TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS templates (
+    name TEXT PRIMARY KEY,
+    image TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    cpu REAL NOT NULL DEFAULT 0,
+    memory_mb INTEGER NOT NULL DEFAULT 0,
+    disk_mb INTEGER NOT NULL DEFAULT 0,
+    env_json TEXT NOT NULL DEFAULT '{}',
+    builtin INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sandboxes (
+    id TEXT PRIMARY KEY,
+    template TEXT NOT NULL DEFAULT '',
+    image TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    status TEXT NOT NULL,
+    cpu REAL NOT NULL,
+    memory_mb INTEGER NOT NULL,
+    disk_mb INTEGER NOT NULL,
+    pids INTEGER NOT NULL,
+    env_json TEXT NOT NULL,
+    network TEXT NOT NULL,
+    labels_json TEXT NOT NULL,
+    owner_key_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    idle_timeout_seconds INTEGER NOT NULL DEFAULT 0,
+    last_activity_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    container_id TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_status ON sandboxes(status);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_expires ON sandboxes(expires_at);
+`
+
+// CreateKey inserts a key. The plaintext secret is not stored.
+func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
+	scopes, err := json.Marshal(k.Scopes)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), millis(k.CreatedAt))
+	return err
+}
+
+// CountKeys returns how many keys exist.
+func (s *Store) CountKeys(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM api_keys`).Scan(&n)
+	return n, err
+}
+
+// KeyByHash looks up a key by the digest of its secret.
+func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, key_hash, prefix, scopes, created_at, last_used_at
+		FROM api_keys WHERE key_hash = ?`, hash)
+	return scanKey(row)
+}
+
+// ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
+func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, name, key_hash, prefix, scopes, created_at, last_used_at
+		FROM api_keys ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []APIKey
+	for rows.Next() {
+		k, err := scanKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// TouchKey records that a key was just used.
+func (s *Store) TouchKey(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE api_keys SET last_used_at = ? WHERE id = ?`, millis(at), id)
+	return err
+}
+
+// UpsertBuiltin inserts or replaces a built-in template.
+func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
+	env := mustJSON(t.Env)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+		ON CONFLICT(name) DO UPDATE SET
+			image = excluded.image,
+			description = excluded.description,
+			cpu = excluded.cpu,
+			memory_mb = excluded.memory_mb,
+			disk_mb = excluded.disk_mb,
+			env_json = excluded.env_json,
+			builtin = 1`,
+		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, env, millis(t.CreatedAt))
+	return err
+}
+
+// CreateTemplate inserts a user template. Names that already exist fail.
+func (s *Store) CreateTemplate(ctx context.Context, t Template) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), millis(t.CreatedAt))
+	return err
+}
+
+// DeleteTemplate removes a non-built-in template.
+func (s *Store) DeleteTemplate(ctx context.Context, name string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM templates WHERE name = ? AND builtin = 0`, name)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		var builtin int
+		err := s.db.QueryRowContext(ctx, `SELECT builtin FROM templates WHERE name = ?`, name).Scan(&builtin)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("built-in template")
+	}
+	return nil
+}
+
+// GetTemplate loads one template.
+func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at
+		FROM templates WHERE name = ?`, name)
+	return scanTemplate(row)
+}
+
+// ListTemplates returns every template, built-ins first.
+func (s *Store) ListTemplates(ctx context.Context) ([]Template, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at
+		FROM templates ORDER BY builtin DESC, name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Template
+	for rows.Next() {
+		t, err := scanTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// InsertSandbox inserts a new sandbox row.
+func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO sandboxes (
+			id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
+			env_json, network, labels_json, owner_key_id, created_at, expires_at,
+			idle_timeout_seconds, last_activity_at, finished_at, container_id, error
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sb.ID, sb.Template, sb.Image, sb.Backend, sb.Status, sb.CPU, sb.MemoryMB, sb.DiskMB, sb.PIDs,
+		mustJSON(sb.Env), sb.Network, mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
+		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error)
+	return err
+}
+
+// UpdateSandbox writes mutable fields of an existing row.
+func (s *Store) UpdateSandbox(ctx context.Context, sb Sandbox) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET
+			status = ?, expires_at = ?, idle_timeout_seconds = ?, last_activity_at = ?,
+			finished_at = ?, container_id = ?, error = ?, labels_json = ?
+		WHERE id = ?`,
+		sb.Status, millis(sb.ExpiresAt), sb.IdleTimeoutSeconds, millis(sb.LastActivityAt),
+		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// GetSandbox loads one sandbox.
+func (s *Store) GetSandbox(ctx context.Context, id string) (Sandbox, error) {
+	row := s.db.QueryRowContext(ctx, sandboxSelect+` WHERE id = ?`, id)
+	return scanSandbox(row)
+}
+
+// ListSandboxes returns sandboxes matching the filter, newest first.
+// Label matches are applied in process; v0.1 state is small.
+func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, error) {
+	q := sandboxSelect + ` WHERE 1 = 1`
+	var args []any
+	if f.Status != "" {
+		q += ` AND status = ?`
+		args = append(args, f.Status)
+	}
+	if f.Backend != "" {
+		q += ` AND backend = ?`
+		args = append(args, f.Backend)
+	}
+	if f.OwnerID != "" {
+		q += ` AND owner_key_id = ?`
+		args = append(args, f.OwnerID)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Sandbox
+	for rows.Next() {
+		sb, err := scanSandbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		if !labelsMatch(sb.Labels, f.Labels) {
+			continue
+		}
+		out = append(out, sb)
+	}
+	return out, rows.Err()
+}
+
+// CountActive returns sandboxes that still consume the owner's quota.
+func (s *Store) CountActive(ctx context.Context, ownerID string) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sandboxes
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&n)
+	return n, err
+}
+
+// ListDue returns sandboxes the reaper should stop.
+func (s *Store) ListDue(ctx context.Context, now time.Time, creatingBefore time.Time) ([]Sandbox, error) {
+	rows, err := s.db.QueryContext(ctx, sandboxSelect+`
+		WHERE (
+			status IN ('running', 'paused') AND (
+				expires_at <= ? OR
+				(idle_timeout_seconds > 0 AND last_activity_at + idle_timeout_seconds * 1000 <= ?)
+			)
+		) OR (
+			status = 'creating' AND created_at <= ?
+		)`, millis(now), millis(now), millis(creatingBefore))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Sandbox
+	for rows.Next() {
+		sb, err := scanSandbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sb)
+	}
+	return out, rows.Err()
+}
+
+// PruneFinished deletes stopped and error rows finished before cutoff.
+func (s *Store) PruneFinished(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, `
+		DELETE FROM sandboxes
+		WHERE status IN ('stopped', 'error') AND finished_at IS NOT NULL AND finished_at <= ?`, millis(cutoff))
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// CountByStatus counts sandboxes grouped by status.
+func (s *Store) CountByStatus(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COUNT(*) FROM sandboxes GROUP BY status`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int{}
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		out[status] = n
+	}
+	return out, rows.Err()
+}
+
+const sandboxSelect = `
+SELECT id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
+       env_json, network, labels_json, owner_key_id, created_at, expires_at,
+       idle_timeout_seconds, last_activity_at, finished_at, container_id, error
+FROM sandboxes`
+
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanKey(row scanner) (APIKey, error) {
+	var k APIKey
+	var scopes string
+	var created int64
+	var last sql.NullInt64
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &created, &last)
+	if errors.Is(err, sql.ErrNoRows) {
+		return APIKey{}, ErrNotFound
+	}
+	if err != nil {
+		return APIKey{}, err
+	}
+	if err := json.Unmarshal([]byte(scopes), &k.Scopes); err != nil {
+		return APIKey{}, err
+	}
+	k.CreatedAt = fromMillis(created)
+	if last.Valid {
+		t := fromMillis(last.Int64)
+		k.LastUsedAt = &t
+	}
+	return k, nil
+}
+
+func scanTemplate(row scanner) (Template, error) {
+	var t Template
+	var env string
+	var builtin int
+	var created int64
+	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &builtin, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Template{}, ErrNotFound
+	}
+	if err != nil {
+		return Template{}, err
+	}
+	t.Env = map[string]string{}
+	if env != "" {
+		if err := json.Unmarshal([]byte(env), &t.Env); err != nil {
+			return Template{}, err
+		}
+	}
+	t.Builtin = builtin == 1
+	t.CreatedAt = fromMillis(created)
+	return t, nil
+}
+
+func scanSandbox(row scanner) (Sandbox, error) {
+	var sb Sandbox
+	var env, labels string
+	var created, expires, activity int64
+	var finished sql.NullInt64
+	err := row.Scan(
+		&sb.ID, &sb.Template, &sb.Image, &sb.Backend, &sb.Status, &sb.CPU, &sb.MemoryMB, &sb.DiskMB, &sb.PIDs,
+		&env, &sb.Network, &labels, &sb.OwnerKeyID, &created, &expires,
+		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Sandbox{}, ErrNotFound
+	}
+	if err != nil {
+		return Sandbox{}, err
+	}
+	sb.Env = decodeMap(env)
+	sb.Labels = decodeMap(labels)
+	sb.CreatedAt = fromMillis(created)
+	sb.ExpiresAt = fromMillis(expires)
+	sb.LastActivityAt = fromMillis(activity)
+	if finished.Valid {
+		t := fromMillis(finished.Int64)
+		sb.FinishedAt = &t
+	}
+	return sb, nil
+}
+
+func decodeMap(s string) map[string]string {
+	out := map[string]string{}
+	if s == "" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(s), &out)
+	if out == nil {
+		return map[string]string{}
+	}
+	return out
+}
+
+func mustJSON(v any) string {
+	if v == nil {
+		return "{}"
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func labelsMatch(have, want map[string]string) bool {
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+func millis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UTC().UnixMilli()
+}
+
+func nullMillis(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return millis(*t)
+}
+
+func fromMillis(ms int64) time.Time {
+	if ms == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
+}
+
+// ParseLabelQuery parses repeated "k:v" label filters.
+func ParseLabelQuery(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, raw := range values {
+		k, v, ok := strings.Cut(raw, ":")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("label %q must be key:value", raw)
+		}
+		out[k] = v
+	}
+	return out, nil
+}

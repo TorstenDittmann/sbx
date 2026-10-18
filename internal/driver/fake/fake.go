@@ -1,0 +1,257 @@
+// Package fake is an in-memory Driver for tests.
+package fake
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/TorstenDittmann/sbx/internal/driver"
+)
+
+// Driver stores sandboxes and files in memory.
+type Driver struct {
+	mu           sync.Mutex
+	name         string
+	caps         driver.Caps
+	boxes        map[string]*box
+	files        map[string]map[string][]byte
+	PingErr      error
+	CreateErr    error
+	Deleted      []string
+	TruncateExec bool
+}
+
+type box struct {
+	spec  driver.SandboxSpec
+	state driver.State
+	image string
+}
+
+// New returns a docker-like fake that supports pause.
+func New(name string) *Driver {
+	if name == "" {
+		name = "docker"
+	}
+	level := "container"
+	if name == "gvisor" {
+		level = "gvisor"
+	}
+	return &Driver{
+		name:  name,
+		caps:  driver.Caps{Pause: true, IsolationLevel: level},
+		boxes: map[string]*box{},
+		files: map[string]map[string][]byte{},
+	}
+}
+
+// SetPause toggles the pause capability.
+func (d *Driver) SetPause(ok bool) {
+	d.mu.Lock()
+	d.caps.Pause = ok
+	d.mu.Unlock()
+}
+
+// Seed adds a container the manager did not create, for orphan reconciliation.
+func (d *Driver) Seed(st driver.Status) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.boxes[st.ID] = &box{spec: driver.SandboxSpec{ID: st.SandboxID, Image: st.Image}, state: st.State, image: st.Image}
+}
+
+var _ driver.Driver = (*Driver)(nil)
+
+func (d *Driver) Name() string { return d.name }
+
+func (d *Driver) Capabilities() driver.Caps {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.caps
+}
+
+func (d *Driver) Ping(context.Context) error { return d.PingErr }
+
+func (d *Driver) EnsureImage(context.Context, string) error { return nil }
+
+func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Handle, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.CreateErr != nil {
+		return driver.Handle{}, d.CreateErr
+	}
+	d.boxes[spec.ID] = &box{spec: spec, state: driver.StateRunning, image: spec.Image}
+	if d.files[spec.ID] == nil {
+		d.files[spec.ID] = map[string][]byte{}
+	}
+	return driver.Handle{ID: spec.ID, RuntimeName: d.name}, nil
+}
+
+func (d *Driver) Delete(_ context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Deleted = append(d.Deleted, id)
+	delete(d.boxes, id)
+	delete(d.files, id)
+	return nil
+}
+
+func (d *Driver) Inspect(_ context.Context, id string) (driver.Status, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.Status{}, driver.ErrNotFound
+	}
+	return d.status(id, b), nil
+}
+
+func (d *Driver) List(context.Context) ([]driver.Status, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]driver.Status, 0, len(d.boxes))
+	for id, b := range d.boxes {
+		out = append(out, d.status(id, b))
+	}
+	return out, nil
+}
+
+func (d *Driver) status(id string, b *box) driver.Status {
+	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image}
+}
+
+func (d *Driver) Pause(_ context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.caps.Pause {
+		return fmt.Errorf("pause is not supported")
+	}
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.ErrNotFound
+	}
+	b.state = driver.StatePaused
+	return nil
+}
+
+func (d *Driver) Resume(_ context.Context, id string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.ErrNotFound
+	}
+	b.state = driver.StateRunning
+	return nil
+}
+
+func (d *Driver) Exec(_ context.Context, id string, req driver.ExecRequest) (driver.ExecResult, error) {
+	return d.run(id, req, nil)
+}
+
+func (d *Driver) ExecStream(_ context.Context, id string, req driver.ExecRequest, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+	return d.run(id, req, emit)
+}
+
+func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+	d.mu.Lock()
+	b, ok := d.boxes[id]
+	truncate := d.TruncateExec
+	d.mu.Unlock()
+	if !ok || b.state == driver.StateStopped {
+		return driver.ExecResult{}, driver.ErrNotFound
+	}
+	start := time.Now()
+	stdout := []byte("ok\n")
+	if len(req.Cmd) > 0 && req.Cmd[0] == "echo" {
+		stdout = []byte(strings.Join(req.Cmd[1:], " ") + "\n")
+	}
+	if req.Stdin != nil {
+		if _, err := io.ReadAll(req.Stdin); err != nil {
+			return driver.ExecResult{}, err
+		}
+	}
+	if emit != nil && len(stdout) > 0 {
+		if err := emit(driver.ExecChunk{Kind: driver.StreamStdout, Data: stdout}); err != nil {
+			return driver.ExecResult{}, err
+		}
+		stdout = nil
+	}
+	return driver.ExecResult{ExitCode: 0, Stdout: stdout, Duration: time.Since(start), Truncated: truncate}, nil
+}
+
+func (d *Driver) ListFiles(_ context.Context, id, dir string) ([]driver.FileEntry, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.boxes[id]; !ok {
+		return nil, driver.ErrNotFound
+	}
+	dir = strings.TrimRight(dir, "/")
+	var entries []driver.FileEntry
+	seen := map[string]bool{}
+	for p, content := range d.files[id] {
+		if !strings.HasPrefix(p, dir+"/") {
+			continue
+		}
+		rest := strings.TrimPrefix(p, dir+"/")
+		name, _, more := strings.Cut(rest, "/")
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		full := dir + "/" + name
+		if more {
+			entries = append(entries, driver.FileEntry{Name: name, Path: full, Type: driver.FileDir, Mode: 0o755})
+			continue
+		}
+		entries = append(entries, driver.FileEntry{Name: name, Path: full, Type: driver.FileFile, Size: int64(len(content)), Mode: 0o644})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+	return entries, nil
+}
+
+func (d *Driver) ReadFile(_ context.Context, id, path string, max int) ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.boxes[id]; !ok {
+		return nil, driver.ErrNotFound
+	}
+	content, ok := d.files[id][path]
+	if !ok {
+		return nil, fmt.Errorf("no such file")
+	}
+	if max > 0 && len(content) > max {
+		return content[:max], fmt.Errorf("file exceeds %d bytes", max)
+	}
+	out := make([]byte, len(content))
+	copy(out, content)
+	return out, nil
+}
+
+func (d *Driver) WriteFile(_ context.Context, id, path string, content []byte, _ uint32) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.boxes[id]; !ok {
+		return driver.ErrNotFound
+	}
+	if d.files[id] == nil {
+		d.files[id] = map[string][]byte{}
+	}
+	buf := make([]byte, len(content))
+	copy(buf, content)
+	d.files[id][path] = buf
+	return nil
+}
+
+func (d *Driver) RemoveFile(_ context.Context, id, path string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.boxes[id]; !ok {
+		return driver.ErrNotFound
+	}
+	delete(d.files[id], path)
+	return nil
+}

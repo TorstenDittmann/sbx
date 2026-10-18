@@ -1,0 +1,12 @@
+.git
+.github
+bin
+data
+coverage.out
+coverage.txt
+website
+sdk
+examples
+docs
+*.md
+node_modules

@@ -1,0 +1,526 @@
+openapi: 3.1.0
+info:
+  title: sbx
+  version: 0.1.0
+  summary: Single-node sandbox API.
+  description: |
+    HTTP API for creating and using isolated sandboxes. Authenticate with
+    `Authorization: Bearer sbx_<key>`. The first boot of a data directory
+    generates an admin key and prints it once.
+servers:
+  - url: http://127.0.0.1:8080
+    description: Local default bind.
+security:
+  - bearerAuth: []
+paths:
+  /:
+    get:
+      security: []
+      operationId: root
+      summary: Service identity
+      responses:
+        "200":
+          description: Service metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, version]
+                properties:
+                  name: {type: string}
+                  version: {type: string}
+                  health: {type: string}
+                  openapi: {type: string}
+  /healthz:
+    get:
+      security: []
+      operationId: health
+      summary: Liveness and Docker reachability
+      responses:
+        "200":
+          description: Docker is reachable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503":
+          description: Docker is unreachable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+  /metrics:
+    get:
+      security: []
+      operationId: metrics
+      summary: Prometheus text metrics
+      responses:
+        "200":
+          description: Metrics
+          content:
+            text/plain:
+              schema: {type: string}
+  /openapi.yaml:
+    get:
+      security: []
+      operationId: openapi
+      summary: This document
+      responses:
+        "200":
+          description: OpenAPI document
+          content:
+            application/yaml:
+              schema: {type: string}
+  /v1/keys:
+    get:
+      operationId: listKeys
+      summary: List API keys
+      responses:
+        "200":
+          description: Keys without secrets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items: {$ref: "#/components/schemas/APIKey"}
+    post:
+      operationId: createKey
+      summary: Create an API key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateKey"}
+      responses:
+        "201":
+          description: Key created. The secret is returned once.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CreatedKey"}
+  /v1/templates:
+    get:
+      operationId: listTemplates
+      summary: List templates
+      responses:
+        "200":
+          description: Templates
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  templates:
+                    type: array
+                    items: {$ref: "#/components/schemas/Template"}
+    post:
+      operationId: createTemplate
+      summary: Create a template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateTemplate"}
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Template"}
+  /v1/templates/{name}:
+    delete:
+      operationId: deleteTemplate
+      summary: Delete a user template
+      parameters:
+        - $ref: "#/components/parameters/TemplateName"
+      responses:
+        "204": {description: Deleted}
+  /v1/sandboxes:
+    get:
+      operationId: listSandboxes
+      summary: List sandboxes
+      parameters:
+        - in: query
+          name: status
+          schema: {type: string}
+        - in: query
+          name: backend
+          schema: {type: string}
+        - in: query
+          name: label
+          description: Repeatable key:value filter. All must match.
+          schema: {type: string}
+      responses:
+        "200":
+          description: Sandboxes visible to the caller
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sandboxes:
+                    type: array
+                    items: {$ref: "#/components/schemas/Sandbox"}
+    post:
+      operationId: createSandbox
+      summary: Create a sandbox
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateSandbox"}
+      responses:
+        "201":
+          description: Running sandbox
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}:
+    get:
+      operationId: getSandbox
+      summary: Get a sandbox
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Sandbox
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+    delete:
+      operationId: deleteSandbox
+      summary: Stop and remove a sandbox
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Sandbox after it was stopped
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/timeout:
+    post:
+      operationId: setSandboxTimeout
+      summary: Set the remaining lifetime
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ttl_seconds]
+              properties:
+                ttl_seconds: {type: integer, minimum: 1}
+      responses:
+        "200":
+          description: Updated sandbox
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/pause:
+    post:
+      operationId: pauseSandbox
+      summary: Pause a sandbox
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Paused sandbox
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/resume:
+    post:
+      operationId: resumeSandbox
+      summary: Resume a sandbox
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Running sandbox
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/exec:
+    post:
+      operationId: execSandbox
+      summary: Run a command
+      description: |
+        Waits for the process and returns stdout, stderr, and the exit code.
+        `?stream=1` switches the response to Server-Sent Events (`stdout`,
+        `stderr`, `exit`, `error`).
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - in: query
+          name: stream
+          schema: {type: string, enum: ["1", "true"]}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExecRequest"}
+      responses:
+        "200":
+          description: Exec result, or an SSE stream when stream=1
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ExecResult"}
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{id}/files:
+    get:
+      operationId: listFiles
+      summary: List a directory
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileList"}
+    delete:
+      operationId: deleteFile
+      summary: Delete a file or directory
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "204": {description: Deleted}
+  /v1/sandboxes/{id}/files/content:
+    get:
+      operationId: downloadFile
+      summary: Download a file
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: Raw file bytes
+          content:
+            application/octet-stream:
+              schema: {type: string, format: binary}
+    put:
+      operationId: uploadFile
+      summary: Upload a file
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+        - in: query
+          name: mode
+          schema: {type: string, example: "644"}
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "204": {description: Written}
+  /v1/sandboxes/{id}/files/archive:
+    get:
+      operationId: downloadArchive
+      summary: Download a directory as tar.gz
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: gzip-compressed tar
+          content:
+            application/gzip:
+              schema: {type: string, format: binary}
+    post:
+      operationId: uploadArchive
+      summary: Extract a tar or tar.gz into a directory
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "204": {description: Extracted}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API key issued by sbx, prefixed with sbx_.
+  parameters:
+    SandboxID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, pattern: "^sbx_[0-9a-f]{16}$"}
+    TemplateName:
+      name: name
+      in: path
+      required: true
+      schema: {type: string}
+    Path:
+      name: path
+      in: query
+      required: true
+      schema: {type: string}
+      description: Absolute path inside the sandbox.
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+    Health:
+      type: object
+      required: [status, version, backend, docker]
+      properties:
+        status: {type: string}
+        version: {type: string}
+        backend: {type: string}
+        docker: {type: string}
+    APIKey:
+      type: object
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string}
+        scopes:
+          type: array
+          items: {type: string}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+    CreateKey:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        scopes:
+          type: array
+          items: {type: string, enum: [admin, sandbox]}
+    CreatedKey:
+      allOf:
+        - $ref: "#/components/schemas/APIKey"
+        - type: object
+          required: [key]
+          properties:
+            key: {type: string, description: Shown once.}
+    Template:
+      type: object
+      required: [name, image, builtin]
+      properties:
+        name: {type: string}
+        image: {type: string}
+        description: {type: string}
+        cpu: {type: number}
+        memory_mb: {type: integer}
+        disk_mb: {type: integer}
+        env: {type: object, additionalProperties: {type: string}}
+        builtin: {type: boolean}
+        created_at: {type: string, format: date-time}
+    CreateTemplate:
+      type: object
+      required: [name, image]
+      properties:
+        name: {type: string}
+        image: {type: string}
+        description: {type: string}
+        cpu: {type: number}
+        memory_mb: {type: integer}
+        disk_mb: {type: integer}
+        env: {type: object, additionalProperties: {type: string}}
+    Network:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [none, full]
+          description: >
+            none attaches no network. full grants public egress on a dedicated
+            bridge and still rejects cloud metadata (169.254.169.254 and the
+            rest of 169.254.0.0/16), link-local, and private ranges.
+        allow:
+          type: array
+          items: {type: string}
+          description: Egress allow-lists are rejected in v0.1.
+    CreateSandbox:
+      type: object
+      properties:
+        template: {type: string}
+        image: {type: string}
+        cpu: {type: number}
+        memory_mb: {type: integer}
+        disk_mb: {type: integer}
+        pids: {type: integer}
+        ttl_seconds: {type: integer}
+        idle_timeout_seconds: {type: integer}
+        env: {type: object, additionalProperties: {type: string}}
+        network: {$ref: "#/components/schemas/Network"}
+        backend: {type: string, enum: [docker, gvisor]}
+        labels: {type: object, additionalProperties: {type: string}}
+    Sandbox:
+      type: object
+      required: [id, status, backend, image, expires_at, node]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [creating, running, paused, stopped, error]}
+        backend: {type: string}
+        template: {type: string}
+        image: {type: string}
+        cpu: {type: number}
+        memory_mb: {type: integer}
+        disk_mb: {type: integer}
+        pids: {type: integer}
+        network: {type: string}
+        env: {type: object, additionalProperties: {type: string}}
+        labels: {type: object, additionalProperties: {type: string}}
+        idle_timeout_seconds: {type: integer}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        node: {type: string}
+    ExecRequest:
+      type: object
+      required: [cmd]
+      properties:
+        cmd:
+          type: array
+          items: {type: string}
+          minItems: 1
+        cwd: {type: string}
+        env: {type: object, additionalProperties: {type: string}}
+        timeout_seconds: {type: integer}
+    ExecResult:
+      type: object
+      required: [exit_code, stdout, stderr, duration_ms, truncated]
+      properties:
+        exit_code: {type: integer}
+        stdout: {type: string}
+        stderr: {type: string}
+        duration_ms: {type: integer}
+        truncated: {type: boolean}
+    FileEntry:
+      type: object
+      required: [name, path, type, size]
+      properties:
+        name: {type: string}
+        path: {type: string}
+        type: {type: string, enum: [file, dir, symlink]}
+        size: {type: integer}
+        mode: {type: string}
+        mtime: {type: string, format: date-time}
+    FileList:
+      type: object
+      required: [path, entries]
+      properties:
+        path: {type: string}
+        entries:
+          type: array
+          items: {$ref: "#/components/schemas/FileEntry"}
