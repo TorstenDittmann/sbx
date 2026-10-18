@@ -1,0 +1,181 @@
+package agent
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+const (
+	// EnvToken is the per-sandbox shared secret.
+	EnvToken = "SBX_AGENT_TOKEN"
+	// EnvSocket is the unix socket the agent listens on inside the sandbox.
+	EnvSocket = "SBX_AGENT_SOCK"
+	// DefaultSocket is used when EnvSocket is unset.
+	DefaultSocket = "/tmp/sbx-agent.sock"
+)
+
+// Run is the sbx-agent command line. args does not include argv0.
+func Run(args []string) error {
+	if len(args) == 0 {
+		args = []string{"init"}
+	}
+	switch args[0] {
+	case "init":
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return Init(ctx)
+	case "dial":
+		return Dial(os.Stdin, os.Stdout)
+	case "serve":
+		return serveTCP(args[1:])
+	case "help", "-h", "--help":
+		fmt.Fprint(os.Stdout, "usage: sbx-agent init | dial | serve -listen ADDR\n")
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+// Init listens on the unix socket and serves until ctx is cancelled.
+func Init(ctx context.Context) error {
+	token := os.Getenv(EnvToken)
+	if token == "" {
+		return errors.New("SBX_AGENT_TOKEN is required")
+	}
+	sock := os.Getenv(EnvSocket)
+	if sock == "" {
+		sock = DefaultSocket
+	}
+	_ = os.Remove(sock)
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		return err
+	}
+	_ = os.Chmod(sock, 0o600)
+	defer ln.Close()
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+	a := New(token)
+	var tempDelay time.Duration
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			tempDelay = nextDelay(tempDelay)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(tempDelay):
+			}
+			continue
+		}
+		tempDelay = 0
+		go a.ServeConn(conn)
+	}
+}
+
+func nextDelay(d time.Duration) time.Duration {
+	if d == 0 {
+		return 5 * time.Millisecond
+	}
+	d *= 2
+	if d > time.Second {
+		d = time.Second
+	}
+	return d
+}
+
+// Dial connects to the in-sandbox socket and splices r and w to it.
+// Docker reaches the agent by exec'ing this command.
+func Dial(r io.Reader, w io.Writer) error {
+	sock := os.Getenv(EnvSocket)
+	if sock == "" {
+		sock = DefaultSocket
+	}
+	conn, err := dialUnix(sock, 10*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	errc := make(chan error, 2)
+	go func() {
+		_, err := io.Copy(w, conn)
+		errc <- err
+	}()
+	go func() {
+		_, err := io.Copy(conn, r)
+		errc <- err
+		_ = conn.Close()
+	}()
+	err = <-errc
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
+}
+
+func dialUnix(sock string, wait time.Duration) (net.Conn, error) {
+	deadline := time.Now().Add(wait)
+	var last error
+	for {
+		conn, err := net.DialTimeout("unix", sock, 200*time.Millisecond)
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("agent socket %s: %w", sock, last)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func serveTCP(args []string) error {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	listen := fs.String("listen", "127.0.0.1:0", "tcp address")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	token := os.Getenv(EnvToken)
+	if token == "" {
+		return errors.New("SBX_AGENT_TOKEN is required")
+	}
+	ln, err := net.Listen("tcp", *listen)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "sbx-agent listening on %s\n", ln.Addr())
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		_ = ln.Close()
+	}()
+	a := New(token)
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
+		}
+		go a.ServeConn(conn)
+	}
+}
