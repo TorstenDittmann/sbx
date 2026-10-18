@@ -140,16 +140,36 @@ func envSlice(env map[string]string) []string {
 	return out
 }
 
-// withTimeout kills only the child it starts. BusyBox `timeout -s KILL` can
-// signal every process of the sandbox user, including the sleep entrypoint,
-// which stops the container.
+// withTimeout runs cmd in the foreground of a fifo so stdin still reaches it.
+// Backgrounding the command would point its stdin at /dev/null (job control is
+// off), which made file uploads empty. The watchdog is reparented so it cannot
+// signal the sandbox entrypoint, and it is killed once cmd exits.
 func withTimeout(cmd []string, seconds int) []string {
 	if seconds <= 0 {
 		out := make([]string, len(cmd))
 		copy(out, cmd)
 		return out
 	}
-	const script = `secs=$1; shift; "$@" & pid=$!; (sleep "$secs"; kill -KILL "$pid") & timer=$!; wait "$pid"; status=$?; kill -KILL "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit "$status"`
+	const script = `secs=$1; shift
+fifo=/tmp/sbx-fifo-$$
+timerfile=/tmp/sbx-timer-$$
+mkfifo "$fifo" || exit 97
+"$@" <"$fifo" &
+pid=$!
+(
+  sh -c "sleep $secs; kill -KILL $pid" >/dev/null 2>&1 &
+  echo $! >"$timerfile"
+)
+cat >"$fifo"
+wait "$pid"
+status=$?
+if [ -s "$timerfile" ]; then
+  read timer <"$timerfile"
+  kill -KILL "$timer" 2>/dev/null
+fi
+rm -f "$fifo" "$timerfile"
+exit $status
+`
 	out := make([]string, 0, len(cmd)+5)
 	out = append(out, "sh", "-c", script, "sh", strconv.Itoa(seconds))
 	out = append(out, cmd...)

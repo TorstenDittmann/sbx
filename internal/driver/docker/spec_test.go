@@ -81,6 +81,9 @@ func TestWithTimeoutAndSplitRef(t *testing.T) {
 	if !strings.HasPrefix(joined, "sh -c ") || !strings.Contains(joined, "5 echo hi") || strings.Contains(joined, "timeout") {
 		t.Fatal(got)
 	}
+	if !strings.Contains(joined, "mkfifo") {
+		t.Fatal(got)
+	}
 	if strings.Join(withTimeout([]string{"echo", "hi"}, 0), " ") != "echo hi" {
 		t.Fatal(withTimeout([]string{"echo", "hi"}, 0))
 	}
