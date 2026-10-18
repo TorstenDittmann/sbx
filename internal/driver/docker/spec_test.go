@@ -11,7 +11,7 @@ func TestBuildCreateSecureDefaults(t *testing.T) {
 	body := buildCreate(driver.SandboxSpec{
 		ID: "sbx_abc", Image: "alpine:3.20", CPU: 0.5, MemoryMB: 128, DiskMB: 32, PIDs: 64,
 		Env: map[string]string{"FOO": "bar"}, Network: driver.NetNone,
-		Labels: map[string]string{"user": "42"},
+		Labels: map[string]string{"user": "42", "sbx.id": "sbx_other", "sbx.managed": "false"},
 	}, Options{Name: "docker", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, []string{"PATH=/usr/bin"})
 
 	if body.User != "1000:1000" {

@@ -64,6 +64,8 @@ func TestRejectsBadInput(t *testing.T) {
 		{Image: "alpine:3.20", Env: map[string]string{"OK": "nul\x00"}},
 		{Image: "alpine:3.20", Labels: map[string]string{"bad label": "x"}},
 		{Image: "alpine:3.20", Labels: map[string]string{"ok": "a\nb"}},
+		{Image: "alpine:3.20", Labels: map[string]string{"sbx.id": "sbx_other"}},
+		{Image: "alpine:3.20", Labels: map[string]string{"sbx.managed": "false"}},
 		{Image: "alpine:3.20", Network: "bridge"},
 		{Image: "alpine:3.20", Backend: "kata"},
 		{Template: "Not A Name"},

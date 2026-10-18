@@ -46,6 +46,9 @@ func validLabels(labels map[string]string) error {
 		return invalid("too many labels")
 	}
 	for k, v := range labels {
+		if strings.HasPrefix(k, "sbx.") {
+			return fmtInvalid("label %q is reserved", k)
+		}
 		if !labelRE.MatchString(k) {
 			return fmtInvalid("invalid label %q", k)
 		}

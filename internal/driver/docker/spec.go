@@ -77,14 +77,13 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) create
 	for k, v := range spec.Env {
 		env[k] = v
 	}
-	labels := map[string]string{
-		labelManaged: "true",
-		labelID:      spec.ID,
-		labelBackend: opt.Name,
-	}
+	labels := map[string]string{}
 	for k, v := range spec.Labels {
 		labels[k] = v
 	}
+	labels[labelManaged] = "true"
+	labels[labelID] = spec.ID
+	labels[labelBackend] = opt.Name
 	disk := spec.DiskMB
 	if disk < 16 {
 		disk = 16

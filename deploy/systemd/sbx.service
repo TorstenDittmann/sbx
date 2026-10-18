@@ -4,7 +4,9 @@ After=docker.service
 Requires=docker.service
 
 [Service]
-ExecStart=/usr/local/bin/sbx serve --config /etc/sbx/sbx.yaml
+# Defaults apply with no config file. To override them, install
+# /etc/sbx/sbx.yaml from sbx.yaml.example and add --config to ExecStart.
+ExecStart=/usr/local/bin/sbx serve
 Restart=on-failure
 RestartSec=2
 

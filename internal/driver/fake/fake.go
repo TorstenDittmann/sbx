@@ -15,14 +15,15 @@ import (
 
 // Driver stores sandboxes and files in memory.
 type Driver struct {
-	mu        sync.Mutex
-	name      string
-	caps      driver.Caps
-	boxes     map[string]*box
-	files     map[string]map[string][]byte
-	PingErr   error
-	CreateErr error
-	Deleted   []string
+	mu           sync.Mutex
+	name         string
+	caps         driver.Caps
+	boxes        map[string]*box
+	files        map[string]map[string][]byte
+	PingErr      error
+	CreateErr    error
+	Deleted      []string
+	TruncateExec bool
 }
 
 type box struct {
@@ -158,6 +159,7 @@ func (d *Driver) ExecStream(_ context.Context, id string, req driver.ExecRequest
 func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
 	d.mu.Lock()
 	b, ok := d.boxes[id]
+	truncate := d.TruncateExec
 	d.mu.Unlock()
 	if !ok || b.state == driver.StateStopped {
 		return driver.ExecResult{}, driver.ErrNotFound
@@ -178,7 +180,7 @@ func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChu
 		}
 		stdout = nil
 	}
-	return driver.ExecResult{ExitCode: 0, Stdout: stdout, Duration: time.Since(start)}, nil
+	return driver.ExecResult{ExitCode: 0, Stdout: stdout, Duration: time.Since(start), Truncated: truncate}, nil
 }
 
 func (d *Driver) ListFiles(_ context.Context, id, dir string) ([]driver.FileEntry, error) {

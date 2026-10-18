@@ -185,6 +185,11 @@ func TestFilesTemplatesDeleteAndReaper(t *testing.T) {
 	if err != nil || string(archive) != "ok\n" {
 		t.Fatalf("%q %v", archive, err)
 	}
+	fd.TruncateExec = true
+	if _, err := mgr.ReadArchive(ctx, actor, sb.ID, "/workspace"); err == nil {
+		t.Fatal("truncated archive returned as success")
+	}
+	fd.TruncateExec = false
 	var streamed []byte
 	res, err := mgr.ExecStream(ctx, actor, sb.ID, ExecInput{Cmd: []string{"echo", "stream"}}, func(chunk driver.ExecChunk) error {
 		streamed = append(streamed, chunk.Data...)

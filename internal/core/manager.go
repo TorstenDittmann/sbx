@@ -557,6 +557,9 @@ func (m *Manager) ReadArchive(ctx context.Context, actor Actor, sandboxID, dir s
 	if res.ExitCode != 0 {
 		return nil, m.asDriver(fmt.Errorf("%s", string(res.Stderr)))
 	}
+	if res.Truncated {
+		return nil, invalid(fmt.Sprintf("archive exceeds %d bytes", m.cfg.Limits.MaxOutputBytes))
+	}
 	m.touch(ctx, sb)
 	m.Counts.FileOps.Add(1)
 	return res.Stdout, nil
