@@ -65,11 +65,10 @@ func TestHTTPQuickstart(t *testing.T) {
 		t.Fatal(err)
 	}
 	ts := httptest.NewServer(api.New(mgr, log, apispec.OpenAPI).Handler())
+	var sandboxID string
 	t.Cleanup(func() {
-		ctx := context.Background()
-		list, _ := dock.List(ctx)
-		for _, sb := range list {
-			_ = dock.Delete(ctx, sb.ID)
+		if sandboxID != "" {
+			_ = dock.Delete(context.Background(), sandboxID)
 		}
 		ts.Close()
 	})
@@ -85,6 +84,7 @@ func TestHTTPQuickstart(t *testing.T) {
 		Status string `json:"status"`
 	}
 	mustDecode(t, resp.body, &created)
+	sandboxID = created.ID
 	if created.Status != "running" || created.Image != "alpine:3.20" {
 		t.Fatalf("%+v", created)
 	}
