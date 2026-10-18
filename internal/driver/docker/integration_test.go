@@ -125,6 +125,68 @@ func TestIntegrationLifecycle(t *testing.T) {
 	}
 }
 
+func TestIntegrationFullNetworkBlocksPrivate(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	d, err := New(Options{Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	h, err := d.Create(ctx, driver.SandboxSpec{
+		ID: id.Sandbox(), Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+		Network: driver.NetFull,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
+
+	raw, err := exec.Command("docker", "inspect", h.ID).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inspected []struct {
+		HostConfig struct {
+			NetworkMode string
+		}
+	}
+	if err := json.Unmarshal(raw, &inspected); err != nil {
+		t.Fatal(err)
+	}
+	if inspected[0].HostConfig.NetworkMode != sandboxNetwork {
+		t.Fatalf("network %s", inspected[0].HostConfig.NetworkMode)
+	}
+
+	public, err := d.Exec(ctx, h.ID, driver.ExecRequest{
+		Cmd:            []string{"wget", "-T", "8", "-q", "-O", "-", "http://1.1.1.1/"},
+		TimeoutSeconds: 20,
+	})
+	if err != nil || public.ExitCode != 0 || len(public.Stdout) == 0 {
+		t.Fatalf("public egress %+v %v", public, err)
+	}
+	for _, host := range []string{
+		"169.254.169.254",
+		"10.255.255.1",
+		"192.168.255.1",
+		"172.16.0.1",
+		"100.100.100.200",
+	} {
+		res, err := d.Exec(ctx, h.ID, driver.ExecRequest{
+			Cmd:            []string{"wget", "-T", "3", "-q", "-O", "/dev/null", "http://" + host + "/"},
+			TimeoutSeconds: 15,
+		})
+		if err != nil {
+			t.Fatal(host, err)
+		}
+		if res.ExitCode == 0 {
+			t.Fatalf("%s was reachable on network=full", host)
+		}
+	}
+}
+
 func TestIntegrationGVisorUnavailable(t *testing.T) {
 	if os.Getenv("SBX_INTEGRATION") != "1" {
 		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")

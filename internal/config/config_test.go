@@ -59,6 +59,44 @@ func TestLoadFileAndEnv(t *testing.T) {
 	}
 }
 
+func TestValidateEdges(t *testing.T) {
+	cases := []func(c *Config){
+		func(c *Config) { c.Addr = "" },
+		func(c *Config) { c.DataDir = "" },
+		func(c *Config) { c.Docker.SandboxUID = 0 },
+		func(c *Config) { c.Limits.DefaultTTLSeconds = c.Limits.MaxTTLSeconds + 1 },
+		func(c *Config) { c.Limits.MaxSandboxesPerKey = 0 },
+		func(c *Config) { c.Limits.DefaultCPU = c.Limits.MaxCPU + 1 },
+		func(c *Config) { c.Limits.DefaultMemoryMB = 1 },
+		func(c *Config) { c.Limits.DefaultDiskMB = 1 },
+		func(c *Config) { c.Limits.DefaultPIDs = 1 },
+		func(c *Config) { c.Limits.DefaultExecSeconds = c.Limits.MaxExecSeconds + 1 },
+		func(c *Config) { c.Limits.MaxOutputBytes = 1 },
+		func(c *Config) { c.Limits.ReaperIntervalSeconds = 0 },
+		func(c *Config) { c.LogLevel = "verbose" },
+	}
+	for i, mutate := range cases {
+		cfg := Default()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("case %d accepted", i)
+		}
+	}
+	t.Setenv("SBX_DEFAULT_TTL_SECONDS", "nope")
+	t.Setenv("SBX_MAX_UPLOAD_BYTES", "4096")
+	t.Setenv("SBX_SANDBOX_UID", "2000")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits.MaxUploadBytes != 4096 || cfg.Docker.SandboxUID != 2000 || cfg.Limits.DefaultTTLSeconds == 0 {
+		t.Fatalf("%+v", cfg)
+	}
+	if Default().KeyPath() == "" || Default().DBPath() == "" {
+		t.Fatal("paths")
+	}
+}
+
 func TestRejectsBadBackend(t *testing.T) {
 	cfg := Default()
 	cfg.Backend = "firecracker"

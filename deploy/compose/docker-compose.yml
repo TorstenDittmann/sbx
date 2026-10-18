@@ -10,4 +10,6 @@ services:
       SBX_DATA_DIR: /data
     volumes:
       - ../../data:/data
+      # The socket is how sbx creates sandboxes. network=full also uses it to
+      # install host firewall rules when the server itself cannot run iptables.
       - /var/run/docker.sock:/var/run/docker.sock

@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -317,5 +318,91 @@ func TestScopesQuotaAndTemplates(t *testing.T) {
 	resp = h.do(t, http.MethodGet, "/v1/sandboxes/"+adminSB.ID, created.Key, nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatal("sandbox key must not see another key's sandbox")
+	}
+
+	resp = h.do(t, http.MethodGet, "/v1/keys", h.key, nil)
+	var keys struct {
+		Keys []struct {
+			Name       string `json:"name"`
+			LastUsedAt string `json:"last_used_at"`
+		} `json:"keys"`
+	}
+	decode(t, resp, &keys)
+	if len(keys.Keys) < 2 {
+		t.Fatalf("%+v", keys)
+	}
+	var sawUsed bool
+	for _, k := range keys.Keys {
+		if k.Name == "test" && k.LastUsedAt != "" {
+			sawUsed = true
+		}
+	}
+	if !sawUsed {
+		t.Fatalf("admin key should have last_used_at: %+v", keys)
+	}
+	resp = h.do(t, http.MethodPost, "/v1/keys", h.key, map[string]any{"name": ""})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status)
+	}
+	resp = h.do(t, http.MethodPost, "/v1/keys", h.key, map[string]any{"name": "bad", "scopes": []string{"root"}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status)
+	}
+	resp = h.do(t, http.MethodPost, "/v1/keys", h.key, map[string]any{"name": "plain"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatal(resp.Status)
+	}
+}
+
+func TestDegradedHealthBadModeAndArchive(t *testing.T) {
+	cfg := config.Default()
+	st, err := store.Open(filepath.Join(t.TempDir(), "sbx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := core.New(cfg, st, map[string]driver.Driver{"gvisor": fake.New("gvisor")}, log)
+	srv := httptest.NewServer(api.New(mgr, log, nil).Handler())
+	t.Cleanup(srv.Close)
+	resp, err := http.Get(srv.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatal(resp.Status)
+	}
+
+	h := newHarness(t)
+	resp = h.do(t, http.MethodPost, "/v1/sandboxes", h.key, map[string]any{"image": "alpine:3.20"})
+	var created struct {
+		ID string `json:"id"`
+	}
+	decode(t, resp, &created)
+	resp = h.doRaw(t, http.MethodPut, "/v1/sandboxes/"+created.ID+"/files/content?path=/workspace/a.txt&mode=999", h.key, "application/octet-stream", []byte("x"))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status)
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	if _, err := zw.Write([]byte("not a tar, but gzip")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	resp = h.doRaw(t, http.MethodPost, "/v1/sandboxes/"+created.ID+"/files/archive?path=/workspace", h.key, "application/octet-stream", gz.Bytes())
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("gzip archive %s %s", resp.Status, b)
+	}
+	resp = h.do(t, http.MethodDelete, "/v1/sandboxes/"+created.ID+"/files?path=relative", h.key, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status)
+	}
+	resp = h.do(t, http.MethodGet, "/v1/sandboxes/"+created.ID+"/files?path=", h.key, nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status)
 	}
 }

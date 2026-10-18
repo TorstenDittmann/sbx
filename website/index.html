@@ -128,7 +128,7 @@ await box.kill();</code></pre>
         <h2>What v0.1 does not pretend.</h2>
       </div>
       <ul class="plain">
-        <li><code>network: full</code> attaches the sandbox to the bridge. It does not filter cloud metadata or private ranges. Egress allow-lists are rejected until that proxy exists.</li>
+        <li><code>network: full</code> can reach the public internet, and still cannot reach cloud metadata or private and link-local ranges. Egress allow-lists are rejected.</li>
         <li>Disk limits are the size of the writable <code>/workspace</code> tmpfs. The root filesystem is read-only.</li>
         <li>There is no in-guest agent yet. Exec and files go through the Docker API, so images need a shell and the usual coreutils.</li>
         <li>Pause, resume, templates, quotas, and Prometheus metrics are real. PTY sessions, preview ports, and a multi-node scheduler are not in this release.</li>

@@ -501,3 +501,101 @@ func (s *streamConn) Close() error {
 	s.once.Do(func() { err = s.Conn.Close() })
 	return err
 }
+
+type networkInfo struct {
+	ID      string            `json:"Id"`
+	Name    string            `json:"Name"`
+	Options map[string]string `json:"Options"`
+	IPAM    struct {
+		Config []struct {
+			Subnet  string `json:"Subnet"`
+			Gateway string `json:"Gateway"`
+		} `json:"Config"`
+	} `json:"IPAM"`
+}
+
+// EnsureSandboxNetwork creates the dedicated bridge used by network=full.
+// The bridge name is what the firewall matches on.
+func (c *Client) EnsureSandboxNetwork(ctx context.Context) (string, error) {
+	info, err := c.networkInspect(ctx, sandboxNetwork)
+	if err == nil {
+		return validateNetwork(info)
+	}
+	if !errors.Is(err, driver.ErrNotFound) {
+		return "", err
+	}
+	if err := c.DoJSON(ctx, http.MethodPost, "/networks/create", sandboxNetworkSpec(), nil); err != nil {
+		var status *StatusError
+		if !errors.As(err, &status) || status.Status != http.StatusConflict {
+			info, again := c.networkInspect(ctx, sandboxNetwork)
+			if again != nil {
+				return "", err
+			}
+			return validateNetwork(info)
+		}
+	}
+	info, err = c.networkInspect(ctx, sandboxNetwork)
+	if err != nil {
+		return "", err
+	}
+	return validateNetwork(info)
+}
+
+func (c *Client) networkInspect(ctx context.Context, name string) (networkInfo, error) {
+	var info networkInfo
+	if err := c.DoJSON(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil, &info); err != nil {
+		return networkInfo{}, err
+	}
+	return info, nil
+}
+
+// ContainerWait blocks until the container exits.
+func (c *Client) ContainerWait(ctx context.Context, id string) (int, error) {
+	var resp struct {
+		StatusCode int `json:"StatusCode"`
+	}
+	if err := c.DoJSON(ctx, http.MethodPost, "/containers/"+id+"/wait", nil, &resp); err != nil {
+		return 0, err
+	}
+	return resp.StatusCode, nil
+}
+
+// ContainerLogs returns combined stdout and stderr.
+func (c *Client) ContainerLogs(ctx context.Context, id string) (string, error) {
+	raw, err := c.getBytes(ctx, "/containers/"+id+"/logs?stdout=1&stderr=1")
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	_, _, demuxErr := CopyDemux(bytes.NewReader(raw), 1<<20, func(_ byte, data []byte) error {
+		buf.Write(data)
+		return nil
+	})
+	if demuxErr != nil && !errors.Is(demuxErr, io.EOF) && !errors.Is(demuxErr, io.ErrUnexpectedEOF) && buf.Len() == 0 {
+		return "", demuxErr
+	}
+	return buf.String(), nil
+}
+
+func (c *Client) getBytes(ctx context.Context, path string) ([]byte, error) {
+	if err := c.ensure(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+c.path(path), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		return nil, statusErr(resp.StatusCode, raw)
+	}
+	return raw, nil
+}

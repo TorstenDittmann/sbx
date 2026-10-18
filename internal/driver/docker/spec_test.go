@@ -67,7 +67,7 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 	if body.HostConfig.Runtime != "runsc" {
 		t.Fatal(body.HostConfig.Runtime)
 	}
-	if body.HostConfig.NetworkMode != "bridge" {
+	if body.HostConfig.NetworkMode != sandboxNetwork {
 		t.Fatal(body.HostConfig.NetworkMode)
 	}
 	if body.Labels["sbx.backend"] != "gvisor" {
@@ -77,8 +77,12 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 
 func TestWithTimeoutAndSplitRef(t *testing.T) {
 	got := withTimeout([]string{"echo", "hi"}, 5)
-	if strings.Join(got, " ") != "timeout -s KILL 5 echo hi" {
+	joined := strings.Join(got, " ")
+	if !strings.HasPrefix(joined, "sh -c ") || !strings.Contains(joined, "5 echo hi") || strings.Contains(joined, "timeout") {
 		t.Fatal(got)
+	}
+	if strings.Join(withTimeout([]string{"echo", "hi"}, 0), " ") != "echo hi" {
+		t.Fatal(withTimeout([]string{"echo", "hi"}, 0))
 	}
 	from, tag := splitRef("ghcr.io/org/img:1.2")
 	if from != "ghcr.io/org/img" || tag != "1.2" {

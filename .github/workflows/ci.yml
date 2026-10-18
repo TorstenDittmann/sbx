@@ -27,6 +27,7 @@ jobs:
             tail -n 1 coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          awk '/^total:/ { gsub("%","",$NF); if ($NF+0 < 80) { print "coverage " $NF "% is below 80%"; exit 1 } }' coverage.txt
 
   integration:
     runs-on: ubuntu-latest

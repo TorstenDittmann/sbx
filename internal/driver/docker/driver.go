@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/driver"
@@ -31,14 +32,22 @@ type Options struct {
 	UID            int
 	GID            int
 	MaxOutputBytes int
+	// NoEgressFilter skips the metadata firewall. Tests set it. Production
+	// creates with network=full always install the filter or fail closed.
+	NoEgressFilter bool
+	// ScriptRunner applies the firewall script. When nil, the driver tries
+	// the host iptables and then a privileged helper.
+	ScriptRunner func(ctx context.Context, script string) error
 }
 
 // Driver implements driver.Driver using the Docker Engine API.
 type Driver struct {
-	name    string
-	runtime string
-	opt     Options
-	client  *Client
+	name        string
+	runtime     string
+	opt         Options
+	client      *Client
+	egressMu    sync.Mutex
+	egressReady bool
 }
 
 // New connects to the Docker socket.
@@ -132,6 +141,11 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 		}
 		if _, ok := info.Runtimes[d.runtime]; !ok {
 			return driver.Handle{}, fmt.Errorf("%w: Docker has no %q runtime (install runsc and register it; sbx doctor prints the steps)", driver.ErrRuntimeUnavailable, d.runtime)
+		}
+	}
+	if spec.Network == driver.NetFull && !d.opt.NoEgressFilter {
+		if err := d.ensureEgress(ctx); err != nil {
+			return driver.Handle{}, err
 		}
 	}
 	if err := d.EnsureImage(ctx, spec.Image); err != nil {

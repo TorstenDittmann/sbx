@@ -107,6 +107,10 @@ func serve(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	return runServer(ctx, cfg, mgr, log)
+}
+
+func runServer(ctx context.Context, cfg config.Config, mgr *core.Manager, log *slog.Logger) error {
 	go mgr.RunReaper(ctx)
 
 	srv := &http.Server{

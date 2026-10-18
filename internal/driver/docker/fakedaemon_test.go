@@ -23,6 +23,16 @@ type fakeDaemon struct {
 	runtimes   map[string]bool
 	created    createRequest
 	pulls      []string
+	network    bool
+	netStatus  int
+	netCreates int
+	waitCode   int
+	logs       string
+	lastCmd    []string
+	execCode   int
+	failStart  bool
+	failPull   bool
+	pullGhost  bool
 }
 
 type fakeContainer struct {
@@ -57,6 +67,49 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "/version":
 		writeJSON(w, http.StatusOK, map[string]string{"ApiVersion": "1.44", "MinAPIVersion": "1.44"})
+	case r.Method == http.MethodPost && p == "/v1.44/networks/create":
+		f.mu.Lock()
+		status := f.netStatus
+		f.netCreates++
+		if status == 0 || status == http.StatusCreated || status == http.StatusConflict {
+			f.network = true
+		}
+		f.mu.Unlock()
+		if status == http.StatusConflict {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "network exists"})
+			return
+		}
+		if status >= 300 {
+			writeJSON(w, status, map[string]string{"message": "network create failed"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"Id": "net-sbx"})
+	case r.Method == http.MethodGet && p == "/v1.44/networks/sbx":
+		f.mu.Lock()
+		ok := f.network
+		f.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "network sbx not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"Id": "netsbx0123456789", "Name": "sbx",
+			"Options": map[string]string{"com.docker.network.bridge.name": "sbx0"},
+			"IPAM":    map[string]any{"Config": []map[string]string{{"Subnet": "172.30.0.0/16", "Gateway": "172.30.0.1"}}},
+		})
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/wait"):
+		f.mu.Lock()
+		code := f.waitCode
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]int{"StatusCode": code})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/logs"):
+		f.mu.Lock()
+		msg := f.logs
+		f.mu.Unlock()
+		if msg == "" {
+			msg = "ok\n"
+		}
+		writeFrame(w, 1, msg)
 	case p == "/v1.44/_ping":
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.WriteString(w, "OK")
@@ -79,6 +132,17 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"Config": map[string]any{"Env": []string{"PATH=/usr/bin:/bin"}}})
 	case r.Method == http.MethodPost && p == "/v1.44/images/create":
+		f.mu.Lock()
+		fail, ghost := f.failPull, f.pullGhost
+		f.mu.Unlock()
+		if fail {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "pull failed"})
+			return
+		}
+		if ghost {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ghost"})
+			return
+		}
 		ref := r.URL.Query().Get("fromImage")
 		if tag := r.URL.Query().Get("tag"); tag != "" {
 			ref += ":" + tag
@@ -109,6 +173,13 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, list)
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/start"):
+		f.mu.Lock()
+		fail := f.failStart
+		f.mu.Unlock()
+		if fail {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "cannot start"})
+			return
+		}
 		f.setStatus(containerID(p), "running")
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/pause"):
@@ -137,9 +208,12 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"Config": map[string]any{"Image": ctn.body.Image, "Labels": ctn.body.Labels},
 		})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/exec"):
+		var body execConfig
+		_ = json.NewDecoder(r.Body).Decode(&body)
 		id := "exec-1"
 		f.mu.Lock()
 		f.execs[id] = containerID(p)
+		f.lastCmd = body.Cmd
 		f.mu.Unlock()
 		writeJSON(w, http.StatusCreated, map[string]string{"Id": id})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/exec/") && strings.HasSuffix(p, "/start"):
@@ -155,10 +229,22 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer conn.Close()
 		_, _ = bufrw.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.multiplexed-stream\r\n\r\n")
 		_ = bufrw.Flush()
-		writeFrame(conn, 1, "hello\n")
+		f.mu.Lock()
+		cmd := strings.Join(f.lastCmd, " ")
+		f.mu.Unlock()
+		stdout := "hello\n"
+		if strings.Contains(cmd, "stat -c") {
+			stdout = "regular file|5|1700000000|81a4|/workspace/a.txt\n" +
+				"directory|0|1700000000|41ed|/workspace/sub\n" +
+				"symbolic link|0|1700000000|a1ff|/workspace/link\n"
+		}
+		writeFrame(conn, 1, stdout)
 		writeFrame(conn, 2, "warn\n")
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/exec/") && strings.HasSuffix(p, "/json"):
-		writeJSON(w, http.StatusOK, map[string]any{"ID": "exec-1", "ExitCode": 0, "Running": false})
+		f.mu.Lock()
+		code := f.execCode
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"ID": "exec-1", "ExitCode": code, "Running": false})
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "unhandled " + r.Method + " " + p})
 	}
@@ -277,7 +363,7 @@ func TestDriverAgainstFakeDaemon(t *testing.T) {
 		t.Fatal("expected not found")
 	}
 
-	gv := NewWithClient(Options{Name: "gvisor", Runtime: "runsc", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, cli)
+	gv := NewWithClient(Options{Name: "gvisor", Runtime: "runsc", UID: 1000, GID: 1000, ReadOnlyRootfs: true, NoEgressFilter: true}, cli)
 	_, err = gv.Create(ctx, driver.SandboxSpec{ID: "sbx_gvisor00000001", Image: "alpine:3.20", CPU: 1, MemoryMB: 64, DiskMB: 32, PIDs: 32})
 	if err == nil {
 		t.Fatal("expected missing runtime")
@@ -289,7 +375,7 @@ func TestDriverAgainstFakeDaemon(t *testing.T) {
 		t.Fatal(err)
 	}
 	fd.mu.Lock()
-	if fd.created.HostConfig.Runtime != "runsc" || fd.created.HostConfig.NetworkMode != "bridge" {
+	if fd.created.HostConfig.Runtime != "runsc" || fd.created.HostConfig.NetworkMode != "sbx" {
 		t.Fatalf("%+v", fd.created.HostConfig)
 	}
 	fd.mu.Unlock()

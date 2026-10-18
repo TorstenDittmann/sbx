@@ -53,9 +53,9 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 - The command is `sbx serve`. `sbx server` is an alias. `controller` and `node` are not implemented.
 - The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. If that runtime is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is gVisor and `runsc` is absent.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
-- There is no in-guest agent. Exec and files use the Engine API. The Docker archive endpoints refuse a read-only rootfs and do not see tmpfs mounts, so file transfer is `cat`, `find`, and `tar` inside an exec. Images need `sh`, `cat`, `mkdir`, `chmod`, `rm`, `find`, `stat`, `tar`, and `timeout`. Distroless images will not work until an agent exists.
+- There is no in-guest agent. Exec and files use the Engine API. The Docker archive endpoints refuse a read-only rootfs and do not see tmpfs mounts, so file transfer is `cat`, `find`, and `tar` inside an exec. Images need `sh`, `cat`, `mkdir`, `chmod`, `rm`, `find`, `stat`, and `tar`. Distroless images will not work until an agent exists.
 - The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real.
-- `network: none` is the default. `network: full` joins the bridge and does **not** filter cloud metadata or RFC1918. An egress allow-list is rejected with HTTP 400 `unsupported`.
+- `network: none` is the default. `network: full` joins a dedicated bridge and rejects metadata, link-local, and private destinations (see the security baseline). An egress allow-list is rejected with HTTP 400 `unsupported`.
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
 - The landing page is the static site in `website/`, deployed with Dokploy. See [website.md](website.md). There is no GitHub Pages workflow.
 
@@ -161,14 +161,21 @@ The website is separate. [Deploying the website with Dokploy](website.md#deployi
 
 Sandboxes are created with `CapDrop: ["ALL"]`, `no-new-privileges`, a non-root user, memory equal to memory+swap (no swap), a PID limit, private IPC, read-only rootfs, and `network=none` unless `full` is requested. The Docker socket is not mounted into sandboxes. API keys are hashed. TTLs and the per-key sandbox quota are enforced in the server, not left to the caller.
 
-`network: full` is an explicit opt-in and is not a firewall. Metadata blocking waits for an egress proxy.
+`network: full` is an explicit opt-in to public egress. It is not an allow-list. Sandboxes on that mode join the `sbx` bridge (`sbx0`, `172.30.0.0/16`, ICC off, IPv6 off). sbx keeps an `SBX-EGRESS` chain jumped from `DOCKER-USER` and from `INPUT` for packets that arrive on `sbx0`. The chain rejects:
+
+- `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+- `169.254.0.0/16`, which covers `169.254.169.254`
+- `100.100.100.200/32` (Alibaba Cloud metadata; the rest of `100.64.0.0/10` is left open)
+- when `ip6tables` has a `DOCKER-USER` chain: `fe80::/10`, `fc00::/7`, and `::1/128`
+
+The rules are installed once per process, before the first `network: full` container is created. A root server runs `iptables` directly. A non-root server (the usual Compose setup, which only mounts `/var/run/docker.sock`) starts a privileged `alpine:3.20` helper on the host network and host PID namespace and applies the host's `iptables` via `nsenter`. If both paths fail, create returns an error and does not start the container. There is no switch to disable the filter.
 
 ## 10. After v0.1
 
 In rough order, none of these are stubbed in the tree:
 
 1. An in-guest agent so exec, PTY, and files work on images without a shell, and on VM backends.
-2. Egress allow-lists that also block metadata and private ranges. Preview ports.
+2. Egress allow-lists and preview ports. Metadata and private-range blocking for `network: full` is already on.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
 5. Kata and Firecracker.

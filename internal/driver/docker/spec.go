@@ -25,6 +25,7 @@ type createRequest struct {
 
 type hostConfig struct {
 	NetworkMode    string            `json:"NetworkMode"`
+	PidMode        string            `json:"PidMode,omitempty"`
 	CapDrop        []string          `json:"CapDrop"`
 	CapAdd         []string          `json:"CapAdd"`
 	SecurityOpt    []string          `json:"SecurityOpt"`
@@ -94,7 +95,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) create
 	}
 	network := "none"
 	if spec.Network == driver.NetFull {
-		network = "bridge"
+		network = sandboxNetwork
 	}
 	return createRequest{
 		Image:      spec.Image,
@@ -139,15 +140,18 @@ func envSlice(env map[string]string) []string {
 	return out
 }
 
-// withTimeout wraps argv with BusyBox/GNU timeout. Both accept `timeout -s KILL SECS CMD`.
+// withTimeout kills only the child it starts. BusyBox `timeout -s KILL` can
+// signal every process of the sandbox user, including the sleep entrypoint,
+// which stops the container.
 func withTimeout(cmd []string, seconds int) []string {
 	if seconds <= 0 {
 		out := make([]string, len(cmd))
 		copy(out, cmd)
 		return out
 	}
-	out := make([]string, 0, len(cmd)+4)
-	out = append(out, "timeout", "-s", "KILL", strconv.Itoa(seconds))
+	const script = `secs=$1; shift; "$@" & pid=$!; (sleep "$secs"; kill -KILL "$pid") & timer=$!; wait "$pid"; status=$?; kill -KILL "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit "$status"`
+	out := make([]string, 0, len(cmd)+5)
+	out = append(out, "sh", "-c", script, "sh", strconv.Itoa(seconds))
 	out = append(out, cmd...)
 	return out
 }
