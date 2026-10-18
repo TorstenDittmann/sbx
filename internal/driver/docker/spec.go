@@ -142,8 +142,10 @@ func envSlice(env map[string]string) []string {
 
 // withTimeout runs cmd in the foreground of a fifo so stdin still reaches it.
 // Backgrounding the command would point its stdin at /dev/null (job control is
-// off), which made file uploads empty. The watchdog is reparented so it cannot
-// signal the sandbox entrypoint, and it is killed once cmd exits.
+// off), which made file uploads empty. The command is placed in its own
+// session when setsid exists, and the watchdog signals only that process
+// group. A kill of pid 0 or 1 would hit the sandbox entrypoint (every process
+// shares the container's group), which stopped the container on timeout.
 func withTimeout(cmd []string, seconds int) []string {
 	if seconds <= 0 {
 		out := make([]string, len(cmd))
@@ -151,23 +153,41 @@ func withTimeout(cmd []string, seconds int) []string {
 		return out
 	}
 	const script = `secs=$1; shift
+case $secs in
+  ''|*[!0-9]*|0) exit 96 ;;
+esac
 fifo=/tmp/sbx-fifo-$$
-timerfile=/tmp/sbx-timer-$$
+timerfifo=/tmp/sbx-timer-$$
 mkfifo "$fifo" || exit 97
-"$@" <"$fifo" &
+mkfifo "$timerfifo" || exit 97
+if command -v setsid >/dev/null 2>&1; then
+  sh -c 'exec setsid "$@"' sh "$@" <"$fifo" &
+  group=1
+else
+  "$@" <"$fifo" &
+  group=0
+fi
 pid=$!
+case $pid in
+  ''|*[!0-9]*|0|1) exit 99 ;;
+esac
+if [ "$group" -eq 1 ]; then
+  target=-$pid
+else
+  target=$pid
+fi
 (
-  sh -c "sleep $secs; kill -KILL $pid" >/dev/null 2>&1 &
-  echo $! >"$timerfile"
+  sh -c 'echo $$ >"$1"; sleep "$2"; kill -KILL "$3"' sh "$timerfifo" "$secs" "$target" >/dev/null 2>&1 &
 )
+read timer <"$timerfifo" || exit 98
+case $timer in
+  ''|*[!0-9]*|0|1) exit 99 ;;
+esac
 cat >"$fifo"
 wait "$pid"
 status=$?
-if [ -s "$timerfile" ]; then
-  read timer <"$timerfile"
-  kill -KILL "$timer" 2>/dev/null
-fi
-rm -f "$fifo" "$timerfile"
+kill -KILL "$timer" 2>/dev/null
+rm -f "$fifo" "$timerfifo"
 exit $status
 `
 	out := make([]string, 0, len(cmd)+5)

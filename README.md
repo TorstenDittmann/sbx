@@ -79,7 +79,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 
 Public addresses stay reachable. The bridge has inter-container communication disabled. If the rules cannot be installed, `network: full` fails closed and the sandbox is not created. The server applies them with the host `iptables` when it can, and otherwise with a short-lived privileged helper that enters the host network namespace through the mounted Docker socket. Egress allow-lists are still rejected in this version.
 
-Images need a shell and the usual tools (`sh`, `cat`, `find`, `stat`, `tar`). Exec timeouts are enforced by a shell wrapper, so a `timeout` binary is not required. The design notes and the roadmap are in [docs/DESIGN.md](docs/DESIGN.md).
+Images need a shell and the usual tools (`sh`, `cat`, `find`, `stat`, `tar`). Exec timeouts are enforced by a shell wrapper, so a `timeout` binary is not required. When the image has `setsid`, the wrapper runs the command in its own session so the watchdog cannot signal the sandbox entrypoint. The design notes and the roadmap are in [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Deploying the website with Dokploy
 
