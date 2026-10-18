@@ -1,0 +1,15 @@
+/bin/
+/data/
+/coverage.out
+/coverage.txt
+*.db
+*.db-journal
+node_modules/
+dist/
+.DS_Store
+/sbx
+*.exe
+initial_api_key
+.env
+.env.*
+!.env.example

@@ -1,0 +1,12 @@
+[Unit]
+Description=sbx sandbox server
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/local/bin/sbx serve --config /etc/sbx/sbx.yaml
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
