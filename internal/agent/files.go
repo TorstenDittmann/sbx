@@ -203,4 +203,3 @@ func readLimited(p string, max int) ([]byte, error) {
 	}
 	return io.ReadAll(f)
 }
-

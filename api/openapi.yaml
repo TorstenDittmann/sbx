@@ -1,17 +1,21 @@
 openapi: 3.1.0
 info:
   title: sbx
-  version: 0.1.0
+  version: 0.2.0
   summary: Single-node sandbox API.
   description: |
     HTTP API for creating and using isolated sandboxes. Authenticate with
-    `Authorization: Bearer sbx_<key>`. The first boot of a data directory
-    generates an admin key and prints it once.
+    `Authorization: Bearer sbx_<key>`. Browsers and WebSocket clients may pass
+    the same key as the `access_token` query parameter. The first boot of a
+    data directory generates an admin key and prints it once.
+    When `sbx-agent` is configured, processes, terminals, file watch, and
+    previews are available. Without it those routes return `unsupported`.
 servers:
   - url: http://127.0.0.1:8080
     description: Local default bind.
 security:
   - bearerAuth: []
+  - accessToken: []
 paths:
   /:
     get:
@@ -345,18 +349,309 @@ paths:
             schema: {type: string, format: binary}
       responses:
         "204": {description: Extracted}
+  /v1/sandboxes/{id}/files/stat:
+    get:
+      operationId: statFile
+      summary: Stat one path
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+      responses:
+        "200":
+          description: File metadata
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileEntry"}
+        "400":
+          description: Agent is not enabled
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /v1/sandboxes/{id}/files/mkdir:
+    post:
+      operationId: mkdir
+      summary: Create a directory
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: {type: string}
+                mode: {type: string, example: "755"}
+      responses:
+        "204": {description: Created}
+  /v1/sandboxes/{id}/files/watch:
+    get:
+      operationId: watchFiles
+      summary: Watch a directory
+      description: Server-Sent Events. `ready`, then `change` events with `type` and `path`.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/Path"
+        - in: query
+          name: recursive
+          schema: {type: string, enum: ["1", "true"]}
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{id}/processes:
+    post:
+      operationId: createProcess
+      summary: Start a background process
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExecRequest"}
+      responses:
+        "201":
+          description: Running process
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Process"}
+    get:
+      operationId: listProcesses
+      summary: List tracked processes
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Processes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [processes]
+                properties:
+                  processes:
+                    type: array
+                    items: {$ref: "#/components/schemas/Process"}
+  /v1/sandboxes/{id}/processes/{procId}:
+    get:
+      operationId: getProcess
+      summary: Get one process
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/ProcID"
+      responses:
+        "200":
+          description: Process
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Process"}
+    delete:
+      operationId: deleteProcess
+      summary: Kill a process
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/ProcID"
+      responses:
+        "204": {description: Signaled}
+  /v1/sandboxes/{id}/processes/{procId}/signal:
+    post:
+      operationId: signalProcess
+      summary: Signal a process
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/ProcID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signal]
+              properties:
+                signal: {type: string, enum: [TERM, KILL, INT, HUP, QUIT]}
+      responses:
+        "204": {description: Delivered}
+  /v1/sandboxes/{id}/processes/{procId}/stdin:
+    post:
+      operationId: processStdin
+      summary: Write to a process without closing stdin
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/ProcID"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        "204": {description: Written}
+  /v1/sandboxes/{id}/processes/{procId}/stream:
+    get:
+      operationId: streamProcess
+      summary: Follow a process
+      description: Server-Sent Events (`stdout`, `stderr`, `exit`, `error`), including output buffered before the call.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/ProcID"
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{id}/terminals:
+    post:
+      operationId: createTerminal
+      summary: Start an interactive terminal
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TerminalRequest"}
+      responses:
+        "201":
+          description: Terminal
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Terminal"}
+  /v1/sandboxes/{id}/terminals/{termId}:
+    delete:
+      operationId: deleteTerminal
+      summary: Kill a terminal
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/TermID"
+      responses:
+        "204": {description: Signaled}
+  /v1/sandboxes/{id}/terminals/{termId}/resize:
+    post:
+      operationId: resizeTerminal
+      summary: Resize a terminal
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/TermID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cols, rows]
+              properties:
+                cols: {type: integer}
+                rows: {type: integer}
+      responses:
+        "204": {description: Resized}
+  /v1/sandboxes/{id}/terminals/{termId}/ws:
+    get:
+      operationId: terminalSocket
+      summary: Attach to a terminal
+      description: |
+        WebSocket. Binary frames are stdin and output. Text frames are JSON.
+        The client sends `{"type":"resize","cols":80,"rows":24}`. The server
+        sends `{"type":"exit","exit_code":0}` when the process ends.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/TermID"
+      responses:
+        "101": {description: WebSocket upgrade}
+  /v1/sandboxes/{id}/previews:
+    post:
+      operationId: createPreview
+      summary: Publish a loopback port
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [port]
+              properties:
+                port: {type: integer, minimum: 1, maximum: 65535}
+      responses:
+        "201":
+          description: Preview
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Preview"}
+    get:
+      operationId: listPreviews
+      summary: List previews
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Previews
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [previews]
+                properties:
+                  previews:
+                    type: array
+                    items: {$ref: "#/components/schemas/Preview"}
+  /v1/sandboxes/{id}/previews/{previewId}:
+    delete:
+      operationId: deletePreview
+      summary: Remove a preview
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/PreviewID"
+      responses:
+        "204": {description: Removed}
+  /v1/sandboxes/{id}/previews/{previewId}/:
+    get:
+      operationId: proxyPreview
+      summary: Proxy to the previewed port
+      description: |
+        Every method under this prefix is forwarded to the sandbox loopback
+        port. The preview id segment is stripped. Upgrade requests are spliced.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+        - $ref: "#/components/parameters/PreviewID"
+      responses:
+        "200": {description: Upstream response}
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       description: API key issued by sbx, prefixed with sbx_.
+    accessToken:
+      type: apiKey
+      in: query
+      name: access_token
+      description: Same API key, for browsers and WebSocket clients.
   parameters:
     SandboxID:
       name: id
       in: path
       required: true
       schema: {type: string, pattern: "^sbx_[0-9a-f]{16}$"}
+    ProcID:
+      name: procId
+      in: path
+      required: true
+      schema: {type: string}
+    TermID:
+      name: termId
+      in: path
+      required: true
+      schema: {type: string}
+    PreviewID:
+      name: previewId
+      in: path
+      required: true
+      schema: {type: string, pattern: "^prv_[0-9a-f]{16}$"}
     TemplateName:
       name: name
       in: path
@@ -496,7 +791,9 @@ components:
           minItems: 1
         cwd: {type: string}
         env: {type: object, additionalProperties: {type: string}}
-        timeout_seconds: {type: integer}
+        timeout_seconds: {type: integer, description: Background processes may use 0 for no timeout.}
+        stdin: {type: string, description: UTF-8 stdin. Mutually exclusive with stdin_base64.}
+        stdin_base64: {type: string, description: Base64 stdin. Mutually exclusive with stdin.}
     ExecResult:
       type: object
       required: [exit_code, stdout, stderr, duration_ms, truncated]
@@ -524,3 +821,41 @@ components:
         entries:
           type: array
           items: {$ref: "#/components/schemas/FileEntry"}
+    Process:
+      type: object
+      required: [id, pid, cmd, status, exit_code]
+      properties:
+        id: {type: string}
+        pid: {type: integer}
+        cmd: {type: array, items: {type: string}}
+        cwd: {type: string}
+        tty: {type: boolean}
+        status: {type: string, enum: [running, exited]}
+        exit_code: {type: integer}
+        started_at: {type: string, format: date-time}
+    TerminalRequest:
+      type: object
+      required: [cmd]
+      properties:
+        cmd: {type: array, items: {type: string}, minItems: 1}
+        cwd: {type: string}
+        env: {type: object, additionalProperties: {type: string}}
+        cols: {type: integer}
+        rows: {type: integer}
+    Terminal:
+      type: object
+      required: [id, pid, cols, rows]
+      properties:
+        id: {type: string}
+        pid: {type: integer}
+        cols: {type: integer}
+        rows: {type: integer}
+    Preview:
+      type: object
+      required: [id, sandbox_id, port, url]
+      properties:
+        id: {type: string}
+        sandbox_id: {type: string}
+        port: {type: integer}
+        url: {type: string}
+        created_at: {type: string, format: date-time}

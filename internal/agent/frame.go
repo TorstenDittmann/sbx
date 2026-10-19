@@ -27,35 +27,35 @@ const headerSize = 9
 
 // Message types. Control frames use the same numbers on every stream.
 const (
-	MsgHello uint8 = 1
+	MsgHello   uint8 = 1
 	MsgHelloOk uint8 = 2
-	MsgError uint8 = 3
-	MsgOK uint8 = 4
-	MsgData uint8 = 5
-	MsgEnd uint8 = 6
+	MsgError   uint8 = 3
+	MsgOK      uint8 = 4
+	MsgData    uint8 = 5
+	MsgEnd     uint8 = 6
 
-	MsgExec uint8 = 10
-	MsgStdin uint8 = 11
-	MsgStdout uint8 = 12
-	MsgStderr uint8 = 13
-	MsgExit uint8 = 14
-	MsgKill uint8 = 15
-	MsgResize uint8 = 16
+	MsgExec     uint8 = 10
+	MsgStdin    uint8 = 11
+	MsgStdout   uint8 = 12
+	MsgStderr   uint8 = 13
+	MsgExit     uint8 = 14
+	MsgKill     uint8 = 15
+	MsgResize   uint8 = 16
 	MsgStdinEOF uint8 = 17
 
-	MsgProcList uint8 = 20
+	MsgProcList   uint8 = 20
 	MsgProcSignal uint8 = 21
 	MsgProcAttach uint8 = 22
-	MsgProcStdin uint8 = 23
+	MsgProcStdin  uint8 = 23
 
-	MsgFileList uint8 = 30
-	MsgFileStat uint8 = 31
-	MsgFileRead uint8 = 32
-	MsgFileWrite uint8 = 33
+	MsgFileList   uint8 = 30
+	MsgFileStat   uint8 = 31
+	MsgFileRead   uint8 = 32
+	MsgFileWrite  uint8 = 33
 	MsgFileRemove uint8 = 34
-	MsgFileMkdir uint8 = 35
-	MsgFileWatch uint8 = 36
-	MsgFileEvent uint8 = 37
+	MsgFileMkdir  uint8 = 35
+	MsgFileWatch  uint8 = 36
+	MsgFileEvent  uint8 = 37
 
 	MsgDial uint8 = 40
 )

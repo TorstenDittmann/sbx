@@ -2,12 +2,14 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,12 +70,34 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
 
+	mux.HandleFunc("POST /v1/sandboxes/{id}/processes", s.auth("sandbox", s.createProcess))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes", s.auth("sandbox", s.listProcesses))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}", s.auth("sandbox", s.getProcess))
+	mux.HandleFunc("DELETE /v1/sandboxes/{id}/processes/{procId}", s.auth("sandbox", s.deleteProcess))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/processes/{procId}/signal", s.auth("sandbox", s.signalProcess))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/processes/{procId}/stdin", s.auth("sandbox", s.processStdin))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}/stream", s.auth("sandbox", s.streamProcess))
+
+	mux.HandleFunc("POST /v1/sandboxes/{id}/terminals", s.auth("sandbox", s.createTerminal))
+	mux.HandleFunc("DELETE /v1/sandboxes/{id}/terminals/{termId}", s.auth("sandbox", s.deleteTerminal))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/terminals/{termId}/resize", s.auth("sandbox", s.resizeTerminal))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/terminals/{termId}/ws", s.auth("sandbox", s.terminalSocket))
+
 	mux.HandleFunc("GET /v1/sandboxes/{id}/files", s.auth("sandbox", s.listFiles))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/files", s.auth("sandbox", s.deleteFile))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/files/content", s.auth("sandbox", s.downloadFile))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/files/content", s.auth("sandbox", s.uploadFile))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/files/archive", s.auth("sandbox", s.downloadArchive))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/files/archive", s.auth("sandbox", s.uploadArchive))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/stat", s.auth("sandbox", s.statFile))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/files/mkdir", s.auth("sandbox", s.mkdir))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/watch", s.auth("sandbox", s.watchFiles))
+
+	mux.HandleFunc("POST /v1/sandboxes/{id}/previews", s.auth("sandbox", s.createPreview))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/previews", s.auth("sandbox", s.listPreviews))
+	mux.HandleFunc("DELETE /v1/sandboxes/{id}/previews/{previewId}", s.auth("sandbox", s.deletePreview))
+	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{$}", s.auth("sandbox", s.proxyPreview))
+	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{path...}", s.auth("sandbox", s.proxyPreview))
 
 	return s.recover(s.logRequests(mux))
 }
@@ -168,9 +192,15 @@ func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) authenticate(r *http.Request) (store.APIKey, error) {
-	h := r.Header.Get("Authorization")
-	scheme, token, ok := strings.Cut(h, " ")
-	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+	token := ""
+	scheme, bearer, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if ok && strings.EqualFold(scheme, "Bearer") {
+		token = bearer
+	}
+	if token == "" {
+		token = r.URL.Query().Get("access_token")
+	}
+	if token == "" {
 		return store.APIKey{}, errors.New("missing bearer token")
 	}
 	if !strings.HasPrefix(token, "sbx_") {
@@ -392,14 +422,10 @@ func (s *Server) resumeSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) execSandbox(w http.ResponseWriter, r *http.Request) {
-	var body execRequest
-	if err := decodeJSON(r, 1<<20, &body); err != nil {
-		writeDecodeErr(w, err)
+	in, err := decodeExec(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
 		return
-	}
-	in := core.ExecInput{Cmd: body.Cmd, Cwd: body.Cwd, Env: body.Env}
-	if body.TimeoutSeconds != nil {
-		in.TimeoutSeconds = *body.TimeoutSeconds
 	}
 	stream := r.URL.Query().Get("stream")
 	if stream == "1" || stream == "true" {
@@ -580,6 +606,14 @@ func (w *statusWriter) Flush() {
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("hijack is not supported")
+	}
+	return h.Hijack()
+}
+
 type createRequest struct {
 	Template           string            `json:"template"`
 	Image              string            `json:"image"`
@@ -603,6 +637,8 @@ type execRequest struct {
 	Cwd            string            `json:"cwd"`
 	Env            map[string]string `json:"env"`
 	TimeoutSeconds *int              `json:"timeout_seconds"`
+	Stdin          string            `json:"stdin"`
+	StdinBase64    string            `json:"stdin_base64"`
 }
 
 type sandboxResponse struct {
