@@ -364,13 +364,17 @@ func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name        string            `json:"name"`
-		Image       string            `json:"image"`
-		Description string            `json:"description"`
-		CPU         float64           `json:"cpu"`
-		MemoryMB    int               `json:"memory_mb"`
-		DiskMB      int               `json:"disk_mb"`
-		Env         map[string]string `json:"env"`
+		Name         string            `json:"name"`
+		Image        string            `json:"image"`
+		Description  string            `json:"description"`
+		CPU          float64           `json:"cpu"`
+		MemoryMB     int               `json:"memory_mb"`
+		DiskMB       int               `json:"disk_mb"`
+		Env          map[string]string `json:"env"`
+		Network      string            `json:"network"`
+		Setup        []string          `json:"setup"`
+		SetupTimeout int               `json:"setup_timeout_seconds"`
+		Warm         int               `json:"warm"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
@@ -379,6 +383,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 	t, err := s.mgr.CreateTemplate(r.Context(), core.TemplateInput{
 		Name: body.Name, Image: body.Image, Description: body.Description,
 		CPU: body.CPU, MemoryMB: body.MemoryMB, DiskMB: body.DiskMB, Env: body.Env,
+		Network: body.Network, Setup: body.Setup, SetupTimeout: body.SetupTimeout, Warm: body.Warm,
 	})
 	if err != nil {
 		writeManager(w, err)
@@ -829,10 +834,20 @@ func volumeJSON(v store.Volume) volumeResponse {
 }
 
 func templateJSON(t store.Template) map[string]any {
+	setup := t.Setup
+	if setup == nil {
+		setup = []string{}
+	}
+	network := t.Network
+	if network == "" {
+		network = "none"
+	}
 	return map[string]any{
 		"name": t.Name, "image": t.Image, "description": t.Description,
 		"cpu": t.CPU, "memory_mb": t.MemoryMB, "disk_mb": t.DiskMB,
-		"env": t.Env, "builtin": t.Builtin, "created_at": t.CreatedAt,
+		"env": t.Env, "network": network, "setup": setup,
+		"setup_timeout_seconds": t.SetupTimeout, "warm": t.Warm,
+		"builtin": t.Builtin, "created_at": t.CreatedAt,
 	}
 }
 

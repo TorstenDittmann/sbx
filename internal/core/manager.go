@@ -62,13 +62,17 @@ type ExecInput struct {
 
 // TemplateInput creates a template.
 type TemplateInput struct {
-	Name        string
-	Image       string
-	Description string
-	CPU         float64
-	MemoryMB    int
-	DiskMB      int
-	Env         map[string]string
+	Name         string
+	Image        string
+	Description  string
+	CPU          float64
+	MemoryMB     int
+	DiskMB       int
+	Env          map[string]string
+	Network      string
+	Setup        []string
+	SetupTimeout int
+	Warm         int
 }
 
 // Counters are process-local totals for /metrics.
@@ -149,10 +153,6 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if !ok {
 		return store.Sandbox{}, invalid("unknown backend " + backend)
 	}
-	mode, network, policy, err := m.effectiveNet(ctx, actor, in)
-	if err != nil {
-		return store.Sandbox{}, err
-	}
 	if err := validEnv(in.Env); err != nil {
 		return store.Sandbox{}, err
 	}
@@ -161,6 +161,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	}
 
 	var tpl store.Template
+	var err error
 	if in.Template != "" {
 		if err := validTemplateName(in.Template); err != nil {
 			return store.Sandbox{}, err
@@ -172,6 +173,14 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 			}
 			return store.Sandbox{}, err
 		}
+	}
+	netIn := in
+	if netIn.Network == "" && tpl.Network != "" {
+		netIn.Network = tpl.Network
+	}
+	mode, network, policy, err := m.effectiveNet(ctx, actor, netIn)
+	if err != nil {
+		return store.Sandbox{}, err
 	}
 	image := in.Image
 	if image == "" {
@@ -203,6 +212,10 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err != nil {
 		return store.Sandbox{}, err
 	}
+	baseCPU := pickFloat(nilIfZero(tpl.CPU), m.cfg.Limits.DefaultCPU)
+	baseMem := pickInt(nilIfZeroInt(tpl.MemoryMB), m.cfg.Limits.DefaultMemoryMB)
+	baseDisk := pickInt(nilIfZeroInt(tpl.DiskMB), m.cfg.Limits.DefaultDiskMB)
+	basePIDs := m.cfg.Limits.DefaultPIDs
 
 	now := m.now()
 	sb := store.Sandbox{
@@ -234,6 +247,15 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 			return store.Sandbox{}, quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
 		}
 	}
+	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
+	if err != nil {
+		m.mu.Unlock()
+		return store.Sandbox{}, err
+	}
+	if okClaim {
+		m.mu.Unlock()
+		return claimed, nil
+	}
 	if err := m.store.InsertSandbox(ctx, sb); err != nil {
 		m.mu.Unlock()
 		return store.Sandbox{}, err
@@ -257,6 +279,10 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	sb.Status = "running"
 	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
 		_ = d.Delete(context.Background(), handle.ID)
+		return store.Sandbox{}, err
+	}
+	if err := m.runSetup(ctx, d, sb.ContainerID, tpl); err != nil {
+		_ = m.destroy(ctx, sb, "setup failed")
 		return store.Sandbox{}, err
 	}
 	m.Counts.Creates.Add(1)
@@ -302,6 +328,9 @@ func (m *Manager) Get(ctx context.Context, actor Actor, sandboxID string) (store
 
 // List returns sandboxes visible to actor.
 func (m *Manager) List(ctx context.Context, actor Actor, status, backend string, labels map[string]string) ([]store.Sandbox, error) {
+	if status == "warm" && !actor.Admin {
+		return []store.Sandbox{}, nil
+	}
 	f := store.SandboxFilter{Status: status, Backend: backend, Labels: labels}
 	if !actor.Admin {
 		f.OwnerID = actor.KeyID
@@ -635,17 +664,50 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 	if err := validEnv(in.Env); err != nil {
 		return store.Template{}, err
 	}
+	if in.Warm < 0 || in.Warm > 8 {
+		return store.Template{}, invalid("warm must be between 0 and 8")
+	}
+	if len(in.Setup) > 0 {
+		if err := validCmd(in.Setup); err != nil {
+			return store.Template{}, err
+		}
+	}
+	if in.SetupTimeout < 0 || in.SetupTimeout > m.cfg.Limits.MaxExecSeconds {
+		return store.Template{}, invalid("setup_timeout_seconds is out of range")
+	}
+	network := in.Network
+	if network == "" {
+		network = "none"
+	}
+	switch network {
+	case "none", "full":
+	default:
+		return store.Template{}, invalid("template network must be none or full")
+	}
 	if _, err := m.store.GetTemplate(ctx, in.Name); err == nil {
 		return store.Template{}, conflict("template already exists")
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return store.Template{}, err
 	}
+	setup := in.Setup
+	if setup == nil {
+		setup = []string{}
+	}
 	t := store.Template{
 		Name: in.Name, Image: in.Image, Description: in.Description,
-		CPU: in.CPU, MemoryMB: in.MemoryMB, DiskMB: in.DiskMB, Env: nonNil(in.Env), CreatedAt: m.now(),
+		CPU: in.CPU, MemoryMB: in.MemoryMB, DiskMB: in.DiskMB, Env: nonNil(in.Env),
+		Network: network, Setup: setup, SetupTimeout: in.SetupTimeout, Warm: in.Warm,
+		CreatedAt: m.now(),
 	}
 	if err := m.store.CreateTemplate(ctx, t); err != nil {
 		return store.Template{}, err
+	}
+	if t.Warm > 0 {
+		if err := m.fillTemplate(ctx, t); err != nil {
+			m.drainPool(ctx, t.Name)
+			_ = m.store.DeleteTemplate(ctx, t.Name)
+			return store.Template{}, err
+		}
 	}
 	return t, nil
 }
@@ -659,7 +721,11 @@ func (m *Manager) DeleteTemplate(ctx context.Context, name string) error {
 	if err != nil && err.Error() == "built-in template" {
 		return forbidden("built-in templates cannot be deleted")
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	m.drainPool(ctx, name)
+	return nil
 }
 
 // ListTemplates returns every template.
@@ -736,6 +802,7 @@ func (m *Manager) RunReaper(ctx context.Context) {
 			if _, err := m.Sweep(ctx); err != nil {
 				m.log.Error("sweep failed", "err", err)
 			}
+			m.Replenish(ctx)
 		}
 	}
 }

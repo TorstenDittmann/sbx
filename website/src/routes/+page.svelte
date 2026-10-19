@@ -110,7 +110,7 @@
 	<div class="intro">
 		<h2>Build both binaries, then a request</h2>
 		<p>Docker has to be running. Build <code>sbx-agent</code> next to <code>sbx</code> so the agent starts inside the sandbox. The first boot prints an admin key once and writes it to <code>data/initial_api_key</code>.</p>
-		<p class="note">Templates are <code>base</code>, <code>python</code>, and <code>node</code>. The SDK reads <code>SBX_URL</code> and <code>SBX_API_KEY</code>. From this repo, <code>node --experimental-strip-types examples/quickstart.ts</code> runs on Node, and the same client runs on Bun.</p>
+		<p class="note">Templates are <code>base</code>, <code>python</code>, and <code>node</code>. A template can keep a warm pool and a setup command so the next sandbox skips install. The SDK reads <code>SBX_URL</code> and <code>SBX_API_KEY</code>. From this repo, <code>node --experimental-strip-types examples/quickstart.ts</code> runs on Node, and the same client runs on Bun.</p>
 	</div>
 	<div class="code">{@html data.quickstart}</div>
 </section>

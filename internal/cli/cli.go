@@ -116,6 +116,7 @@ func serve(args []string) error {
 	if err := mgr.Reconcile(context.Background()); err != nil {
 		log.Warn("startup reconcile failed", "err", err)
 	}
+	mgr.Replenish(context.Background())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
