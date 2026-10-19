@@ -36,7 +36,7 @@
 		{ method: "POST", path: "/v1/sandboxes/{id}/exec", detail: "wait, or SSE with ?stream=1" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/processes", detail: "background command" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/terminals", detail: "PTY, then a WebSocket" },
-		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "file events" },
+		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "inotify, or a poll fallback" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/previews", detail: "a port on the sandbox loopback" },
 		{ method: "PUT", path: "/v1/sandboxes/{id}/files/content", detail: "upload" },
 		{ method: "GET", path: "/healthz", detail: "Docker reachable, or 503" },
@@ -125,7 +125,7 @@
 
 <section class="container api" id="api">
 	<h2>The calls you make</h2>
-	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. Processes, terminals, watches, and previews need <code>sbx-agent</code>. Without it those routes return <code>unsupported</code>, and exec and files use a shell in the image.</p>
+	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. Processes, terminals, watches, and previews need <code>sbx-agent</code>. File watches use inotify and poll when the kernel cannot. Without the agent those routes return <code>unsupported</code>, and exec and files use a shell in the image.</p>
 	<div class="table">
 		<table>
 			<tbody>

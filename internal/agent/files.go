@@ -104,6 +104,9 @@ type meta struct {
 	mode  os.FileMode
 }
 
+// errWatchTooLarge is returned when a recursive snapshot exceeds the poll cap.
+var errWatchTooLarge = errors.New("watch tree is too large")
+
 func snapshot(root string, recursive bool) (map[string]meta, error) {
 	st, err := os.Lstat(root)
 	if err != nil {
@@ -142,7 +145,7 @@ func walk(dir string, count *int, limit int, out map[string]meta) error {
 	for _, e := range entries {
 		*count++
 		if *count > limit {
-			return errors.New("watch tree is too large")
+			return errWatchTooLarge
 		}
 		info, err := e.Info()
 		if err != nil {

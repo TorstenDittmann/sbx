@@ -409,7 +409,10 @@ paths:
     get:
       operationId: watchFiles
       summary: Watch a directory
-      description: Server-Sent Events. `ready`, then `change` events with `type` and `path`.
+      description: |
+        Server-Sent Events. `ready`, then `change` events with `type`
+        (`create`, `write`, or `remove`) and `path`. The agent uses inotify
+        and falls back to a 200 ms poll when inotify is unavailable.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"

@@ -92,7 +92,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 
 - `POST /v1/sandboxes`, get, list, delete, pause, resume, and TTL updates.
 - Exec that waits, and exec as server-sent events with `?stream=1`. Optional `stdin` or `stdin_base64`.
-- Background processes, interactive terminals over WebSocket, file watches, and preview URLs for a service on the sandbox loopback. These need `sbx-agent` (see [docs/AGENT.md](docs/AGENT.md)).
+- Background processes, interactive terminals over WebSocket, inotify file watches, and preview URLs for a service on the sandbox loopback. These need `sbx-agent` (see [docs/AGENT.md](docs/AGENT.md)).
 - File list, upload, download, delete, and tar archives.
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes.
 - A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.

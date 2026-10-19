@@ -27,7 +27,7 @@ The server looks for the binary in `docker.agent_bin`, `SBX_AGENT_BIN`, `--agent
 - Foreground exec with streaming stdout and stderr, stdin, a timeout, and an exit code. A timeout is exit 137.
 - Background processes that survive a dropped dial. They can be listed, signaled, written to, and reattached. Output is replayed from a 256 KiB ring.
 - Interactive PTY sessions: resize, and a WebSocket on `GET /v1/sandboxes/{id}/terminals/{termId}/ws`. Binary frames are bytes. Text frames are JSON (`resize` from the client, `exit` from the server).
-- File list, read, write, stat, delete, and mkdir. Watches poll (default 200 ms) so they work on gVisor.
+- File list, read, write, stat, delete, and mkdir. Watches use Linux inotify. If inotify cannot be created, the agent polls every 200 ms so a watch still works on gVisor builds without it. Atomic writes through the agent hide the `.sbx-tmp` file and report `write` when the destination already existed, otherwise `create`.
 - Preview: the server dials `127.0.0.1:port` inside the sandbox and reverse-proxies `/v1/sandboxes/{id}/previews/{previewId}/`. That works with `network: none`. Public path and wildcard-host routing are in [NETWORK.md](NETWORK.md).
 
 Browsers cannot set `Authorization` on a WebSocket, so authenticated routes also accept `access_token` as a query parameter. Request logs record the path only.
@@ -36,6 +36,5 @@ Browsers cannot set `Authorization` on a WebSocket, so authenticated routes also
 
 - vsock, and the Firecracker, Kata, and Kubernetes dialers. The framed connection is the seam.
 - Archives still invoke `tar` inside the image.
-- File watches are polls, not inotify.
 - Egress allow-lists are still rejected.
 - A background process with `timeout_seconds: 0` is not killed by the agent. The sandbox TTL still stops it.
