@@ -461,6 +461,15 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 	return out, rows.Err()
 }
 
+// CountAllActive returns sandboxes that still consume the node-wide cap.
+func (s *Store) CountAllActive(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM sandboxes
+		WHERE status IN ('creating', 'running', 'paused')`).Scan(&n)
+	return n, err
+}
+
 // CountActive returns sandboxes that still consume the owner's quota.
 func (s *Store) CountActive(ctx context.Context, ownerID string) (int, error) {
 	var n int

@@ -36,6 +36,7 @@ type Server struct {
 	mgr  *core.Manager
 	log  *slog.Logger
 	spec []byte
+	lim  *limiter
 }
 
 // New returns a server. spec is the OpenAPI document served at /openapi.yaml.
@@ -43,7 +44,7 @@ func New(mgr *core.Manager, log *slog.Logger, spec []byte) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{mgr: mgr, log: log, spec: spec}
+	return &Server{mgr: mgr, log: log, spec: spec, lim: newLimiter(mgr.Config().Limits.RequestsPerMinute)}
 }
 
 // Handler is the root HTTP handler.
@@ -51,6 +52,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.root)
 	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /openapi.yaml", s.openapi)
 
@@ -101,7 +103,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/p/{sandboxId}/{port}/{$}", s.proxyPublicPath)
 	mux.HandleFunc("/p/{sandboxId}/{port}/{path...}", s.proxyPublicPath)
 
-	return s.recover(s.logRequests(s.routePreviewHost(mux)))
+	return s.recover(s.logRequests(s.limitBody(s.routePreviewHost(mux))))
 }
 
 func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
@@ -137,6 +139,18 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if !s.mgr.Ready() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status":  "starting",
+			"version": version.Version,
+			"backend": s.mgr.Config().Backend,
+		})
+		return
+	}
+	s.health(w, r)
 }
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +199,10 @@ func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
 		}
 		if !key.HasScope(scope) {
 			writeErr(w, http.StatusForbidden, "forbidden", "API key lacks the "+scope+" scope")
+			return
+		}
+		if !s.lim.allow(key.ID) {
+			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests")
 			return
 		}
 		_ = s.mgr.Store().TouchKey(r.Context(), key.ID, time.Now().UTC())

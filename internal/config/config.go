@@ -41,17 +41,21 @@ type DockerConfig struct {
 
 // Limits are server-enforced ceilings. Zero values are replaced by Default.
 type Limits struct {
-	DefaultTTLSeconds      int
-	MaxTTLSeconds          int
-	DefaultCPU             float64
-	DefaultMemoryMB        int
-	DefaultDiskMB          int
-	DefaultPIDs            int
-	MaxCPU                 float64
-	MaxMemoryMB            int
-	MaxDiskMB              int
-	MaxPIDs                int
-	MaxSandboxesPerKey     int
+	DefaultTTLSeconds  int
+	MaxTTLSeconds      int
+	DefaultCPU         float64
+	DefaultMemoryMB    int
+	DefaultDiskMB      int
+	DefaultPIDs        int
+	MaxCPU             float64
+	MaxMemoryMB        int
+	MaxDiskMB          int
+	MaxPIDs            int
+	MaxSandboxesPerKey int
+	// MaxSandboxes is the node-wide cap across every API key. 0 means no cap.
+	MaxSandboxes int
+	// RequestsPerMinute is the per-key request budget. 0 disables the limiter.
+	RequestsPerMinute      int
 	DefaultExecSeconds     int
 	MaxExecSeconds         int
 	MaxOutputBytes         int
@@ -112,6 +116,8 @@ func Default() Config {
 			MaxDiskMB:              10240,
 			MaxPIDs:                4096,
 			MaxSandboxesPerKey:     20,
+			MaxSandboxes:           100,
+			RequestsPerMinute:      1200,
 			DefaultExecSeconds:     60,
 			MaxExecSeconds:         3600,
 			MaxOutputBytes:         8 << 20,
@@ -175,6 +181,8 @@ type fileLimits struct {
 	MaxDiskMB              *int     `yaml:"max_disk_mb"`
 	MaxPIDs                *int     `yaml:"max_pids"`
 	MaxSandboxesPerKey     *int     `yaml:"max_sandboxes_per_key"`
+	MaxSandboxes           *int     `yaml:"max_sandboxes"`
+	RequestsPerMinute      *int     `yaml:"requests_per_minute"`
 	DefaultExecSeconds     *int     `yaml:"default_exec_seconds"`
 	MaxExecSeconds         *int     `yaml:"max_exec_seconds"`
 	MaxOutputBytes         *int     `yaml:"max_output_bytes"`
@@ -253,6 +261,8 @@ func (f fileConfig) apply(cfg *Config) {
 		setInt(&cfg.Limits.MaxDiskMB, l.MaxDiskMB)
 		setInt(&cfg.Limits.MaxPIDs, l.MaxPIDs)
 		setInt(&cfg.Limits.MaxSandboxesPerKey, l.MaxSandboxesPerKey)
+		setInt(&cfg.Limits.MaxSandboxes, l.MaxSandboxes)
+		setInt(&cfg.Limits.RequestsPerMinute, l.RequestsPerMinute)
 		setInt(&cfg.Limits.DefaultExecSeconds, l.DefaultExecSeconds)
 		setInt(&cfg.Limits.MaxExecSeconds, l.MaxExecSeconds)
 		setInt(&cfg.Limits.MaxOutputBytes, l.MaxOutputBytes)
@@ -306,6 +316,8 @@ func applyEnv(cfg *Config) {
 	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxSandboxesPerKey, "SBX_MAX_SANDBOXES_PER_KEY")
+	envInt(&cfg.Limits.MaxSandboxes, "SBX_MAX_SANDBOXES")
+	envInt(&cfg.Limits.RequestsPerMinute, "SBX_REQUESTS_PER_MINUTE")
 	envInt(&cfg.Limits.DefaultMemoryMB, "SBX_DEFAULT_MEMORY_MB")
 	envInt(&cfg.Limits.MaxUploadBytes, "SBX_MAX_UPLOAD_BYTES")
 	envString(&cfg.Network.DefaultMode, "SBX_NETWORK_MODE")
@@ -345,6 +357,9 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.MaxSandboxesPerKey < 1 {
 		return fmt.Errorf("max_sandboxes_per_key must be >= 1")
+	}
+	if c.Limits.MaxSandboxes < 0 || c.Limits.RequestsPerMinute < 0 {
+		return fmt.Errorf("max_sandboxes and requests_per_minute must be >= 0")
 	}
 	if c.Limits.DefaultCPU <= 0 || c.Limits.DefaultCPU > c.Limits.MaxCPU {
 		return fmt.Errorf("default_cpu must be between 0 and max_cpu")

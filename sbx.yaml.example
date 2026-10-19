@@ -25,6 +25,8 @@ limits:
   default_disk_mb: 1024
   default_pids: 256
   max_sandboxes_per_key: 20
+  max_sandboxes: 100
+  requests_per_minute: 1200
 
 auth:
   # Optional. When set, the first boot uses this key instead of generating one.

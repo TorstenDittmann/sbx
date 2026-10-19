@@ -348,6 +348,50 @@ func TestIntegrationAgent(t *testing.T) {
 	}
 }
 
+func TestIntegrationKillDuringExec(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	d, err := New(Options{Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	h, err := d.Create(ctx, driver.SandboxSpec{
+		ID: id.Sandbox(), Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
+	done := make(chan error, 1)
+	go func() {
+		res, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sleep", "30"}, TimeoutSeconds: 40})
+		if err != nil {
+			done <- err
+			return
+		}
+		if res.ExitCode == 0 {
+			done <- errors.New("sleep exited 0 after the container was killed")
+			return
+		}
+		done <- nil
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if out, err := exec.Command("docker", "kill", h.ID).CombinedOutput(); err != nil {
+		t.Fatalf("kill %v %s", err, out)
+	}
+	select {
+	case err := <-done:
+		if err != nil && err.Error() == "sleep exited 0 after the container was killed" {
+			t.Fatal(err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("exec did not return after the container was killed")
+	}
+}
+
 func buildAgent(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("SBX_AGENT_BIN"); p != "" {

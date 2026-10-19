@@ -28,6 +28,7 @@ type harness struct {
 	key    string
 	docker *fake.Driver
 	store  *store.Store
+	mgr    *core.Manager
 }
 
 func newHarness(t *testing.T) *harness {
@@ -54,7 +55,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	srv := httptest.NewServer(api.New(mgr, log, []byte("openapi: 3.1.0\n")).Handler())
 	t.Cleanup(srv.Close)
-	return &harness{srv: srv, key: plain, docker: fd, store: st}
+	return &harness{srv: srv, key: plain, docker: fd, store: st, mgr: mgr}
 }
 
 func (h *harness) do(t *testing.T, method, path, token string, body any) *http.Response {

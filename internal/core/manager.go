@@ -91,6 +91,7 @@ type Manager struct {
 	previews map[string]Preview
 	streams  map[string]int
 	budgets  map[string]*byteBudget
+	ready    atomic.Bool
 	Counts   Counters
 }
 
@@ -216,6 +217,17 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if n >= m.cfg.Limits.MaxSandboxesPerKey {
 		m.mu.Unlock()
 		return store.Sandbox{}, quota(fmt.Sprintf("sandbox limit of %d reached", m.cfg.Limits.MaxSandboxesPerKey))
+	}
+	if m.cfg.Limits.MaxSandboxes > 0 {
+		total, err := m.store.CountAllActive(ctx)
+		if err != nil {
+			m.mu.Unlock()
+			return store.Sandbox{}, err
+		}
+		if total >= m.cfg.Limits.MaxSandboxes {
+			m.mu.Unlock()
+			return store.Sandbox{}, quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
+		}
 	}
 	if err := m.store.InsertSandbox(ctx, sb); err != nil {
 		m.mu.Unlock()

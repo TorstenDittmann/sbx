@@ -113,6 +113,9 @@ func serve(args []string) error {
 	if _, err := mgr.Sweep(context.Background()); err != nil {
 		log.Warn("startup sweep failed", "err", err)
 	}
+	if err := mgr.Reconcile(context.Background()); err != nil {
+		log.Warn("startup reconcile failed", "err", err)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -132,7 +135,8 @@ func runServer(ctx context.Context, cfg config.Config, mgr *core.Manager, log *s
 	log.Info("listening", "addr", cfg.Addr, "backend", cfg.Backend, "version", version.Version)
 	select {
 	case <-ctx.Done():
-		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		log.Info("shutting down")
+		shut, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return srv.Shutdown(shut)
 	case err := <-errCh:
