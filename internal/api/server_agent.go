@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -9,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -276,18 +276,19 @@ func (s *Server) terminalSocket(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Port int `json:"port"`
+		Port   int  `json:"port"`
+		Public bool `json:"public"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
 		return
 	}
-	pv, err := s.mgr.CreatePreview(r.Context(), actor(r), r.PathValue("id"), body.Port)
+	pv, err := s.mgr.CreatePreview(r.Context(), actor(r), r.PathValue("id"), body.Port, body.Public)
 	if err != nil {
 		writeManager(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, previewJSON(r, pv))
+	writeJSON(w, http.StatusCreated, s.previewJSON(r, pv, true))
 }
 
 func (s *Server) listPreviews(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +299,7 @@ func (s *Server) listPreviews(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(items))
 	for _, item := range items {
-		out = append(out, previewJSON(r, item))
+		out = append(out, s.previewJSON(r, item, false))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"previews": out})
 }
@@ -312,56 +313,13 @@ func (s *Server) deletePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) proxyPreview(w http.ResponseWriter, r *http.Request) {
-	conn, pv, err := s.mgr.DialPreview(r.Context(), actor(r), r.PathValue("id"), r.PathValue("previewId"))
-	if err != nil {
-		writeManager(w, err)
+	pv, ok := s.mgr.PreviewByID(r.PathValue("id"), r.PathValue("previewId"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 		return
 	}
-	defer conn.Close()
 	prefix := "/v1/sandboxes/" + r.PathValue("id") + "/previews/" + pv.ID
-	rest := strings.TrimPrefix(r.URL.Path, prefix)
-	if rest == "" {
-		rest = "/"
-	}
-	if !strings.HasPrefix(rest, "/") {
-		rest = "/" + rest
-	}
-	out := r.Clone(r.Context())
-	out.RequestURI = ""
-	out.URL.Scheme = "http"
-	out.URL.Host = fmt.Sprintf("127.0.0.1:%d", pv.Port)
-	out.URL.Path = rest
-	q := out.URL.Query()
-	q.Del("access_token")
-	out.URL.RawQuery = q.Encode()
-	out.Host = out.URL.Host
-	out.Header.Del("Authorization")
-	out.Header.Del("Cookie")
-	if !headerHasToken(r.Header, "Connection", "upgrade") {
-		stripHop(out.Header)
-	}
-	if err := out.Write(conn); err != nil {
-		writeErr(w, http.StatusBadGateway, "driver", "preview connection failed")
-		return
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), out)
-	if err != nil {
-		writeErr(w, http.StatusBadGateway, "driver", "preview response failed")
-		return
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusSwitchingProtocols {
-		s.spliceUpgrade(w, conn, resp)
-		return
-	}
-	stripHop(resp.Header)
-	for k, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	s.servePreview(w, r, pv, prefix, true)
 }
 
 func (s *Server) spliceUpgrade(w http.ResponseWriter, upstream io.ReadWriteCloser, resp *http.Response) {
@@ -489,12 +447,48 @@ func fileJSON(e driver.FileEntry) map[string]any {
 	}
 }
 
-func previewJSON(r *http.Request, pv core.Preview) map[string]any {
-	return map[string]any{
+func (s *Server) previewJSON(r *http.Request, pv core.Preview, withToken bool) map[string]any {
+	base := s.externalBase(r)
+	apiURL := base + "/v1/sandboxes/" + pv.SandboxID + "/previews/" + pv.ID + "/"
+	pathURL := base + "/p/" + pv.SandboxID + "/" + strconv.Itoa(pv.Port) + "/"
+	publicURL := pathURL
+	body := map[string]any{
 		"id": pv.ID, "sandbox_id": pv.SandboxID, "port": pv.Port,
-		"url":        publicBase(r) + "/v1/sandboxes/" + pv.SandboxID + "/previews/" + pv.ID + "/",
+		"public": pv.Public, "url": apiURL, "public_url": publicURL,
 		"created_at": pv.CreatedAt,
 	}
+	if host := s.previewHost(pv); host != "" {
+		body["host"] = host
+		scheme := "http"
+		if strings.HasPrefix(base, "https://") {
+			scheme = "https"
+		}
+		publicURL = scheme + "://" + host + "/"
+		body["public_url"] = publicURL
+	}
+	if withToken && pv.Token != "" {
+		body["token"] = pv.Token
+		if !pv.Public {
+			body["public_url"] = publicURL + "?token=" + pv.Token
+		}
+	}
+	return body
+}
+
+func (s *Server) externalBase(r *http.Request) string {
+	if u := strings.TrimRight(strings.TrimSpace(s.mgr.Config().Network.PublicURL), "/"); u != "" {
+		return u
+	}
+	return publicBase(r)
+}
+
+func (s *Server) previewHost(pv core.Preview) string {
+	domain := strings.Trim(strings.ToLower(strings.TrimSpace(s.mgr.Config().Network.PreviewDomain)), ".")
+	hexID := strings.TrimPrefix(pv.SandboxID, "sbx_")
+	if domain == "" || len(hexID) != 16 {
+		return ""
+	}
+	return strconv.Itoa(pv.Port) + "-sbx-" + hexID + "." + domain
 }
 
 func publicBase(r *http.Request) string {

@@ -21,7 +21,7 @@ func TestNetworkCreatePaths(t *testing.T) {
 	fd.mu.Lock()
 	fd.network = true
 	fd.mu.Unlock()
-	bridge, err := cli.EnsureSandboxNetwork(ctx)
+	bridge, err := cli.EnsureSandboxNetwork(ctx, false)
 	if err != nil || bridge != "sbx0" {
 		t.Fatalf("existing %s %v", bridge, err)
 	}
@@ -32,7 +32,7 @@ func TestNetworkCreatePaths(t *testing.T) {
 	fd.network = false
 	fd.netStatus = http.StatusConflict
 	fd.mu.Unlock()
-	if bridge, err = cli.EnsureSandboxNetwork(ctx); err != nil || bridge != "sbx0" {
+	if bridge, err = cli.EnsureSandboxNetwork(ctx, false); err != nil || bridge != "sbx0" {
 		t.Fatalf("conflict %s %v", bridge, err)
 	}
 
@@ -40,7 +40,7 @@ func TestNetworkCreatePaths(t *testing.T) {
 	fd.network = false
 	fd.netStatus = http.StatusInternalServerError
 	fd.mu.Unlock()
-	if _, err := cli.EnsureSandboxNetwork(ctx); err == nil || !strings.Contains(err.Error(), "network create failed") {
+	if _, err := cli.EnsureSandboxNetwork(ctx, false); err == nil || !strings.Contains(err.Error(), "network create failed") {
 		t.Fatal(err)
 	}
 	if (&StatusError{Status: http.StatusTeapot}).Error() == "" {

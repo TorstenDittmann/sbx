@@ -11,6 +11,21 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/driver"
 )
 
+func TestWantIPv6AutoTries(t *testing.T) {
+	d := &Driver{opt: Options{IPv6: "auto"}}
+	if !d.wantIPv6() {
+		t.Fatal("auto")
+	}
+	d.opt.IPv6 = "on"
+	if !d.wantIPv6() {
+		t.Fatal("on")
+	}
+	d.opt.IPv6 = "off"
+	if d.wantIPv6() {
+		t.Fatal("off")
+	}
+}
+
 func TestDestinationBlocked(t *testing.T) {
 	blocked := []string{
 		"169.254.169.254", "169.254.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255",

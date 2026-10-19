@@ -19,6 +19,16 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// KeyNetwork is the default egress policy for sandboxes created with a key.
+// Nil slices inherit the server policy. An empty non-nil slice clears it.
+type KeyNetwork struct {
+	Mode       string    `json:"mode,omitempty"`
+	Allow      *[]string `json:"allow,omitempty"`
+	Deny       *[]string `json:"deny,omitempty"`
+	EgressKbps int       `json:"egress_kbps,omitempty"`
+	MaxConns   int       `json:"max_connections,omitempty"`
+}
+
 // APIKey is a stored credential. Hash is the sha256 hex of the secret.
 type APIKey struct {
 	ID         string
@@ -26,6 +36,7 @@ type APIKey struct {
 	Hash       string
 	Prefix     string
 	Scopes     []string
+	Network    KeyNetwork
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 }
@@ -71,6 +82,10 @@ type Sandbox struct {
 	PIDs               int
 	Env                map[string]string
 	Network            string
+	Allow              []string
+	Deny               []string
+	EgressKbps         int
+	MaxConns           int
 	Labels             map[string]string
 	OwnerKeyID         string
 	CreatedAt          time.Time
@@ -123,8 +138,50 @@ func (s *Store) Close() error {
 }
 
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	return err
+	if _, err := db.Exec(schema); err != nil {
+		return err
+	}
+	alters := []struct{ table, column, stmt string }{
+		{"sandboxes", "allow_json", `ALTER TABLE sandboxes ADD COLUMN allow_json TEXT NOT NULL DEFAULT '[]'`},
+		{"sandboxes", "deny_json", `ALTER TABLE sandboxes ADD COLUMN deny_json TEXT NOT NULL DEFAULT '[]'`},
+		{"sandboxes", "egress_kbps", `ALTER TABLE sandboxes ADD COLUMN egress_kbps INTEGER NOT NULL DEFAULT 0`},
+		{"sandboxes", "max_conns", `ALTER TABLE sandboxes ADD COLUMN max_conns INTEGER NOT NULL DEFAULT 0`},
+		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
+	}
+	for _, alt := range alters {
+		have, err := hasColumn(db, alt.table, alt.column)
+		if err != nil {
+			return err
+		}
+		if have {
+			continue
+		}
+		if _, err := db.Exec(alt.stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 const schema = `
@@ -184,10 +241,14 @@ func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
 	if err != nil {
 		return err
 	}
+	network, err := json.Marshal(k.Network)
+	if err != nil {
+		return err
+	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), millis(k.CreatedAt))
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), millis(k.CreatedAt))
 	return err
 }
 
@@ -201,15 +262,23 @@ func (s *Store) CountKeys(ctx context.Context) (int, error) {
 // KeyByHash looks up a key by the digest of its secret.
 func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, created_at, last_used_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
 		FROM api_keys WHERE key_hash = ?`, hash)
+	return scanKey(row)
+}
+
+// KeyByID loads one key. The secret is not included.
+func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
+		FROM api_keys WHERE id = ?`, id)
 	return scanKey(row)
 }
 
 // ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
 func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, created_at, last_used_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
 		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -316,11 +385,13 @@ func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO sandboxes (
 			id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
-			env_json, network, labels_json, owner_key_id, created_at, expires_at,
+			env_json, network, allow_json, deny_json, egress_kbps, max_conns,
+			labels_json, owner_key_id, created_at, expires_at,
 			idle_timeout_seconds, last_activity_at, finished_at, container_id, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sb.ID, sb.Template, sb.Image, sb.Backend, sb.Status, sb.CPU, sb.MemoryMB, sb.DiskMB, sb.PIDs,
-		mustJSON(sb.Env), sb.Network, mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
+		mustJSON(sb.Env), sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns,
+		mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
 		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error)
 	return err
 }
@@ -458,7 +529,8 @@ func (s *Store) CountByStatus(ctx context.Context) (map[string]int, error) {
 
 const sandboxSelect = `
 SELECT id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
-       env_json, network, labels_json, owner_key_id, created_at, expires_at,
+       env_json, network, allow_json, deny_json, egress_kbps, max_conns,
+       labels_json, owner_key_id, created_at, expires_at,
        idle_timeout_seconds, last_activity_at, finished_at, container_id, error
 FROM sandboxes`
 
@@ -468,10 +540,10 @@ type scanner interface {
 
 func scanKey(row scanner) (APIKey, error) {
 	var k APIKey
-	var scopes string
+	var scopes, network string
 	var created int64
 	var last sql.NullInt64
-	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &created, &last)
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &created, &last)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
 	}
@@ -480,6 +552,11 @@ func scanKey(row scanner) (APIKey, error) {
 	}
 	if err := json.Unmarshal([]byte(scopes), &k.Scopes); err != nil {
 		return APIKey{}, err
+	}
+	if network != "" && network != "{}" {
+		if err := json.Unmarshal([]byte(network), &k.Network); err != nil {
+			return APIKey{}, err
+		}
 	}
 	k.CreatedAt = fromMillis(created)
 	if last.Valid {
@@ -514,12 +591,12 @@ func scanTemplate(row scanner) (Template, error) {
 
 func scanSandbox(row scanner) (Sandbox, error) {
 	var sb Sandbox
-	var env, labels string
+	var env, labels, allow, deny string
 	var created, expires, activity int64
 	var finished sql.NullInt64
 	err := row.Scan(
 		&sb.ID, &sb.Template, &sb.Image, &sb.Backend, &sb.Status, &sb.CPU, &sb.MemoryMB, &sb.DiskMB, &sb.PIDs,
-		&env, &sb.Network, &labels, &sb.OwnerKeyID, &created, &expires,
+		&env, &sb.Network, &allow, &deny, &sb.EgressKbps, &sb.MaxConns, &labels, &sb.OwnerKeyID, &created, &expires,
 		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -530,6 +607,8 @@ func scanSandbox(row scanner) (Sandbox, error) {
 	}
 	sb.Env = decodeMap(env)
 	sb.Labels = decodeMap(labels)
+	sb.Allow = decodeSlice(allow)
+	sb.Deny = decodeSlice(deny)
 	sb.CreatedAt = fromMillis(created)
 	sb.ExpiresAt = fromMillis(expires)
 	sb.LastActivityAt = fromMillis(activity)
@@ -550,6 +629,24 @@ func decodeMap(s string) map[string]string {
 		return map[string]string{}
 	}
 	return out
+}
+
+func decodeSlice(s string) []string {
+	if s == "" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func nonNilSlice(v []string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return v
 }
 
 func mustJSON(v any) string {

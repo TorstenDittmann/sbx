@@ -1,0 +1,16 @@
+# Traefik file provider. Dokploy uses the same idea: one service on port 8080,
+# an API host, and a wildcard host. passHostHeader must stay true.
+http:
+  routers:
+    sbx:
+      rule: Host(`api.example.com`) || HostRegexp(`^[0-9]+-sbx-[0-9a-f]+\.sbx\.example\.com$`)
+      entryPoints: [websecure]
+      tls:
+        certResolver: le
+      service: sbx
+  services:
+    sbx:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: http://sbx:8080

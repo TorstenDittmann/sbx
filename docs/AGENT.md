@@ -28,7 +28,7 @@ The server looks for the binary in `docker.agent_bin`, `SBX_AGENT_BIN`, `--agent
 - Background processes that survive a dropped dial. They can be listed, signaled, written to, and reattached. Output is replayed from a 256 KiB ring.
 - Interactive PTY sessions: resize, and a WebSocket on `GET /v1/sandboxes/{id}/terminals/{termId}/ws`. Binary frames are bytes. Text frames are JSON (`resize` from the client, `exit` from the server).
 - File list, read, write, stat, delete, and mkdir. Watches poll (default 200 ms) so they work on gVisor.
-- Preview: the server dials `127.0.0.1:port` inside the sandbox and reverse-proxies `/v1/sandboxes/{id}/previews/{previewId}/`. That works with `network: none`.
+- Preview: the server dials `127.0.0.1:port` inside the sandbox and reverse-proxies `/v1/sandboxes/{id}/previews/{previewId}/`. That works with `network: none`. Public path and wildcard-host routing are in [NETWORK.md](NETWORK.md).
 
 Browsers cannot set `Authorization` on a WebSocket, so authenticated routes also accept `access_token` as a query parameter. Request logs record the path only.
 

@@ -340,6 +340,9 @@ type ContainerState struct {
 	Status    string
 	Running   bool
 	Paused    bool
+	Pid       int
+	IPv4      string
+	IPv6      string
 	Labels    map[string]string
 	SandboxID string
 	Env       []string
@@ -353,12 +356,19 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 			Status  string `json:"Status"`
 			Running bool   `json:"Running"`
 			Paused  bool   `json:"Paused"`
+			Pid     int    `json:"Pid"`
 		} `json:"State"`
 		Config struct {
 			Image  string            `json:"Image"`
 			Labels map[string]string `json:"Labels"`
 			Env    []string          `json:"Env"`
 		} `json:"Config"`
+		NetworkSettings struct {
+			Networks map[string]struct {
+				IPAddress         string `json:"IPAddress"`
+				GlobalIPv6Address string `json:"GlobalIPv6Address"`
+			} `json:"Networks"`
+		} `json:"NetworkSettings"`
 	}
 	if err := c.DoJSON(ctx, http.MethodGet, "/containers/"+id+"/json", nil, &raw); err != nil {
 		return ContainerState{}, err
@@ -367,8 +377,21 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 	if image == "" {
 		image = raw.Image
 	}
+	ipv4, ipv6 := "", ""
+	if n, ok := raw.NetworkSettings.Networks[sandboxNetwork]; ok {
+		ipv4, ipv6 = n.IPAddress, n.GlobalIPv6Address
+	}
+	for _, n := range raw.NetworkSettings.Networks {
+		if ipv4 == "" {
+			ipv4 = n.IPAddress
+		}
+		if ipv6 == "" {
+			ipv6 = n.GlobalIPv6Address
+		}
+	}
 	return ContainerState{
 		ID: raw.ID, Image: image, Status: raw.State.Status, Running: raw.State.Running, Paused: raw.State.Paused,
+		Pid: raw.State.Pid, IPv4: ipv4, IPv6: ipv6,
 		Labels: raw.Config.Labels, SandboxID: raw.Config.Labels[labelID], Env: raw.Config.Env,
 	}, nil
 }
@@ -584,8 +607,9 @@ type networkInfo struct {
 }
 
 // EnsureSandboxNetwork creates the dedicated bridge used by network=full.
-// The bridge name is what the firewall matches on.
-func (c *Client) EnsureSandboxNetwork(ctx context.Context) (string, error) {
+// The bridge name is what the firewall matches on. When ipv6 is set and the
+// daemon rejects it, the bridge is created again with IPv4 only.
+func (c *Client) EnsureSandboxNetwork(ctx context.Context, ipv6 bool) (string, error) {
 	info, err := c.networkInspect(ctx, sandboxNetwork)
 	if err == nil {
 		return validateNetwork(info)
@@ -593,14 +617,12 @@ func (c *Client) EnsureSandboxNetwork(ctx context.Context) (string, error) {
 	if !errors.Is(err, driver.ErrNotFound) {
 		return "", err
 	}
-	if err := c.DoJSON(ctx, http.MethodPost, "/networks/create", sandboxNetworkSpec(), nil); err != nil {
-		var status *StatusError
-		if !errors.As(err, &status) || status.Status != http.StatusConflict {
-			info, again := c.networkInspect(ctx, sandboxNetwork)
-			if again != nil {
-				return "", err
-			}
-			return validateNetwork(info)
+	if err := c.createSandboxNetwork(ctx, ipv6); err != nil {
+		if !ipv6 {
+			return "", err
+		}
+		if err2 := c.createSandboxNetwork(ctx, false); err2 != nil {
+			return "", err
 		}
 	}
 	info, err = c.networkInspect(ctx, sandboxNetwork)
@@ -608,6 +630,24 @@ func (c *Client) EnsureSandboxNetwork(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return validateNetwork(info)
+}
+
+func (c *Client) createSandboxNetwork(ctx context.Context, ipv6 bool) error {
+	err := c.DoJSON(ctx, http.MethodPost, "/networks/create", sandboxNetworkSpec(ipv6), nil)
+	if err == nil {
+		return nil
+	}
+	var status *StatusError
+	if errors.As(err, &status) && status.Status == http.StatusConflict {
+		return nil
+	}
+	info, again := c.networkInspect(ctx, sandboxNetwork)
+	if again == nil {
+		if _, vErr := validateNetwork(info); vErr == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 func (c *Client) networkInspect(ctx context.Context, name string) (networkInfo, error) {

@@ -11,6 +11,8 @@ docker:
   read_only_rootfs: true
   sandbox_uid: 1000
   sandbox_gid: 1000
+  # sandbox_root: true
+  # read_only_rootfs must also be false before apk or apt can install packages.
   # Path to the static sbx-agent binary. Empty, or a missing sibling of the
   # sbx binary, keeps exec and files on the shell path inside the image.
   # agent_bin: /usr/local/bin/sbx-agent
@@ -27,3 +29,26 @@ limits:
 auth:
   # Optional. When set, the first boot uses this key instead of generating one.
   # bootstrap_key: sbx_replace_me
+
+# Sandboxes stay offline until default_mode is full or allow.
+# See docs/NETWORK.md for previews, Traefik, Caddy, and Dokploy.
+network:
+  default_mode: none
+  block_private: true
+  block_metadata: true
+  # private_allow:
+  #   - 10.8.0.0/24
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+  ipv6: auto
+  # egress_allow:
+  #   - example.com
+  # egress_deny:
+  #   - example.net
+  # default_egress_kbps: 10000
+  # default_max_connections: 128
+  # preview_domain: sbx.example.com
+  # public_url: https://api.example.com
+  allow_public_previews: true
+  preview_max_streams: 64

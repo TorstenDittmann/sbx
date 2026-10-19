@@ -43,6 +43,19 @@ const (
 	NetFull NetMode = "full"
 )
 
+// NetPolicy is the egress policy for one sandbox on a connected network.
+// Allow and Deny hold domains, IPs, and CIDRs. The driver resolves domains.
+type NetPolicy struct {
+	Allow         []string
+	Deny          []string
+	BlockPrivate  bool
+	BlockMetadata bool
+	PrivateAllow  []string
+	DNS           []string
+	EgressKbps    int
+	MaxConns      int
+}
+
 // Caps describes optional backend features.
 type Caps struct {
 	Pause          bool
@@ -61,6 +74,7 @@ type SandboxSpec struct {
 	PIDs     int
 	Env      map[string]string
 	Network  NetMode
+	Policy   NetPolicy
 	Labels   map[string]string
 	Workdir  string
 }
@@ -129,6 +143,13 @@ type FileEntry struct {
 	Size    int64
 	Mode    uint32
 	ModTime time.Time
+}
+
+// NetEnforcer installs and refreshes per-sandbox egress rules.
+type NetEnforcer interface {
+	ApplyNetPolicy(ctx context.Context, containerID string, spec SandboxSpec) error
+	DropNetPolicy(ctx context.Context, containerID string) error
+	RefreshNetPolicies(ctx context.Context) error
 }
 
 // Driver manages sandboxes for one isolation backend.

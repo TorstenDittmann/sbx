@@ -57,7 +57,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
 - v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, and previews then go through one framed session. See [AGENT.md](AGENT.md). Archives still shell out to `tar`. With no binary configured, exec and files stay on the engine API and the new routes return `unsupported`.
 - The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real.
-- `network: none` is the default. `network: full` joins a dedicated bridge and rejects metadata, link-local, and private destinations (see the security baseline). An egress allow-list is rejected with HTTP 400 `unsupported`.
+- `network: none` is the default. `full` and `allow` join a dedicated bridge. Metadata and private ranges stay blocked unless the operator opts out. Allow and deny lists, bandwidth, and connection limits are in [NETWORK.md](NETWORK.md).
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
 - The landing page is the static site in `website/`, deployed with Dokploy. See [website.md](website.md). There is no GitHub Pages workflow.
 
@@ -114,7 +114,7 @@ GET    /v1/keys                           admin
 GET    /  /healthz  /metrics  /openapi.yaml
 ```
 
-Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `network` (`none` or `full`), `backend` (`docker` or `gvisor`), and `labels`. Unknown JSON fields are rejected. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
+Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), and `labels`. Unknown JSON fields are rejected. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
 
@@ -170,21 +170,21 @@ The website is separate. [Deploying the website with Dokploy](website.md#deployi
 
 Sandboxes are created with `CapDrop: ["ALL"]`, `no-new-privileges`, a non-root user, memory equal to memory+swap (no swap), a PID limit, private IPC, read-only rootfs, and `network=none` unless `full` is requested. The Docker socket is not mounted into sandboxes. API keys are hashed. TTLs and the per-key sandbox quota are enforced in the server, not left to the caller.
 
-`network: full` is an explicit opt-in to public egress. It is not an allow-list. Sandboxes on that mode join the `sbx` bridge (`sbx0`, `172.30.0.0/16`, ICC off, IPv6 off). sbx keeps an `SBX-EGRESS` chain jumped from `DOCKER-USER` and from `INPUT` for packets that arrive on `sbx0`. The chain rejects:
+`network: full` and `network: allow` are explicit opt-ins to public egress. Sandboxes on those modes join the `sbx` bridge (`sbx0`, `172.30.0.0/16`, ICC off). IPv6 is added on a new bridge when `network.ipv6` is `on` or `auto` and the daemon has IPv6. sbx keeps an `SBX-EGRESS` chain jumped from `DOCKER-USER` and from `INPUT` for packets that arrive on `sbx0`. Per-sandbox chains run first. The baseline chain rejects:
 
 - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
 - `169.254.0.0/16`, which covers `169.254.169.254`
 - `100.100.100.200/32` (Alibaba Cloud metadata; the rest of `100.64.0.0/10` is left open)
 - when `ip6tables` has a `DOCKER-USER` chain: `fe80::/10`, `fc00::/7`, and `::1/128`
 
-The rules are installed once per process, before the first `network: full` container is created. A root server runs `iptables` directly. A non-root server (the usual Compose setup, which only mounts `/var/run/docker.sock`) starts a privileged `alpine:3.20` helper on the host network and host PID namespace and applies the host's `iptables` via `nsenter`. If both paths fail, create returns an error and does not start the container. There is no switch to disable the filter.
+The baseline is installed once per process, before the first networked container is created. A root server runs `iptables` directly. A non-root server (the usual Compose setup, which only mounts `/var/run/docker.sock`) starts a privileged `alpine:3.20` helper on the host network and host PID namespace and applies the host's `iptables` via `nsenter`. If both paths fail, create returns an error and does not start the container. Operators can set `block_private` and `block_metadata` to false. See [NETWORK.md](NETWORK.md).
 
 ## 10. After v0.1
 
 In rough order, none of these are stubbed in the tree:
 
 1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives still need `tar` in the image. Watches poll.
-2. Egress allow-lists. Preview URLs exist. Metadata and private-range blocking for `network: full` is already on.
+2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Metadata and private-range blocking stay on by default.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
 5. Kata and Firecracker.

@@ -104,6 +104,19 @@ test("client maps create, exec, files, and errors", async () => {
     return true
   })
 
+  const networked = await client.createSandbox({
+    image: "alpine:3.20",
+    network: { mode: "allow", allow: [], deny: ["example.net"], egressKbps: 1000, maxConnections: 8 },
+  })
+  assert.equal(networked.network, "none")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}").network, {
+    mode: "allow",
+    allow: [],
+    deny: ["example.net"],
+    egress_kbps: 1000,
+    max_connections: 8,
+  })
+
   const sandbox = await Sandbox.connect("sbx_test", { baseUrl, apiKey: "sbx_testkey" })
   assert.equal(sandbox.id, "sbx_test")
   await server.close()

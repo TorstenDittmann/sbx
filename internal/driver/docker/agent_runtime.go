@@ -34,6 +34,7 @@ func (d *Driver) initSessions() {
 	d.tokens = map[string]string{}
 	d.sessions = map[string]*agent.Client{}
 	d.sessLocks = map[string]*sync.Mutex{}
+	d.policies = map[string]appliedNet{}
 }
 
 func newAgentToken() string {

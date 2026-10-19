@@ -109,22 +109,22 @@ func TestGuestValidationAndPreviews(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 0); err == nil {
+	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 0, false); err == nil {
 		t.Fatal("expected port error")
 	}
-	first, err := mgr.CreatePreview(ctx, actor, sb.ID, 3000)
+	first, err := mgr.CreatePreview(ctx, actor, sb.ID, 3000, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 3000); err == nil {
+	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 3000, false); err == nil {
 		t.Fatal("expected duplicate port")
 	}
 	for port := 3001; port < 3016; port++ {
-		if _, err := mgr.CreatePreview(ctx, actor, sb.ID, port); err != nil {
+		if _, err := mgr.CreatePreview(ctx, actor, sb.ID, port, false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 4000); err == nil {
+	if _, err := mgr.CreatePreview(ctx, actor, sb.ID, 4000, false); err == nil {
 		t.Fatal("expected preview cap")
 	}
 	items, err := mgr.ListPreviews(ctx, actor, sb.ID)

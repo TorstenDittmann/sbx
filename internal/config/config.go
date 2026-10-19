@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type Config struct {
 	Docker   DockerConfig
 	Limits   Limits
 	Auth     AuthConfig
+	Network  NetworkConfig
 }
 
 // DockerConfig controls the engine socket and sandbox hardening.
@@ -32,6 +34,9 @@ type DockerConfig struct {
 	// AgentBin is the host path of the static sbx-agent binary. Empty keeps
 	// the shell exec and file path.
 	AgentBin string
+	// SandboxRoot runs sandboxes as uid 0 so image package managers can write
+	// the rootfs. The default stays uid 1000.
+	SandboxRoot bool
 }
 
 // Limits are server-enforced ceilings. Zero values are replaced by Default.
@@ -59,6 +64,26 @@ type Limits struct {
 // AuthConfig optionally pins the first API key.
 type AuthConfig struct {
 	BootstrapKey string
+}
+
+// NetworkConfig is the operator network policy. Sandbox and API-key settings
+// can tighten it. They cannot open metadata or private ranges unless the
+// operator turns those blocks off or lists a private CIDR in PrivateAllow.
+type NetworkConfig struct {
+	DefaultMode         string
+	BlockPrivate        bool
+	BlockMetadata       bool
+	PrivateAllow        []string
+	DNS                 []string
+	IPv6                string
+	EgressAllow         []string
+	EgressDeny          []string
+	DefaultEgressKbps   int
+	DefaultMaxConns     int
+	PreviewDomain       string
+	PublicURL           string
+	AllowPublicPreviews bool
+	PreviewMaxStreams   int
 }
 
 // Default is the secure single-node configuration.
@@ -95,6 +120,15 @@ func Default() Config {
 			RetainStoppedSeconds:   86400,
 			CreatingTimeoutSeconds: 900,
 		},
+		Network: NetworkConfig{
+			DefaultMode:         "none",
+			BlockPrivate:        true,
+			BlockMetadata:       true,
+			DNS:                 []string{"1.1.1.1", "8.8.8.8"},
+			IPv6:                "auto",
+			AllowPublicPreviews: true,
+			PreviewMaxStreams:   64,
+		},
 	}
 }
 
@@ -109,13 +143,14 @@ func (c Config) KeyPath() string {
 }
 
 type fileConfig struct {
-	Addr     *string     `yaml:"addr"`
-	DataDir  *string     `yaml:"data_dir"`
-	Backend  *string     `yaml:"backend"`
-	LogLevel *string     `yaml:"log_level"`
-	Docker   *fileDocker `yaml:"docker"`
-	Limits   *fileLimits `yaml:"limits"`
-	Auth     *fileAuth   `yaml:"auth"`
+	Addr     *string      `yaml:"addr"`
+	DataDir  *string      `yaml:"data_dir"`
+	Backend  *string      `yaml:"backend"`
+	LogLevel *string      `yaml:"log_level"`
+	Docker   *fileDocker  `yaml:"docker"`
+	Limits   *fileLimits  `yaml:"limits"`
+	Auth     *fileAuth    `yaml:"auth"`
+	Network  *fileNetwork `yaml:"network"`
 }
 
 type fileDocker struct {
@@ -125,6 +160,7 @@ type fileDocker struct {
 	SandboxUID     *int    `yaml:"sandbox_uid"`
 	SandboxGID     *int    `yaml:"sandbox_gid"`
 	AgentBin       *string `yaml:"agent_bin"`
+	SandboxRoot    *bool   `yaml:"sandbox_root"`
 }
 
 type fileLimits struct {
@@ -150,6 +186,23 @@ type fileLimits struct {
 
 type fileAuth struct {
 	BootstrapKey *string `yaml:"bootstrap_key"`
+}
+
+type fileNetwork struct {
+	DefaultMode         *string  `yaml:"default_mode"`
+	BlockPrivate        *bool    `yaml:"block_private"`
+	BlockMetadata       *bool    `yaml:"block_metadata"`
+	PrivateAllow        []string `yaml:"private_allow"`
+	DNS                 []string `yaml:"dns"`
+	IPv6                *string  `yaml:"ipv6"`
+	EgressAllow         []string `yaml:"egress_allow"`
+	EgressDeny          []string `yaml:"egress_deny"`
+	DefaultEgressKbps   *int     `yaml:"default_egress_kbps"`
+	DefaultMaxConns     *int     `yaml:"default_max_connections"`
+	PreviewDomain       *string  `yaml:"preview_domain"`
+	PublicURL           *string  `yaml:"public_url"`
+	AllowPublicPreviews *bool    `yaml:"allow_public_previews"`
+	PreviewMaxStreams   *int     `yaml:"preview_max_streams"`
 }
 
 // Load resolves configuration. An empty path skips the file. Environment
@@ -186,6 +239,7 @@ func (f fileConfig) apply(cfg *Config) {
 		setInt(&cfg.Docker.SandboxUID, d.SandboxUID)
 		setInt(&cfg.Docker.SandboxGID, d.SandboxGID)
 		setString(&cfg.Docker.AgentBin, d.AgentBin)
+		setBool(&cfg.Docker.SandboxRoot, d.SandboxRoot)
 	}
 	if l := f.Limits; l != nil {
 		setInt(&cfg.Limits.DefaultTTLSeconds, l.DefaultTTLSeconds)
@@ -210,6 +264,30 @@ func (f fileConfig) apply(cfg *Config) {
 	if a := f.Auth; a != nil {
 		setString(&cfg.Auth.BootstrapKey, a.BootstrapKey)
 	}
+	if n := f.Network; n != nil {
+		setString(&cfg.Network.DefaultMode, n.DefaultMode)
+		setBool(&cfg.Network.BlockPrivate, n.BlockPrivate)
+		setBool(&cfg.Network.BlockMetadata, n.BlockMetadata)
+		if n.PrivateAllow != nil {
+			cfg.Network.PrivateAllow = n.PrivateAllow
+		}
+		if n.DNS != nil {
+			cfg.Network.DNS = n.DNS
+		}
+		setString(&cfg.Network.IPv6, n.IPv6)
+		if n.EgressAllow != nil {
+			cfg.Network.EgressAllow = n.EgressAllow
+		}
+		if n.EgressDeny != nil {
+			cfg.Network.EgressDeny = n.EgressDeny
+		}
+		setInt(&cfg.Network.DefaultEgressKbps, n.DefaultEgressKbps)
+		setInt(&cfg.Network.DefaultMaxConns, n.DefaultMaxConns)
+		setString(&cfg.Network.PreviewDomain, n.PreviewDomain)
+		setString(&cfg.Network.PublicURL, n.PublicURL)
+		setBool(&cfg.Network.AllowPublicPreviews, n.AllowPublicPreviews)
+		setInt(&cfg.Network.PreviewMaxStreams, n.PreviewMaxStreams)
+	}
 }
 
 func applyEnv(cfg *Config) {
@@ -223,12 +301,27 @@ func applyEnv(cfg *Config) {
 	envInt(&cfg.Docker.SandboxUID, "SBX_SANDBOX_UID")
 	envInt(&cfg.Docker.SandboxGID, "SBX_SANDBOX_GID")
 	envString(&cfg.Docker.AgentBin, "SBX_AGENT_BIN")
+	envBool(&cfg.Docker.SandboxRoot, "SBX_SANDBOX_ROOT")
 	envString(&cfg.Auth.BootstrapKey, "SBX_BOOTSTRAP_KEY")
 	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxSandboxesPerKey, "SBX_MAX_SANDBOXES_PER_KEY")
 	envInt(&cfg.Limits.DefaultMemoryMB, "SBX_DEFAULT_MEMORY_MB")
 	envInt(&cfg.Limits.MaxUploadBytes, "SBX_MAX_UPLOAD_BYTES")
+	envString(&cfg.Network.DefaultMode, "SBX_NETWORK_MODE")
+	envBool(&cfg.Network.BlockPrivate, "SBX_BLOCK_PRIVATE")
+	envBool(&cfg.Network.BlockMetadata, "SBX_BLOCK_METADATA")
+	envCSV(&cfg.Network.PrivateAllow, "SBX_PRIVATE_ALLOW")
+	envCSV(&cfg.Network.DNS, "SBX_DNS")
+	envString(&cfg.Network.IPv6, "SBX_IPV6")
+	envCSV(&cfg.Network.EgressAllow, "SBX_EGRESS_ALLOW")
+	envCSV(&cfg.Network.EgressDeny, "SBX_EGRESS_DENY")
+	envInt(&cfg.Network.DefaultEgressKbps, "SBX_DEFAULT_EGRESS_KBPS")
+	envInt(&cfg.Network.DefaultMaxConns, "SBX_DEFAULT_MAX_CONNECTIONS")
+	envString(&cfg.Network.PreviewDomain, "SBX_PREVIEW_DOMAIN")
+	envString(&cfg.Network.PublicURL, "SBX_PUBLIC_URL")
+	envBool(&cfg.Network.AllowPublicPreviews, "SBX_ALLOW_PUBLIC_PREVIEWS")
+	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
 }
 
 // Validate checks the resolved configuration.
@@ -279,7 +372,77 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("log_level must be debug, info, warn, or error")
 	}
+	switch c.Network.DefaultMode {
+	case "none", "full", "allow":
+	default:
+		return fmt.Errorf("network.default_mode must be none, full, or allow")
+	}
+	switch c.Network.IPv6 {
+	case "auto", "on", "off":
+	default:
+		return fmt.Errorf("network.ipv6 must be auto, on, or off")
+	}
+	if c.Network.DefaultMode == "allow" && len(c.Network.EgressAllow) == 0 {
+		return fmt.Errorf("network.default_mode allow requires network.egress_allow")
+	}
+	if c.Network.DefaultEgressKbps < 0 || c.Network.DefaultMaxConns < 0 {
+		return fmt.Errorf("network limits must be >= 0")
+	}
+	if c.Network.PreviewMaxStreams < 1 {
+		return fmt.Errorf("preview_max_streams must be >= 1")
+	}
+	if err := validateRules("dns", c.Network.DNS, true); err != nil {
+		return err
+	}
+	if err := validateRules("private_allow", c.Network.PrivateAllow, true); err != nil {
+		return err
+	}
+	if err := validateRules("egress_allow", c.Network.EgressAllow, false); err != nil {
+		return err
+	}
+	if err := validateRules("egress_deny", c.Network.EgressDeny, false); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateRules(name string, items []string, cidrOnly bool) error {
+	for _, item := range items {
+		if cidrOnly {
+			if _, err := parseIPOrPrefix(item); err != nil {
+				return fmt.Errorf("%s: %s", name, err.Error())
+			}
+			continue
+		}
+		if _, err := parseRule(item); err != nil {
+			return fmt.Errorf("%s: %s", name, err.Error())
+		}
+	}
+	return nil
+}
+
+func parseIPOrPrefix(item string) (string, error) {
+	if _, err := netip.ParseAddr(item); err == nil {
+		return item, nil
+	}
+	if _, err := netip.ParsePrefix(item); err == nil {
+		return item, nil
+	}
+	return "", fmt.Errorf("%q must be an IP or CIDR", item)
+}
+
+func parseRule(item string) (string, error) {
+	if _, err := parseIPOrPrefix(item); err == nil {
+		return item, nil
+	}
+	if strings.HasPrefix(item, "*.") {
+		return "", fmt.Errorf("%q is a wildcard; the packet filter needs each hostname", item)
+	}
+	name := item
+	if name == "" || strings.ContainsAny(name, " /\\") || strings.Contains(name, "://") {
+		return "", fmt.Errorf("%q must be a domain, IP, or CIDR", item)
+	}
+	return item, nil
 }
 
 func setString(dst *string, src *string) {
@@ -322,6 +485,22 @@ func envInt(dst *int, key string) {
 		return
 	}
 	*dst = n
+}
+
+func envCSV(dst *[]string, key string) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	*dst = out
 }
 
 func envBool(dst *bool, key string) {

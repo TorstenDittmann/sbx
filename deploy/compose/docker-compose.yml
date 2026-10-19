@@ -8,6 +8,11 @@ services:
     environment:
       SBX_ADDR: ":8080"
       SBX_DATA_DIR: /data
+      # Hansi-style agents: SBX_NETWORK_MODE=full
+      # SBX_PREVIEW_DOMAIN: sbx.example.com
+      # SBX_PUBLIC_URL: https://api.example.com
+      # SBX_SANDBOX_ROOT: "true"
+      # SBX_READ_ONLY_ROOTFS: "false"
     volumes:
       - ../../data:/data
       # The socket is how sbx creates sandboxes. network=full also uses it to

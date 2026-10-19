@@ -43,6 +43,8 @@ type hostConfig struct {
 	LogConfig      logConfig         `json:"LogConfig"`
 	IpcMode        string            `json:"IpcMode"`
 	Binds          []string          `json:"Binds,omitempty"`
+	Dns            []string          `json:"Dns,omitempty"`
+	DnsOptions     []string          `json:"DnsOptions,omitempty"`
 }
 
 type logConfig struct {
@@ -106,8 +108,13 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		tmp = disk
 	}
 	network := "none"
+	var dns, dnsOpt []string
 	if spec.Network == driver.NetFull {
 		network = sandboxNetwork
+		if len(spec.Policy.DNS) > 0 {
+			dns = append([]string{}, spec.Policy.DNS...)
+			dnsOpt = []string{"timeout:2", "attempts:3", "rotate"}
+		}
 	}
 	return createRequest{
 		Image:      spec.Image,
@@ -120,7 +127,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		HostConfig: hostConfig{
 			NetworkMode:    network,
 			CapDrop:        []string{"ALL"},
-			CapAdd:         []string{},
+			CapAdd:         rootCaps(opt),
 			SecurityOpt:    []string{"no-new-privileges:true"},
 			ReadonlyRootfs: opt.ReadOnlyRootfs,
 			Privileged:     false,
@@ -134,11 +141,23 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 				"/workspace": fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=755", disk, opt.UID, opt.GID),
 				"/tmp":       fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=1777", tmp, opt.UID, opt.GID),
 			},
-			LogConfig: logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
-			IpcMode:   "private",
-			Binds:     binds,
+			LogConfig:  logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
+			IpcMode:    "private",
+			Binds:      binds,
+			Dns:        dns,
+			DnsOptions: dnsOpt,
 		},
 	}
+}
+
+// rootCaps is empty for the default uid 1000 sandbox. sandbox_root keeps the
+// capabilities apt and apk need to change user while installing packages.
+// Everything else stays dropped, and no-new-privileges still applies.
+func rootCaps(opt Options) []string {
+	if opt.UID != 0 {
+		return []string{}
+	}
+	return []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
 }
 
 func envSlice(env map[string]string) []string {

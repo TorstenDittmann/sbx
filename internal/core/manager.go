@@ -39,6 +39,11 @@ type CreateInput struct {
 	Env                map[string]string
 	Network            string
 	Allow              []string
+	Deny               []string
+	HasAllow           bool
+	HasDeny            bool
+	EgressKbps         *int
+	MaxConns           *int
 	Backend            string
 	Labels             map[string]string
 }
@@ -84,6 +89,8 @@ type Manager struct {
 	now      func() time.Time
 	mu       sync.Mutex
 	previews map[string]Preview
+	streams  map[string]int
+	budgets  map[string]*byteBudget
 	Counts   Counters
 }
 
@@ -140,7 +147,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if !ok {
 		return store.Sandbox{}, invalid("unknown backend " + backend)
 	}
-	network, err := normalizeNet(in.Network, in.Allow)
+	mode, network, policy, err := m.effectiveNet(ctx, actor, in)
 	if err != nil {
 		return store.Sandbox{}, err
 	}
@@ -194,7 +201,8 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	now := m.now()
 	sb := store.Sandbox{
 		ID: id.Sandbox(), Template: in.Template, Image: image, Backend: backend, Status: "creating",
-		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: env, Network: string(network),
+		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: env, Network: mode,
+		Allow: policy.Allow, Deny: policy.Deny, EgressKbps: policy.EgressKbps, MaxConns: policy.MaxConns,
 		Labels: nonNil(in.Labels), OwnerKeyID: actor.KeyID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second),
 		IdleTimeoutSeconds: idle, LastActivityAt: now,
 	}
@@ -217,7 +225,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 
 	handle, err := d.Create(ctx, driver.SandboxSpec{
 		ID: sb.ID, Image: image, CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids,
-		Env: env, Network: network, Labels: sb.Labels, Workdir: "/workspace",
+		Env: env, Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
 	})
 	if err != nil {
 		sb.Status = "error"
@@ -678,8 +686,9 @@ func (m *Manager) reapOrphans(ctx context.Context) {
 	}
 }
 
-// RunReaper sweeps until ctx is canceled.
+// RunReaper sweeps until ctx is canceled. It also refreshes domain egress rules.
 func (m *Manager) RunReaper(ctx context.Context) {
+	m.RestoreNetworks(ctx)
 	interval := time.Duration(m.cfg.Limits.ReaperIntervalSeconds) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -688,10 +697,66 @@ func (m *Manager) RunReaper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			m.RefreshNetworks(ctx)
 			if _, err := m.Sweep(ctx); err != nil {
 				m.log.Error("sweep failed", "err", err)
 			}
 		}
+	}
+}
+
+// RestoreNetworks reinstalls egress rules for sandboxes that survived a restart.
+func (m *Manager) RestoreNetworks(ctx context.Context) {
+	rows, err := m.store.ListSandboxes(ctx, store.SandboxFilter{})
+	if err != nil {
+		m.log.Warn("network restore failed", "err", err)
+		return
+	}
+	for _, sb := range rows {
+		if sb.Status != "running" && sb.Status != "paused" {
+			continue
+		}
+		if sb.Network != "full" && sb.Network != "allow" {
+			continue
+		}
+		m.applyStoredPolicy(ctx, sb)
+	}
+}
+
+// RefreshNetworks re-resolves domains for policies this process installed.
+func (m *Manager) RefreshNetworks(ctx context.Context) {
+	for name, d := range m.drivers {
+		ref, ok := d.(driver.NetEnforcer)
+		if !ok {
+			continue
+		}
+		if err := ref.RefreshNetPolicies(ctx); err != nil {
+			m.log.Warn("network refresh failed", "backend", name, "err", err)
+		}
+	}
+}
+
+func (m *Manager) applyStoredPolicy(ctx context.Context, sb store.Sandbox) {
+	d, ok := m.drivers[sb.Backend]
+	if !ok || sb.ContainerID == "" {
+		return
+	}
+	ref, ok := d.(driver.NetEnforcer)
+	if !ok {
+		return
+	}
+	spec := driver.SandboxSpec{
+		ID: sb.ID, Network: driver.NetFull,
+		Policy: driver.NetPolicy{
+			Allow: sb.Allow, Deny: sb.Deny,
+			BlockPrivate: m.cfg.Network.BlockPrivate, BlockMetadata: m.cfg.Network.BlockMetadata,
+			PrivateAllow: append([]string{}, m.cfg.Network.PrivateAllow...),
+			DNS:          append([]string{}, m.cfg.Network.DNS...),
+			EgressKbps:   sb.EgressKbps, MaxConns: sb.MaxConns,
+		},
+	}
+	if err := ref.ApplyNetPolicy(ctx, sb.ContainerID, spec); err != nil {
+		m.log.Warn("network restore failed", "id", sb.ID, "err", err)
 	}
 }
 
@@ -822,20 +887,6 @@ func (m *Manager) asDriver(err error) error {
 		return notFound("sandbox container is gone")
 	}
 	return wrap(502, "driver", err.Error())
-}
-
-func normalizeNet(mode string, allow []string) (driver.NetMode, error) {
-	if len(allow) > 0 || mode == "egress" {
-		return "", unsupported("egress allow-lists are not in v0.1; use network.mode none or full")
-	}
-	switch mode {
-	case "", "none":
-		return driver.NetNone, nil
-	case "full":
-		return driver.NetFull, nil
-	default:
-		return "", invalid("network.mode must be none or full")
-	}
 }
 
 func pickFloat(v *float64, fallback float64) float64 {
