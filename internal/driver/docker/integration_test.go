@@ -314,18 +314,9 @@ func TestIntegrationAgent(t *testing.T) {
 	_ = d.SignalProcess(ctx, h.ID, term.ID, "KILL")
 	termCancel()
 
-	httpd, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "command -v httpd"}, TimeoutSeconds: 10})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if httpd.ExitCode != 0 {
-		t.Fatalf("alpine image has no httpd: %s", httpd.Stderr)
-	}
-	if err := d.WriteFile(ctx, h.ID, "/workspace/index.html", []byte("hello-preview"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	// Alpine's busybox has nc and not httpd. One listener answers a single GET.
 	_, err = d.StartProcess(ctx, h.ID, driver.ExecRequest{
-		Cmd:            []string{"httpd", "-f", "-p", "127.0.0.1:18080", "-h", "/workspace"},
+		Cmd:            []string{"sh", "-c", `printf 'HTTP/1.0 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nhello-preview' | nc -l -p 18080`},
 		TimeoutSeconds: 0,
 	}, false, 0, 0)
 	if err != nil {
