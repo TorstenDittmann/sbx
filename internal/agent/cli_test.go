@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/TorstenDittmann/sbx/internal/version"
 )
 
 func TestRunUsageAndRejects(t *testing.T) {
@@ -30,9 +32,12 @@ func TestRunUsageAndRejects(t *testing.T) {
 	if err := Run([]string{"-h"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := Run([]string{"version"}); err != nil {
+		t.Fatal(err)
+	}
 	w.Close()
 	body, err := io.ReadAll(r)
-	if err != nil || !strings.Contains(string(body), "sbx-agent init") {
+	if err != nil || !strings.Contains(string(body), "sbx-agent init") || !strings.Contains(string(body), "sbx-agent "+version.Version) {
 		t.Fatalf("usage %q %v", body, err)
 	}
 	if err := Run([]string{"nope"}); err == nil || !strings.Contains(err.Error(), "unknown") {

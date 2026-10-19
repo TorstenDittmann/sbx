@@ -1,0 +1,213 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  snapshot:
+    name: snapshot
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: goreleaser
+          driver: docker-container
+          use: true
+      - name: sbx-agent availability
+        id: agent
+        run: |
+          if [ -f cmd/sbx-agent/main.go ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "cmd/sbx-agent is not in this commit; snapshot builds sbx only."
+          fi
+      - name: GoReleaser snapshot
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --snapshot --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SBX_SKIP_AGENT: ${{ steps.agent.outputs.skip }}
+      - name: Check archives and image
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          arts = json.load(open("dist/artifacts.json"))
+          for art in arts:
+              print(f"{art.get('type')}\t{art.get('name')}")
+          PY
+          test -f dist/checksums.txt
+          for arch in amd64 arm64; do
+            for os in linux darwin; do
+              archive=$(echo dist/sbx_*_"${os}"_"${arch}".tar.gz)
+              test -f "$archive"
+              tar -tzf "$archive" | grep -qx sbx
+              grep -q "  $(basename "$archive")$" dist/checksums.txt
+            done
+          done
+          bin=$(find dist -type f -name sbx -path '*linux_amd64*' | head -n 1)
+          test -n "$bin"
+          if ldd "$bin" >/tmp/ldd.out 2>&1; then
+            echo "linux/amd64 sbx is dynamically linked" >&2
+            cat /tmp/ldd.out >&2
+            exit 1
+          fi
+          grep -q "not a dynamic executable" /tmp/ldd.out
+          version_out=$("$bin" version)
+          printf '%s\n' "$version_out"
+          printf '%s\n' "$version_out" | grep -q snapshot
+          printf '%s\n' "$version_out" | grep -q '^commit '
+          printf '%s\n' "$version_out" | grep -q '^built '
+          if [ -f cmd/sbx-agent/main.go ]; then
+            agent=$(find dist -type f -name sbx-agent -path '*linux_amd64*' | head -n 1)
+            test -n "$agent"
+            if ldd "$agent" >/tmp/ldd-agent.out 2>&1; then
+              echo "linux/amd64 sbx-agent is dynamically linked" >&2
+              cat /tmp/ldd-agent.out >&2
+              exit 1
+            fi
+            test -f dist/sbx-agent_*_linux_amd64.tar.gz
+            test -f dist/sbx-agent_*_linux_arm64.tar.gz
+          else
+            if find dist -type f -name 'sbx-agent_*' | grep -q .; then
+              echo "snapshot produced sbx-agent archives without cmd/sbx-agent" >&2
+              exit 1
+            fi
+          fi
+          echo "images:"
+          docker images 'ghcr.io/torstendittmann/sbx'
+          amd=$(docker images 'ghcr.io/torstendittmann/sbx' --format '{{.Repository}}:{{.Tag}}' | grep -- '-amd64$' | head -n 1)
+          arm=$(docker images 'ghcr.io/torstendittmann/sbx' --format '{{.Repository}}:{{.Tag}}' | grep -- '-arm64$' | head -n 1)
+          test -n "$amd"
+          test -n "$arm"
+          docker run --rm --platform linux/amd64 --entrypoint /usr/local/bin/sbx "$amd" version
+          docker run --rm --platform linux/arm64 --entrypoint /usr/local/bin/sbx "$arm" version
+          if [ -f cmd/sbx-agent/main.go ]; then
+            docker run --rm --platform linux/amd64 --entrypoint /bin/sh "$amd" -c 'test -x /usr/local/bin/sbx-agent && test -s /usr/local/bin/sbx-agent'
+            docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$arm" -c 'test -x /usr/local/bin/sbx-agent && test -s /usr/local/bin/sbx-agent'
+          else
+            docker run --rm --platform linux/amd64 --entrypoint /bin/sh "$amd" -c 'test ! -e /usr/local/bin/sbx-agent'
+          fi
+
+  release:
+    name: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require a semver tag and sbx-agent
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Tag is not semver::${GITHUB_REF_NAME} must look like v0.2.0 or v0.2.0-rc.1"
+            exit 1
+          fi
+          if [ ! -f cmd/sbx-agent/main.go ]; then
+            echo "::error title=sbx-agent is not in this commit::Merge the sbx-agent pull request before tagging. A release image has to contain the agent so sandbox injection works."
+            exit 1
+          fi
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/amd64,linux/arm64
+      - uses: docker/setup-buildx-action@v3
+        with:
+          name: goreleaser
+          driver: docker-container
+          use: true
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: v2.18.3
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SBX_SKIP_AGENT: "false"
+      - name: Pull the published image
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          docker pull "ghcr.io/torstendittmann/sbx:${version}"
+          docker pull "ghcr.io/torstendittmann/sbx:v${version}"
+          docker run --rm "ghcr.io/torstendittmann/sbx:${version}" version
+          docker run --rm --entrypoint /bin/sh "ghcr.io/torstendittmann/sbx:${version}" -c 'test -x /usr/local/bin/sbx-agent && test -s /usr/local/bin/sbx-agent'
+          if ! printf '%s\n' "$version" | grep -q '-'; then
+            docker pull ghcr.io/torstendittmann/sbx:latest
+          fi
+
+  npm:
+    name: npm
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Publish @sbx.torsten.work/sbx
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error title=NPM_TOKEN is not set::Add an npm automation token as the repository secret NPM_TOKEN. The token must be allowed to publish @sbx.torsten.work/sbx. The package was not published, and this job fails on purpose."
+            exit 1
+          fi
+          version="${GITHUB_REF_NAME#v}"
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Tag is not semver::${GITHUB_REF_NAME} must look like v0.2.0 or v0.2.0-rc.1"
+            exit 1
+          fi
+          cd sdk/typescript
+          npm ci
+          npm version "$version" --no-git-tag-version --allow-same-version
+          npm whoami
+          if printf '%s\n' "$version" | grep -q '-'; then
+            npm publish --access public --provenance --tag next
+          else
+            npm publish --access public --provenance
+          fi
