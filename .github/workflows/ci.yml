@@ -65,11 +65,12 @@ jobs:
       - name: build sdk package
         run: npm ci --prefix sdk/typescript
       - name: sdk package contents
+        working-directory: sdk/typescript
         run: |
-          npm pack --dry-run --prefix sdk/typescript | tee /tmp/sbx-pack.txt
+          npm pack --dry-run > /tmp/sbx-pack.txt 2>&1
           grep -q 'dist/index.js' /tmp/sbx-pack.txt
           grep -q 'dist/index.d.ts' /tmp/sbx-pack.txt
-          if grep -R '\.ts"' sdk/typescript/dist; then
+          if grep -R '\.ts"' dist; then
             echo "published ESM still imports .ts files" >&2
             exit 1
           fi
