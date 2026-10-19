@@ -31,7 +31,14 @@ func TestIntegrationBoot(t *testing.T) {
 	if agentBin == "" || !probe.File(agentBin) {
 		t.Fatal("SBX_AGENT_BIN must point at a static sbx-agent")
 	}
-	dir := t.TempDir()
+	// Firecracker's API socket must stay under the Unix path limit. The
+	// default test temp dir on a GitHub runner is long enough to trip it.
+	dir := "/tmp/sbx-fc-it"
+	_ = os.RemoveAll(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	if _, err := setup.Firecracker(ctx, setup.Options{DataDir: dir, Apply: true}); err != nil {
@@ -45,22 +52,33 @@ func TestIntegrationBoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const id = "sbx_fcintegration01"
 	start := time.Now()
 	h, err := d.Create(ctx, driver.SandboxSpec{
-		ID: "sbx_fcintegration01", Image: "alpine:3.20", CPU: 1, MemoryMB: 128, DiskMB: 256, PIDs: 64,
+		ID: id, Image: "alpine:3.20", CPU: 1, MemoryMB: 128, DiskMB: 256, PIDs: 64,
 		Network: driver.NetNone,
 	})
 	if err != nil {
+		t.Log(consoleLog(dir, id))
 		t.Fatal(err)
 	}
 	t.Logf("startup_ms %d", time.Since(start).Milliseconds())
 	defer d.Delete(context.Background(), h.ID)
 	res, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"echo", "firecracker"}})
 	if err != nil || res.ExitCode != 0 {
+		t.Log(consoleLog(dir, id))
 		t.Fatalf("%+v %v", res, err)
 	}
-	t.Logf("exec_ms %d", time.Since(start).Milliseconds())
+	t.Logf("exec_ms %d stdout %q", time.Since(start).Milliseconds(), res.Stdout)
 	if probe.File(filepath.Join(dir, "firecracker", "vmlinux")) == false {
 		t.Fatal("kernel missing")
 	}
+}
+
+func consoleLog(dir, id string) string {
+	raw, err := os.ReadFile(filepath.Join(dir, "firecracker", "vms", id, "console.log"))
+	if err != nil {
+		return "console: " + err.Error()
+	}
+	return "console:\n" + string(raw)
 }

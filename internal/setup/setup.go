@@ -393,12 +393,24 @@ func untarBinaries(archive []byte) (map[string][]byte, error) {
 }
 
 func pickBinary(bins map[string][]byte, kind string) ([]byte, bool) {
+	prefix := kind + "-"
 	for name, body := range bins {
-		if strings.Contains(name, kind) && !strings.Contains(name, ".txt") {
-			return body, true
+		if !strings.HasPrefix(name, prefix) || skippedBinary(name) {
+			continue
 		}
+		return body, true
 	}
 	return nil, false
+}
+
+func skippedBinary(name string) bool {
+	lower := strings.ToLower(name)
+	for _, suffix := range []string{".debug", ".yaml", ".yml", ".json", ".txt", ".md"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 func writeExec(path string, body []byte) error {

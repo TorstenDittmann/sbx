@@ -17,12 +17,15 @@ type apiClient struct {
 }
 
 func newAPI(sock string) *apiClient {
-	return &apiClient{http: &http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", sock)
+	return &apiClient{http: &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", sock)
+			},
 		},
-	}}}
+	}}
 }
 
 func (c *apiClient) put(ctx context.Context, path string, body any) error {

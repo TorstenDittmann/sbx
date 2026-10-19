@@ -42,7 +42,11 @@ func spawnFirecracker(spec SpawnSpec) (Process, error) {
 		if spec.Bin == "" {
 			return nil, fmt.Errorf("firecracker binary is required")
 		}
-		cmd = exec.Command(spec.Bin, "--api-sock", spec.APISocket)
+		args := []string{"--api-sock", spec.APISocket}
+		if spec.Log != "" {
+			args = append(args, "--log-path", spec.Log, "--level", "Info")
+		}
+		cmd = exec.Command(spec.Bin, args...)
 	}
 	if spec.Log != "" {
 		f, err := os.OpenFile(spec.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

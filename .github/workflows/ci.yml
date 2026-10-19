@@ -108,12 +108,21 @@ jobs:
           fi
           CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
           chmod 755 /tmp/sbx-agent
+          set +e
           if [ "$(id -u)" -eq 0 ]; then
-            SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v
+            SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v > /tmp/fc-test.log 2>&1
           else
             sudo -E env PATH="$PATH" GOCACHE=/tmp/sbx-go-cache GOMODCACHE=/tmp/sbx-go-mod \
               SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent \
-              go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v
+              go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v > /tmp/fc-test.log 2>&1
+          fi
+          code=$?
+          set -e
+          cat /tmp/fc-test.log
+          if [ "$code" -ne 0 ]; then
+            tail -n 40 /tmp/fc-test.log | sed 's/$/\\n/' | tr -d '\n' | sed 's/^/::error::/'
+            echo
+            exit "$code"
           fi
 
   sdk:
