@@ -51,6 +51,26 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Health"}
+  /readyz:
+    get:
+      security: []
+      operationId: ready
+      summary: Readiness after startup reconciliation
+      description: |
+        Returns 503 until the process has finished adopting or retiring
+        sandboxes from a previous run, and when Docker does not answer.
+        Use `/healthz` for liveness.
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
+        "503":
+          description: Still starting, or Docker is unreachable
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Health"}
   /metrics:
     get:
       security: []
