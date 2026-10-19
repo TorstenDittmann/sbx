@@ -24,6 +24,7 @@ type proc struct {
 	started   time.Time
 	stdin     io.WriteCloser
 	master    *os.File
+	masterMu  sync.Mutex
 	maxOut    int
 	sent      int
 	truncated bool
@@ -147,6 +148,7 @@ func (a *Agent) spawn(spec ExecSpec) (*proc, error) {
 		readers.Wait()
 		err := command.Wait()
 		code := exitCode(err)
+		p.closeMaster()
 		p.finish(code)
 	}()
 	return p, nil
@@ -254,6 +256,7 @@ func (p *proc) writeStdin(b []byte) error {
 	p.mu.Lock()
 	exited := p.exited
 	w := p.stdin
+	tty := p.tty
 	p.mu.Unlock()
 	if exited {
 		return errors.New("process has exited")
@@ -261,8 +264,27 @@ func (p *proc) writeStdin(b []byte) error {
 	if w == nil {
 		return errors.New("process has no stdin")
 	}
+	if tty {
+		p.masterMu.Lock()
+		defer p.masterMu.Unlock()
+		if p.master == nil {
+			return errors.New("process has exited")
+		}
+		_, err := p.master.Write(b)
+		return err
+	}
 	_, err := w.Write(b)
 	return err
+}
+
+func (p *proc) closeMaster() {
+	p.masterMu.Lock()
+	defer p.masterMu.Unlock()
+	if p.master == nil {
+		return
+	}
+	_ = p.master.Close()
+	p.master = nil
 }
 
 func (p *proc) closeStdin() error {
@@ -295,6 +317,8 @@ func (p *proc) signal(name string) error {
 }
 
 func (p *proc) resize(cols, rows int) error {
+	p.masterMu.Lock()
+	defer p.masterMu.Unlock()
 	if !p.tty || p.master == nil {
 		return errors.New("process has no terminal")
 	}

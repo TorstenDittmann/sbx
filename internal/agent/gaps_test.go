@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -235,4 +236,113 @@ func TestStreamConnMetadata(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestWriteFileReportsUncreatablePath(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := c.WriteFile(ctx, filepath.Join(parent, "sub", "a.txt"), []byte("hi"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("write %v", err)
+	}
+}
+
+func TestDialEOFWhenUpstreamCloses(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write([]byte("hello"))
+		_ = conn.Close()
+	}()
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, err := c.Dial(ctx, ln.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	done := make(chan struct{})
+	var body []byte
+	var rerr error
+	go func() {
+		body, rerr = io.ReadAll(conn)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("read blocked after the upstream connection closed")
+	}
+	if rerr != nil || string(body) != "hello" {
+		t.Fatalf("body %q %v", body, rerr)
+	}
+}
+
+func TestPTYMasterClosedAfterExit(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skip("no ptmx")
+	}
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	before := countFDs(t)
+	const n = 6
+	for i := 0; i < n; i++ {
+		info, err := c.Start(ctx, ExecSpec{Cmd: []string{"true"}, TTY: true, Cols: 80, Rows: 24})
+		if err != nil {
+			if os.IsPermission(err) || strings.Contains(err.Error(), "operation not permitted") {
+				t.Skip(err.Error())
+			}
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			list, err := c.List(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			exited := false
+			for _, item := range list {
+				if item.ID == info.ID && item.Status == "exited" {
+					exited = true
+				}
+			}
+			if exited {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("process %s did not exit", info.ID)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if after := countFDs(t); after > before+1 {
+		t.Fatalf("open fds before %d after %d", before, after)
+	}
+}
+
+func countFDs(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
 }

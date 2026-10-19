@@ -426,6 +426,9 @@ func (a *Agent) handleFileWrite(s *Stream, frame Frame) {
 	pr, pw := io.Pipe()
 	errc := make(chan error, 1)
 	go func() {
+		// Closing the reader unblocks pw.Write when the destination cannot
+		// be created and writeAtomic returns before it reads.
+		defer pr.Close()
 		errc <- writeAtomic(p, pr, body.Mode)
 	}()
 	for {
@@ -437,8 +440,13 @@ func (a *Agent) handleFileWrite(s *Stream, frame Frame) {
 		}
 		switch f.Type {
 		case MsgData:
-			if _, err := pw.Write(f.Data); err != nil {
-				a.fail(s, err)
+			if _, werr := pw.Write(f.Data); werr != nil {
+				_ = pw.Close()
+				cause := <-errc
+				if cause == nil {
+					cause = werr
+				}
+				a.fail(s, cause)
 				return
 			}
 		case MsgStdinEOF:
@@ -575,9 +583,7 @@ func (a *Agent) handleDial(s *Stream, frame Frame) {
 	if err := s.Send(MsgOK, []byte(`{}`)); err != nil {
 		return
 	}
-	done := make(chan struct{})
 	go func() {
-		defer close(done)
 		buf := make([]byte, ChunkSize)
 		for {
 			n, err := conn.Read(buf)
@@ -587,6 +593,7 @@ func (a *Agent) handleDial(s *Stream, frame Frame) {
 				}
 			}
 			if err != nil {
+				_ = s.Send(MsgEnd, nil)
 				return
 			}
 		}
