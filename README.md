@@ -4,6 +4,33 @@ sbx is a single-binary sandbox server. Point it at Docker, create a sandbox, run
 
 MIT licensed. Module: `github.com/TorstenDittmann/sbx`.
 
+## Install
+
+A tag `vX.Y.Z` publishes the binaries, the `ghcr.io/torstendittmann/sbx` image, and the npm package. The commands below are that release. Building from source is the quickstart under them.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/TorstenDittmann/sbx/main/install.sh | sh
+sbx version
+```
+
+The script selects linux or darwin and amd64 or arm64, then checks `checksums.txt` from the release. Linux gets `sbx` and `sbx-agent`. macOS gets the darwin `sbx` binary plus the linux `sbx-agent` of the same architecture, because the agent executes inside the sandbox container. `SBX_VERSION=v0.2.0` pins a release. `SBX_INSTALL_DIR` chooses the directory (`/usr/local/bin` when it is writable, otherwise `~/.local/bin`).
+
+```bash
+docker run --rm -p 8080:8080 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v sbx-data:/data \
+  ghcr.io/torstendittmann/sbx:latest
+```
+
+The image listens on port 8080, keeps SQLite in `/data`, and carries `sbx-agent` so injection works without a separate download. Tags are the version (`0.2.0`), the git tag (`v0.2.0`), and `latest` for a final release.
+
+```bash
+npm install @torstendittmann/sbx
+bun add @torstendittmann/sbx
+```
+
+`sbx` on npm is a different project. This client is [`@torstendittmann/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+
 ## Quickstart
 
 Docker must be running, and your user must be able to use `/var/run/docker.sock`.
@@ -40,7 +67,7 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
   -d '{"cmd":["echo","hello"]}'
 ```
 
-The same path from the TypeScript SDK (Node 22, no install step):
+The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@torstendittmann/sbx`; see [Install](#install).
 
 ```bash
 export SBX_URL=http://127.0.0.1:8080
@@ -105,4 +132,4 @@ npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
 ```
 
-Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build.
+Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.

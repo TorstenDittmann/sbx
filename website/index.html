@@ -14,6 +14,7 @@
   <header class="mast">
     <a class="mark" href="#top">sbx</a>
     <nav>
+      <a href="#install">Install</a>
       <a href="#quickstart">Quickstart</a>
       <a href="#ladder">Backends</a>
       <a href="#api">API</a>
@@ -45,6 +46,24 @@
         <h2>A small API</h2>
         <p>Create, exec, files, terminals, and preview URLs over <code>/v1</code>. curl works. The TypeScript SDK works on Node and Bun. OpenAPI is served from the process itself.</p>
       </article>
+    </section>
+
+    <section id="install">
+      <div class="section-head">
+        <h2>Install a release.</h2>
+        <p>A version tag publishes the binary, the container, and the TypeScript package. The source quickstart is still below.</p>
+      </div>
+      <pre class="code"><code>curl -fsSL https://raw.githubusercontent.com/TorstenDittmann/sbx/main/install.sh | sh
+sbx version
+
+docker run --rm -p 8080:8080 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v sbx-data:/data \
+  ghcr.io/torstendittmann/sbx:latest
+
+npm install @torstendittmann/sbx
+bun add @torstendittmann/sbx</code></pre>
+      <p class="aside">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs the darwin server and the linux agent, because the agent runs in the container. The image already contains both and sets <code>SBX_AGENT_BIN</code>. The npm name <code>sbx</code> is a different project; this package is <code>@torstendittmann/sbx</code>.</p>
     </section>
 
     <section id="quickstart">
@@ -102,7 +121,7 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
         <p>Auth is <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees its own sandboxes.</p>
       </div>
       <div class="split">
-        <pre class="code"><code>import { Sandbox } from "@sbx/sdk";
+        <pre class="code"><code>import { Sandbox } from "@torstendittmann/sbx";
 
 const box = await Sandbox.create({
   template: "python",

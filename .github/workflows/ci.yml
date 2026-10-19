@@ -18,6 +18,11 @@ jobs:
         run: go vet ./...
       - name: unit tests
         run: go test -count=1 -race -coverpkg=./... -coverprofile=coverage.out -covermode=atomic ./...
+      - name: install script
+        run: |
+          sh -n install.sh
+          sh install.sh --self-test
+          sh install.sh --print-target | grep -qx 'os=linux'
       - name: coverage
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
