@@ -89,6 +89,21 @@ func TestSweepTTLIdleOrphanAndQuota(t *testing.T) {
 		t.Fatal("orphan should be deleted", err)
 	}
 
+	live, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", TTLSeconds: intPtr(600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fd.Delete(ctx, live.ContainerID); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetSandbox(ctx, live.ID)
+	if err != nil || got.Status != "stopped" || got.Error != "lost" {
+		t.Fatalf("reconcile %+v %v", got, err)
+	}
+
 	cur = cur.Add(2 * time.Minute)
 	if _, err := mgr.Sweep(ctx); err != nil {
 		t.Fatal(err)
@@ -138,6 +153,30 @@ func TestVisibilityAndRejects(t *testing.T) {
 	res, err := mgr.Exec(ctx, owner, sb.ID, ExecInput{Cmd: []string{"echo", "hi"}})
 	if err != nil || string(res.Stdout) != "hi\n" || res.ExitCode != 0 {
 		t.Fatalf("%q %v", res.Stdout, err)
+	}
+}
+
+func TestNetworkModeValidation(t *testing.T) {
+	st := openStore(t)
+	fd := fake.New("docker")
+	mgr := New(config.Default(), st, map[string]driver.Driver{"docker": fd}, discard())
+	actor := coreActor(t, st)
+	ctx := context.Background()
+	if _, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", Network: "allow"}); err == nil {
+		t.Fatal("allow without a list")
+	}
+	if _, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", Network: "allow", HasAllow: true, Allow: []string{"*.example.com"}}); err == nil {
+		t.Fatal("wildcard")
+	}
+	if _, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", Network: "bogus"}); err == nil {
+		t.Fatal("bogus mode")
+	}
+	ok, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", Network: "allow", HasAllow: true, Allow: []string{"example.com"}})
+	if err != nil || ok.Network != "allow" {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20", Network: "full"}); err != nil {
+		t.Fatal(err)
 	}
 }
 

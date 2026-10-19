@@ -40,40 +40,40 @@ Docker, containerd, gVisor, Kata, and Kubernetes are Go-shaped ecosystems. A `CG
  │  driver.Driver                     │
  │    docker (runc)                   │
  │    gvisor (docker + runsc)         │
+ │    kata (docker + kata runtime)    │
+ │    firecracker (microVM + vsock)   │
  └────────────────────────────────────┘
                  │  framed session
-                 │  (docker exec dial today,
-                 │   TCP later)
+                 │  docker exec, or vsock
                  ▼
             sbx-agent inside the sandbox
 ```
 
-Later backends (Kata, Firecracker, Kubernetes) and a controller/node split implement the same driver surface. They are not in v0.1, and there are no stub packages for them.
+Kata and Firecracker implement that driver surface. Kubernetes and a controller/node split do not, and there is no stub package for them.
 
 ### v0.1 decisions
 
 - The command is `sbx serve`. `sbx server` is an alias. `controller` and `node` are not implemented.
-- The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. `kata` is the same driver with the Kata runtime class (`kata` / `io.containerd.kata.v2` by default). If that runtime is missing, or `/dev/kvm` is not writable, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is missing its runtime.
+- The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. `kata` is the same driver with the Kata runtime class (`kata` / `io.containerd.kata.v2` by default). `firecracker` is a direct microVM driver: OCI image to ext4, `sbx-agent` as init over vsock, tap networking. If a runtime, kernel, or `/dev/kvm` is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is missing its runtime.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
 - v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, archives, and previews then go through one framed session. See [AGENT.md](AGENT.md). With no binary configured, exec and files stay on the engine API, archives still call `tar`, and the new routes return `unsupported`.
-- The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real. A named volume mounted at `/workspace` replaces that tmpfs. `disk_mb` then does not apply to the persisted workspace. Paths under `/workspace/` are rejected. Other absolute paths (for example `/cache`) are extra mounts. At most eight mounts. `/`, `/tmp`, `/opt`, `/opt/sbx`, `/proc`, `/sys`, `/dev`, and `/etc` are reserved.
-- Volumes are Docker volumes named by sbx (`sbx-` plus the volume id). A fresh volume is chowned to the sandbox uid (1000 when the server is configured as root) without walking existing files, so a project stays owned by the same uid across sandboxes. The caller never chooses a host path.
-- `network: none` is the default. `full` and `allow` join a dedicated bridge. Metadata and private ranges stay blocked unless the operator opts out. Allow and deny lists, bandwidth, and connection limits are in [NETWORK.md](NETWORK.md).
+- The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real. A named volume mounted at `/workspace` replaces that tmpfs. `disk_mb` then does not apply to the persisted workspace. Paths under `/workspace/` are rejected. Other absolute paths (for example `/cache`) are extra mounts. At most eight mounts. `/`, `/tmp`, `/opt`, `/opt/sbx`, `/proc`, `/sys`, `/dev`, and `/etc` are reserved. Volumes are Docker volumes named by sbx (`sbx-` plus the volume id). A fresh volume is chowned to the sandbox uid (1000 when the server is configured as root) without walking existing files, so a project stays owned by the same uid across sandboxes. The caller never chooses a host path. Firecracker sizes an ext4 rootfs to `disk_mb` mebibytes instead of a tmpfs, and does not attach Docker volumes.
+- `network: none` is the default. `full` and `allow` join a dedicated bridge on Docker, gVisor, and Kata, or a per-VM tap on Firecracker. Metadata and private ranges stay blocked unless the operator opts out. Allow and deny lists and connection limits apply on every backend. Firecracker does not enforce bandwidth, and the guest NIC has no IPv6. See [NETWORK.md](NETWORK.md).
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
 - The landing page is the static site in `website/`, deployed with Dokploy. See [website.md](website.md). There is no GitHub Pages workflow.
 
 ### Driver interface
 
-`internal/driver.Driver` is the extension point: ping, ensure image, create, delete, inspect, list, pause, resume, exec, exec stream, and file list/read/write/remove. `driver.Guest` is the optional agent surface (stat, mkdir, watch, processes, PTY, dial). Docker implements it when `sbx-agent` is configured.
+`internal/driver.Driver` is the extension point: ping, ensure image, create, delete, inspect, list, pause, resume, exec, exec stream, and file list/read/write/remove. `driver.Guest` is the optional agent surface (stat, mkdir, watch, processes, PTY, dial). Docker, gVisor, and Kata implement it when `sbx-agent` is configured. Firecracker always does: the agent is the guest init.
 
 ## 4. Backend ladder
 
-| Tier | Driver | Isolation | In v0.1 |
+| Tier | Driver | Isolation | Ships |
 |---|---|---|---|
 | 0 | `docker` | Namespaces, cgroups, seccomp. Shared kernel | Yes. Default |
 | 1 | `gvisor` | runsc, no KVM | Yes, when `runsc` is registered |
 | 2 | `kata` | Lightweight VM via Docker runtime class `io.containerd.kata.v2` | Yes, when the runtime is registered and `/dev/kvm` is writable |
-| 3 | `firecracker` | MicroVM | No |
+| 3 | `firecracker` | MicroVM, guest kernel, sbx-agent over vsock | Yes, when `/dev/kvm` is writable and `sbx setup firecracker --apply` has installed the binary and kernel |
 | — | `kubernetes` | Whatever RuntimeClass the cluster has | No |
 
 gVisor has syscall-compat gaps. That tradeoff is why it stays optional.
@@ -121,11 +121,11 @@ GET    /v1/keys                           admin
 GET    /  /healthz  /metrics  /openapi.yaml
 ```
 
-Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker`, `gvisor`, or `kata`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. A template may pin `backend`. Create uses the request backend, then the template backend, then the server default. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
+Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker`, `gvisor`, `kata`, or `firecracker`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. A template may pin `backend`. Create uses the request backend, then the template backend, then the server default. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
 
 A user template may set `warm` (0–8), `setup` (an argv run once before the sandbox is offered), `setup_timeout_seconds`, and `network`. The reaper keeps that many sandboxes in status `warm`, owned by `sbx-system`, so they do not use a key's quota and they are not expired by TTL. Create claims the oldest match when the request does not override image, cpu, memory, disk, pids, backend, network, env, secrets, or mounts. Otherwise sbx starts a new sandbox and runs `setup` then. Startup and the reaper refill the pool. `GET /v1/sandboxes` hides `warm` unless the caller is an admin and asks for `status=warm`.
 
-`GET /v1/backends` lists the ladder (`docker`, `gvisor`, `kata`, `firecracker`) with `available` and the features that driver implements. Kata is available when Docker has the runtime class and `/dev/kvm` is writable. Firecracker is reported as not enabled until that driver is configured. `sbx doctor` checks KVM, the Kata shim, and a Firecracker kernel under the data directory. `sbx setup gvisor|kata|firecracker` prints the install plan; `--apply` downloads pinned assets and, for the container runtimes, merges a Docker `runtimes` entry without restarting the daemon.
+`GET /v1/backends` lists the ladder (`docker`, `gvisor`, `kata`, `firecracker`) with `available` and the features that driver implements. Kata is available when Docker has the runtime class and `/dev/kvm` is writable. Firecracker is available when `/dev/kvm` is writable, the pinned binary and `vmlinux` are installed, and `sbx-agent` is present. `sbx doctor` checks KVM, the Kata shim, and the Firecracker binary and kernel. `sbx setup gvisor|kata|firecracker` prints the install plan; `--apply` downloads pinned assets and, for the container runtimes, merges a Docker `runtimes` entry without restarting the daemon.
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
 
@@ -146,7 +146,7 @@ api/openapi.yaml         contract, embedded at /openapi.yaml
 internal/api/            HTTP
 internal/core/           lifecycle, reaper, templates
 internal/store/          SQLite
-internal/driver/         interface, docker, fake
+internal/driver/         interface, docker, kata, firecracker, fake
 sdk/typescript/          SDK
 examples/quickstart.ts
 website/                 static site + Dockerfile
@@ -175,7 +175,7 @@ Inside that container the listen address has to be `:8080`. Binding only `127.0.
 
 `sbx doctor` checks the socket and warns when `runsc` is missing. `sbx keys create --name NAME` mints another key. `sbx healthcheck` hits `/healthz`, mapping `:8080` and `0.0.0.0` to `127.0.0.1`.
 
-Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
+Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_KATA_RUNTIME`, `SBX_FIRECRACKER_BIN`, `SBX_FIRECRACKER_KERNEL`, `SBX_FIRECRACKER_JAILER`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
 
 Startup lists containers, adopts ones that still match a sandbox row, marks missing ones stopped with error `lost`, and deletes containers that have no live row. `/readyz` is 503 until that pass finishes. `/healthz` only checks that the process and Docker answer. `max_sandboxes` caps the node. `requests_per_minute` caps each API key. Request bodies larger than `max_upload_bytes` are rejected.
 
@@ -183,7 +183,7 @@ The website is separate. [Deploying the website with Dokploy](website.md#deployi
 
 ## 9. Security baseline
 
-Sandboxes are created with `CapDrop: ["ALL"]`, `no-new-privileges`, a non-root user, memory equal to memory+swap (no swap), a PID limit, private IPC, read-only rootfs, and `network=none` unless `full` is requested. The Docker socket is not mounted into sandboxes. API keys are hashed. TTLs and the per-key sandbox quota are enforced in the server, not left to the caller.
+Docker, gVisor, and Kata sandboxes are created with `CapDrop: ["ALL"]`, `no-new-privileges`, a non-root user, memory equal to memory+swap (no swap), a PID limit, private IPC, read-only rootfs, and `network=none` unless `full` is requested. A Firecracker sandbox is a microVM whose ext4 root is `disk_mb` mebibytes and whose NIC is absent unless `full` or `allow` is requested. The Docker socket is not mounted into sandboxes. API keys are hashed. TTLs and the per-key sandbox quota are enforced in the server, not left to the caller.
 
 `network: full` and `network: allow` are explicit opt-ins to public egress. Sandboxes on those modes join the `sbx` bridge (`sbx0`, `172.30.0.0/16`, ICC off). IPv6 is added on a new bridge when `network.ipv6` is `on` or `auto` and the daemon has IPv6. sbx keeps an `SBX-EGRESS` chain jumped from `DOCKER-USER` and from `INPUT` for packets that arrive on `sbx0`. Per-sandbox chains run first. The baseline chain rejects:
 
@@ -198,11 +198,11 @@ The baseline is installed once per process, before the first networked container
 
 In rough order, none of these are stubbed in the tree:
 
-1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives are packed in the agent when it is configured. Watches use inotify, with a poll fallback when inotify is unavailable.
-2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Metadata and private-range blocking stay on by default.
+1. The in-guest agent shipped in v0.2. Firecracker dials that same framed protocol over a vsock Unix socket; the guest listens because `sbx-agent` is init and reads `/opt/sbx/guest.json`. Kata reaches the agent through Docker exec. Archives are packed in the agent when it is configured. Watches use inotify, with a poll fallback when inotify is unavailable. Snapshot/restore of a Firecracker microVM is not implemented.
+2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Firecracker enforces allow, deny, and connection limits on its tap and does not enforce bandwidth. Metadata and private-range blocking stay on by default.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
-5. Firecracker. Kata is the Docker runtime class described in [kata.md](kata.md).
+5. Firecracker snapshot/restore. The microVM driver itself is described in [firecracker.md](firecracker.md). Kata is the Docker runtime class described in [kata.md](kata.md).
 
 ## 11. Resolved questions
 

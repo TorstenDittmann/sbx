@@ -977,7 +977,9 @@ components:
             none attaches no network. full grants public egress. allow is full
             plus a required allow list. The server default and the API key
             default apply when this is omitted. Metadata and private ranges
-            stay blocked unless the operator opts out.
+            stay blocked unless the operator opts out. Firecracker uses a
+            per-VM tap for full and allow, enforces the IPv4 allow, deny, and
+            block rules, and does not enforce bandwidth.
         allow:
           type: array
           items: {type: string}
@@ -992,7 +994,7 @@ components:
         egress_kbps:
           type: integer
           minimum: 0
-          description: Tightest positive limit wins. 0 inherits or means unlimited.
+          description: Tightest positive limit wins. 0 inherits or means unlimited. Firecracker rejects a positive limit.
         max_connections:
           type: integer
           minimum: 0
@@ -1014,7 +1016,7 @@ components:
         idle_timeout_seconds: {type: integer}
         env: {type: object, additionalProperties: {type: string}}
         network: {$ref: "#/components/schemas/Network"}
-        backend: {type: string, enum: [docker, gvisor, kata]}
+        backend: {type: string, enum: [docker, gvisor, kata, firecracker]}
         labels: {type: object, additionalProperties: {type: string}}
         mounts:
           type: array

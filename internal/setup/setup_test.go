@@ -86,7 +86,13 @@ func TestKataSnippetAndFirecrackerArchive(t *testing.T) {
 	tw := tar.NewWriter(gz)
 	payload := []byte("firecracker-bin")
 	jail := []byte("jailer-bin")
-	for name, body := range map[string][]byte{"firecracker-v1.17.0-x86_64": payload, "jailer-v1.17.0-x86_64": jail} {
+	for name, body := range map[string][]byte{
+		"firecracker-v1.17.0-x86_64":       payload,
+		"firecracker-v1.17.0-x86_64.debug": []byte("debug-elf"),
+		"firecracker_spec-v1.17.0.yaml":    []byte("spec: true\n"),
+		"jailer-v1.17.0-x86_64":            jail,
+		"jailer-v1.17.0-x86_64.debug":      []byte("jailer-debug"),
+	} {
 		hdr := &tar.Header{Name: "release/" + name, Mode: 0o755, Size: int64(len(body))}
 		if err := tw.WriteHeader(hdr); err != nil {
 			t.Fatal(err)

@@ -41,7 +41,7 @@ export type CreateTemplateOptions = {
   memoryMb?: number
   diskMb?: number
   env?: Record<string, string>
-  backend?: "docker" | "gvisor" | "kata"
+  backend?: "docker" | "gvisor" | "kata" | "firecracker"
   network?: "none" | "full"
   setup?: string[]
   setupTimeout?: number | string
@@ -122,7 +122,7 @@ export type CreateSandboxOptions = {
   idleTimeout?: number | string
   env?: Record<string, string>
   network?: NetworkPolicy
-  backend?: "docker" | "gvisor" | "kata"
+  backend?: "docker" | "gvisor" | "kata" | "firecracker"
   labels?: Record<string, string>
   mounts?: VolumeMount[]
   secrets?: Record<string, string>

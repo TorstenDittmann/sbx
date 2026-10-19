@@ -84,6 +84,50 @@ jobs:
           CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
           SBX_KATA_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 20m ./internal/driver/kata/ -run TestIntegrationBoot -v
 
+  firecracker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: firecracker integration
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "no /dev/kvm; skipping Firecracker boot"
+            exit 0
+          fi
+          if [ ! -w /dev/kvm ] && ! sudo -n test -w /dev/kvm; then
+            echo "/dev/kvm is not writable; skipping Firecracker boot"
+            exit 0
+          fi
+          if [ "$(id -u)" -ne 0 ] && ! sudo -n true; then
+            echo "root or passwordless sudo is required to mount the ext4 rootfs; skipping"
+            exit 0
+          fi
+          sudo modprobe kvm 2>/dev/null || true
+          sudo modprobe kvm_intel 2>/dev/null || true
+          sudo modprobe kvm_amd 2>/dev/null || true
+          sudo modprobe vhost_vsock 2>/dev/null || true
+          CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
+          chmod 755 /tmp/sbx-agent
+          set +e
+          if [ "$(id -u)" -eq 0 ]; then
+            SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v > /tmp/fc-test.log 2>&1
+          else
+            sudo -E env PATH="$PATH" GOCACHE=/tmp/sbx-go-cache GOMODCACHE=/tmp/sbx-go-mod \
+              SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent \
+              go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v > /tmp/fc-test.log 2>&1
+          fi
+          code=$?
+          set -e
+          cat /tmp/fc-test.log
+          if [ "$code" -ne 0 ]; then
+            python3 -c 'from pathlib import Path; t=Path("/tmp/fc-test.log").read_text(errors="replace")[-3500:]; t=t.replace("%","%25").replace("\r","").replace("\n"," | "); print("::error::"+t)'
+            exit "$code"
+          fi
+
   sdk:
     runs-on: ubuntu-latest
     steps:
