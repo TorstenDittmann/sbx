@@ -49,15 +49,41 @@ func spawnFirecracker(spec SpawnSpec) (Process, error) {
 		}
 		cmd = exec.Command(spec.Bin, args...)
 	}
+	var logWriter *os.File
 	if spec.Log != "" {
 		f, err := os.OpenFile(spec.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return nil, err
 		}
-		cmd.Stdout = f
-		cmd.Stderr = f
+		logWriter = f
+		pr, pw, err := os.Pipe()
+		if err != nil {
+			_ = f.Close()
+			return nil, err
+		}
+		cmd.Stdout = pw
+		cmd.Stderr = pw
+		go func() {
+			defer f.Close()
+			defer pr.Close()
+			buf := make([]byte, 512)
+			for {
+				n, err := pr.Read(buf)
+				if n > 0 {
+					_, _ = f.Write(buf[:n])
+					_ = f.Sync()
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+		defer pw.Close()
 	}
 	if err := cmd.Start(); err != nil {
+		if logWriter != nil {
+			_ = logWriter.Close()
+		}
 		return nil, err
 	}
 	return &cmdProc{cmd: cmd}, nil

@@ -27,7 +27,7 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/probe"
 )
 
-const bootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/opt/sbx/sbx-agent"
+const bootArgs = "console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootwait init=/opt/sbx/sbx-agent"
 
 var idRE = regexp.MustCompile(`^[A-Za-z0-9_]{4,64}$`)
 

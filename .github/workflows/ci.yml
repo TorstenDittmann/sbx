@@ -124,8 +124,12 @@ jobs:
           set -e
           cat /tmp/fc-test.log
           if [ "$code" -ne 0 ]; then
-            tail -n 40 /tmp/fc-test.log | sed 's/$/\\n/' | tr -d '\n' | sed 's/^/::error::/'
-            echo
+            python3 - << 'PY'
+from pathlib import Path
+text = Path("/tmp/fc-test.log").read_text(errors="replace")[-3500:]
+text = text.replace("%", "%25").replace("\r", "").replace("\n", " | ")
+print("::error::" + text)
+PY
             exit "$code"
           fi
 

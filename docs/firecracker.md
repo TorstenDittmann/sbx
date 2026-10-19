@@ -58,7 +58,7 @@ The kernel command line is `init=/opt/sbx/sbx-agent`. With no arguments, and wit
 Boot args:
 
 ```text
-console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw init=/opt/sbx/sbx-agent
+console=ttyS0 reboot=k panic=1 pci=off root=/dev/vda rw rootwait init=/opt/sbx/sbx-agent
 ```
 
 The rootfs cache is `data/firecracker/cache/<sha256>.ext4`. Each sandbox gets its own copy so the cache stays read-only.
