@@ -124,12 +124,7 @@ jobs:
           set -e
           cat /tmp/fc-test.log
           if [ "$code" -ne 0 ]; then
-            python3 - << 'PY'
-from pathlib import Path
-text = Path("/tmp/fc-test.log").read_text(errors="replace")[-3500:]
-text = text.replace("%", "%25").replace("\r", "").replace("\n", " | ")
-print("::error::" + text)
-PY
+            python3 -c 'from pathlib import Path; t=Path("/tmp/fc-test.log").read_text(errors="replace")[-3500:]; t=t.replace("%","%25").replace("\r","").replace("\n"," | "); print("::error::"+t)'
             exit "$code"
           fi
 
