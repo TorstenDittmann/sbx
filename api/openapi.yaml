@@ -1014,7 +1014,7 @@ components:
         idle_timeout_seconds: {type: integer}
         env: {type: object, additionalProperties: {type: string}}
         network: {$ref: "#/components/schemas/Network"}
-        backend: {type: string, enum: [docker, gvisor]}
+        backend: {type: string, enum: [docker, gvisor, kata]}
         labels: {type: object, additionalProperties: {type: string}}
         mounts:
           type: array
@@ -1049,7 +1049,7 @@ components:
           minLength: 1
           maxLength: 64
           description: Unique per API key. Starts with a letter or digit.
-        backend: {type: string, enum: [docker, gvisor]}
+        backend: {type: string, enum: [docker, gvisor, kata]}
     Volume:
       type: object
       required: [id, name, backend, created_at]

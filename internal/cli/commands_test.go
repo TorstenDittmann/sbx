@@ -77,6 +77,9 @@ func TestDoctor(t *testing.T) {
 	if err := Run([]string{"doctor", "--data-dir", t.TempDir(), "--docker-host", withRunsc, "--backend", "gvisor"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := Run([]string{"doctor", "--data-dir", t.TempDir(), "--docker-host", sock, "--backend", "kata"}); err == nil {
+		t.Fatal("expected kata failure")
+	}
 }
 
 func TestSetupPlans(t *testing.T) {

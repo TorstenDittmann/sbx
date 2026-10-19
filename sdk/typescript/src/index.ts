@@ -41,7 +41,7 @@ export type CreateTemplateOptions = {
   memoryMb?: number
   diskMb?: number
   env?: Record<string, string>
-  backend?: "docker" | "gvisor"
+  backend?: "docker" | "gvisor" | "kata"
   network?: "none" | "full"
   setup?: string[]
   setupTimeout?: number | string
@@ -122,7 +122,7 @@ export type CreateSandboxOptions = {
   idleTimeout?: number | string
   env?: Record<string, string>
   network?: NetworkPolicy
-  backend?: "docker" | "gvisor"
+  backend?: "docker" | "gvisor" | "kata"
   labels?: Record<string, string>
   mounts?: VolumeMount[]
   secrets?: Record<string, string>
@@ -422,7 +422,7 @@ export class SbxClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch
   }
 
-  createVolume(name: string, backend?: "docker" | "gvisor"): Promise<VolumeInfo> {
+  createVolume(name: string, backend?: "docker" | "gvisor" | "kata"): Promise<VolumeInfo> {
     const body: { name: string; backend?: string } = { name }
     if (backend) body.backend = backend
     return this.requestJSON<VolumeJSON>("POST", "/v1/volumes", body).then(mapVolume)
