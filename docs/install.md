@@ -30,7 +30,7 @@ SBX_SKIP_AGENT=1 sh install.sh   # sbx only
 
 `--version v0.2.0` is the same as `SBX_VERSION`. `SBX_OS` and `SBX_ARCH` override detection (`linux` or `darwin`, `amd64` or `arm64`).
 
-You can also download the archives and `checksums.txt` from the GitHub release and unpack them yourself. `sbx version` prints the version, the git commit, and the build time stamped into the binary.
+You can also download the archives and `checksums.txt` from the GitHub release and unpack them yourself. `sbx version` and `sbx-agent version` print the version, the git commit, and the build time stamped into both binaries.
 
 ## Docker
 

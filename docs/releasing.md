@@ -11,7 +11,7 @@ The workflow:
 
 `sbx` archives are linux and darwin, amd64 and arm64. `sbx-agent` archives are linux only. `sbx version` prints the version, commit, and build time from `-ldflags`.
 
-Pull requests run the same GoReleaser config as a snapshot. The snapshot does not create a release, push an image, or publish to npm. Until `cmd/sbx-agent` is on the branch, the snapshot sets `SBX_SKIP_AGENT=true` and builds `sbx` only. A tag never takes that shortcut.
+Pull requests run the same GoReleaser config as a snapshot. The snapshot does not create a release, push an image, or publish to npm. If `cmd/sbx-agent` is missing, the snapshot sets `SBX_SKIP_AGENT=true` and builds `sbx` only. A tag never takes that shortcut.
 
 ## What the owner configures
 
@@ -25,7 +25,7 @@ Do not commit the npm token. Do not add a personal access token for GHCR.
 
 ## First release
 
-Merge the sbx-agent pull request first, then merge the release-pipeline pull request, so `main` contains `cmd/sbx-agent` and this workflow. Add `NPM_TOKEN`. Then:
+`cmd/sbx-agent` is already on `main`. Merge this workflow, add `NPM_TOKEN`, then:
 
 ```bash
 git checkout main

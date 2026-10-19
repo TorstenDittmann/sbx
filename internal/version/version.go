@@ -17,7 +17,12 @@ var (
 
 // Format is the text printed by `sbx version`.
 func Format() string {
-	text := fmt.Sprintf("sbx %s\n", Version)
+	return FormatBinary("sbx")
+}
+
+// FormatBinary is the version text for a binary that shares this stamp.
+func FormatBinary(name string) string {
+	text := fmt.Sprintf("%s %s\n", name, Version)
 	if Commit != "" {
 		text += fmt.Sprintf("commit %s\n", Commit)
 	}

@@ -55,14 +55,13 @@ jobs:
           node-version: "22"
       - name: sdk tests
         run: npm test --prefix sdk/typescript
-      - uses: oven-sh/setup-bun@v2
-      - name: sdk tests on bun
-        run: bun test --cwd sdk/typescript test
       - name: example parses
         run: node --experimental-strip-types --check examples/quickstart.ts
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3"
+      - name: sdk tests on bun
+        run: bun test --cwd sdk/typescript test
       - name: build sdk package
         run: npm ci --prefix sdk/typescript
       - name: sdk package contents

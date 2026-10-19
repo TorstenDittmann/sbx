@@ -11,6 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/TorstenDittmann/sbx/internal/version"
 )
 
 const (
@@ -36,8 +38,11 @@ func Run(args []string) error {
 		return Dial(os.Stdin, os.Stdout)
 	case "serve":
 		return serveTCP(args[1:])
+	case "version", "--version", "-v":
+		fmt.Fprint(os.Stdout, version.FormatBinary("sbx-agent"))
+		return nil
 	case "help", "-h", "--help":
-		fmt.Fprint(os.Stdout, "usage: sbx-agent init | dial | serve -listen ADDR\n")
+		fmt.Fprint(os.Stdout, "usage: sbx-agent init | dial | serve -listen ADDR | version\n")
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
