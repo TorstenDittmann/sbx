@@ -73,6 +73,12 @@ test("client maps create, exec, files, and errors", async () => {
         res.end()
         return
       }
+      if (req.method === "PUT" && req.url === "/v1/sandboxes/sbx_test/secrets") {
+        const sent = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { secrets: Record<string, string> }
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ ...sandboxJSON(), secret_keys: Object.keys(sent.secrets) }))
+        return
+      }
       if (req.method === "GET" && req.url === "/v1/sandboxes/missing") {
         res.writeHead(404, { "content-type": "application/json" })
         res.end(JSON.stringify({ error: { code: "not_found", message: "gone" } }))
@@ -201,6 +207,12 @@ test("client maps create, exec, files, and errors", async () => {
   assert.equal(templates[0]?.setup[0], "npm")
   await client.deleteTemplate("agent")
   assert.equal(seen.method, "DELETE")
+
+  await client.createSandbox({ secrets: { TOKEN: "sekret" } })
+  assert.deepEqual(JSON.parse(seen.body ?? "{}").secrets, { TOKEN: "sekret" })
+  const withSecret = await client.setSecrets("sbx_test", { TOKEN: "next" })
+  assert.deepEqual(withSecret.secretKeys, ["TOKEN"])
+  assert.equal(JSON.parse(seen.body ?? "{}").secrets.TOKEN, "next")
 
   await server.close()
 })

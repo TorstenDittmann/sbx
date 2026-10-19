@@ -31,4 +31,6 @@ await box.kill()
 
 `client.createTemplate({ name, image, warm, setup, network })` keeps ready sandboxes for that template. `Sandbox.create({ template })` claims one when the request does not override the template.
 
+`secrets` on `Sandbox.create` are stored for that sandbox and injected into commands. The API returns `secretKeys` and does not return the values. `client.setSecrets(id, secrets)` replaces them.
+
 Releases are cut from git tags. The workflow sets this package's version from the tag (`v0.2.0` publishes `0.2.0`) and attaches npm provenance. A prerelease tag is published under the `next` dist-tag.

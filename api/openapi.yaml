@@ -304,6 +304,31 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/secrets:
+    put:
+      operationId: setSandboxSecrets
+      summary: Replace sandbox secrets
+      description: >
+        Replaces the secret map. Values are not echoed. Later execs and new
+        processes see the new values. The container's original environment is
+        unchanged, so a shell that was already running keeps the old values.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secrets]
+              properties:
+                secrets: {type: object, additionalProperties: {type: string}}
+      responses:
+        "200":
+          description: Sandbox with secret_keys and no secret values
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
   /v1/sandboxes/{id}/pause:
     post:
       operationId: pauseSandbox
@@ -947,6 +972,13 @@ components:
             `/workspace/` are rejected. `/tmp`, `/opt/sbx`, `/proc`, `/sys`,
             `/dev`, and `/etc` are reserved.
           items: {$ref: "#/components/schemas/Mount"}
+        secrets:
+          type: object
+          additionalProperties: {type: string}
+          description: >
+            Environment variables stored for the sandbox but never returned by
+            get or list. Names appear in secret_keys. They are injected into
+            the container and into later execs. A name cannot also be set in env.
     Mount:
       type: object
       required: [volume_id, path]
@@ -1001,6 +1033,10 @@ components:
           items: {$ref: "#/components/schemas/Mount"}
         env: {type: object, additionalProperties: {type: string}}
         labels: {type: object, additionalProperties: {type: string}}
+        secret_keys:
+          type: array
+          items: {type: string}
+          description: Names of secrets set on this sandbox. Values are not returned.
         idle_timeout_seconds: {type: integer}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}

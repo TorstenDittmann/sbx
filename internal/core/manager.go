@@ -47,6 +47,7 @@ type CreateInput struct {
 	Backend            string
 	Labels             map[string]string
 	Mounts             []MountInput
+	Secrets            map[string]string
 }
 
 // ExecInput runs a command. TimeoutSeconds 0 uses the server default.
@@ -156,6 +157,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err := validEnv(in.Env); err != nil {
 		return store.Sandbox{}, err
 	}
+	if err := validEnv(in.Secrets); err != nil {
+		return store.Sandbox{}, err
+	}
 	if err := validLabels(in.Labels); err != nil {
 		return store.Sandbox{}, err
 	}
@@ -216,13 +220,18 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	baseMem := pickInt(nilIfZeroInt(tpl.MemoryMB), m.cfg.Limits.DefaultMemoryMB)
 	baseDisk := pickInt(nilIfZeroInt(tpl.DiskMB), m.cfg.Limits.DefaultDiskMB)
 	basePIDs := m.cfg.Limits.DefaultPIDs
+	for k := range in.Secrets {
+		if _, ok := env[k]; ok {
+			return store.Sandbox{}, fmtInvalid("secret %s is also set in env", k)
+		}
+	}
 
 	now := m.now()
 	sb := store.Sandbox{
 		ID: id.Sandbox(), Template: in.Template, Image: image, Backend: backend, Status: "creating",
 		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: env, Network: mode,
 		Allow: policy.Allow, Deny: policy.Deny, EgressKbps: policy.EgressKbps, MaxConns: policy.MaxConns,
-		Labels: nonNil(in.Labels), OwnerKeyID: actor.KeyID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second),
+		Labels: nonNil(in.Labels), Secrets: nonNil(in.Secrets), OwnerKeyID: actor.KeyID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second),
 		IdleTimeoutSeconds: idle, LastActivityAt: now, Mounts: mounts,
 	}
 
@@ -264,7 +273,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 
 	handle, err := d.Create(ctx, driver.SandboxSpec{
 		ID: sb.ID, Image: image, CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids,
-		Env: env, Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
+		Env: mergeEnv(env, in.Secrets), Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
 		Mounts: driverMounts(mounts),
 	})
 	if err != nil {
@@ -432,7 +441,7 @@ func (m *Manager) Exec(ctx context.Context, actor Actor, sandboxID string, in Ex
 	if err != nil {
 		return driver.ExecResult{}, err
 	}
-	req, err := m.execReq(in)
+	req, err := m.execReq(in, sb.Secrets)
 	if err != nil {
 		return driver.ExecResult{}, err
 	}
@@ -455,7 +464,7 @@ func (m *Manager) ExecStream(ctx context.Context, actor Actor, sandboxID string,
 	if err != nil {
 		return driver.ExecResult{}, err
 	}
-	req, err := m.execReq(in)
+	req, err := m.execReq(in, sb.Secrets)
 	if err != nil {
 		return driver.ExecResult{}, err
 	}
@@ -472,7 +481,7 @@ func (m *Manager) ExecStream(ctx context.Context, actor Actor, sandboxID string,
 	return res, nil
 }
 
-func (m *Manager) execReq(in ExecInput) (driver.ExecRequest, error) {
+func (m *Manager) execReq(in ExecInput, secrets map[string]string) (driver.ExecRequest, error) {
 	if err := validCmd(in.Cmd); err != nil {
 		return driver.ExecRequest{}, err
 	}
@@ -499,7 +508,7 @@ func (m *Manager) execReq(in ExecInput) (driver.ExecRequest, error) {
 	} else if timeout < 1 || timeout > m.cfg.Limits.MaxExecSeconds {
 		return driver.ExecRequest{}, fmtInvalid("timeout_seconds must be between 1 and %d", m.cfg.Limits.MaxExecSeconds)
 	}
-	req := driver.ExecRequest{Cmd: in.Cmd, Cwd: cwd, Env: in.Env, TimeoutSeconds: timeout}
+	req := driver.ExecRequest{Cmd: in.Cmd, Cwd: cwd, Env: mergeEnv(secrets, in.Env), TimeoutSeconds: timeout}
 	if len(in.Stdin) > 0 {
 		req.Stdin = bytes.NewReader(in.Stdin)
 	}
@@ -1024,4 +1033,44 @@ func nonNil(m map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	return m
+}
+
+func mergeEnv(base, over map[string]string) map[string]string {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(over))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
+}
+
+// SetSecrets replaces the secret environment for a running sandbox.
+// Values are not returned by Get or List. Later execs see the new values.
+func (m *Manager) SetSecrets(ctx context.Context, actor Actor, sandboxID string, secrets map[string]string) (store.Sandbox, error) {
+	if err := validEnv(secrets); err != nil {
+		return store.Sandbox{}, err
+	}
+	sb, err := m.visible(ctx, actor, sandboxID)
+	if err != nil {
+		return store.Sandbox{}, err
+	}
+	if sb.Status != "running" && sb.Status != "paused" {
+		return store.Sandbox{}, invalid("sandbox is not running")
+	}
+	for k := range secrets {
+		if _, ok := sb.Env[k]; ok {
+			return store.Sandbox{}, fmtInvalid("secret %s is also set in env", k)
+		}
+	}
+	secrets = nonNil(secrets)
+	if err := m.store.UpdateSecrets(ctx, sb.ID, secrets); err != nil {
+		return store.Sandbox{}, err
+	}
+	sb.Secrets = secrets
+	return sb, nil
 }

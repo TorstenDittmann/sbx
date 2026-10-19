@@ -126,7 +126,7 @@
 
 <section class="container api" id="api">
 	<h2>The calls you make</h2>
-	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. Processes, terminals, watches, and previews need <code>sbx-agent</code>. File watches use inotify and poll when the kernel cannot. Without the agent those routes return <code>unsupported</code>, and exec and files use a shell in the image.</p>
+	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. <code>secrets</code> are injected into the sandbox and are not returned by get or list. Processes, terminals, watches, and previews need <code>sbx-agent</code>. File watches use inotify and poll when the kernel cannot. Without the agent those routes return <code>unsupported</code>, and exec and files use a shell in the image.</p>
 	<div class="table">
 		<table>
 			<tbody>

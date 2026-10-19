@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("sandbox", s.getSandbox))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.auth("sandbox", s.deleteSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/timeout", s.auth("sandbox", s.timeoutSandbox))
+	mux.HandleFunc("PUT /v1/sandboxes/{id}/secrets", s.auth("sandbox", s.setSecrets))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
@@ -456,7 +458,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	in := core.CreateInput{
 		Template: body.Template, Image: body.Image, CPU: body.CPU, MemoryMB: body.MemoryMB,
 		DiskMB: body.DiskMB, PIDs: body.PIDs, TTLSeconds: body.TTLSeconds,
-		IdleTimeoutSeconds: body.IdleTimeoutSeconds, Env: body.Env, Backend: body.Backend, Labels: body.Labels,
+		IdleTimeoutSeconds: body.IdleTimeoutSeconds, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
 	}
 	if body.Network != nil {
 		in.Network = body.Network.Mode
@@ -527,6 +529,22 @@ func (s *Server) timeoutSandbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sb, err := s.mgr.SetTTL(r.Context(), actor(r), r.PathValue("id"), body.TTL)
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxJSON(sb))
+}
+
+func (s *Server) setSecrets(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Secrets map[string]string `json:"secrets"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	sb, err := s.mgr.SetSecrets(r.Context(), actor(r), r.PathValue("id"), body.Secrets)
 	if err != nil {
 		writeManager(w, err)
 		return
@@ -768,6 +786,7 @@ type createRequest struct {
 		VolumeID string `json:"volume_id"`
 		Path     string `json:"path"`
 	} `json:"mounts"`
+	Secrets map[string]string `json:"secrets"`
 }
 
 type execRequest struct {
@@ -801,6 +820,7 @@ type sandboxResponse struct {
 	CreatedAt          time.Time         `json:"created_at"`
 	Node               string            `json:"node"`
 	Mounts             []mountResponse   `json:"mounts,omitempty"`
+	SecretKeys         []string          `json:"secret_keys,omitempty"`
 }
 
 type mountResponse struct {
@@ -826,11 +846,24 @@ func sandboxJSON(sb store.Sandbox) sandboxResponse {
 		Allow: sb.Allow, Deny: sb.Deny, EgressKbps: sb.EgressKbps, MaxConns: sb.MaxConns,
 		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds,
 		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local", Mounts: mounts,
+		SecretKeys: secretKeys(sb.Secrets),
 	}
 }
 
 func volumeJSON(v store.Volume) volumeResponse {
 	return volumeResponse{ID: v.ID, Name: v.Name, Backend: v.Backend, CreatedAt: v.CreatedAt}
+}
+
+func secretKeys(secrets map[string]string) []string {
+	if len(secrets) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(secrets))
+	for k := range secrets {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func templateJSON(t store.Template) map[string]any {

@@ -201,6 +201,78 @@ func TestWarmTemplate(t *testing.T) {
 	}
 }
 
+func TestSandboxSecrets(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Limits.DefaultMemoryMB = 64
+	cfg.Limits.DefaultDiskMB = 32
+	cfg.Limits.DefaultCPU = 0.5
+	st, err := store.Open(filepath.Join(cfg.DataDir, "sbx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	plain := "sbx_e2esecretkey000000000000000000"
+	if err := st.CreateKey(context.Background(), store.APIKey{
+		ID: id.RecordID(), Name: "e2e", Hash: id.Hash(plain), Prefix: plain[:12],
+		Scopes: []string{"admin"}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dock, err := docker.New(docker.Options{Host: cfg.Docker.Host, Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: cfg.Limits.MaxOutputBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := core.New(cfg, st, map[string]driver.Driver{"docker": dock}, log)
+	if err := mgr.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(api.New(mgr, log, apispec.OpenAPI).Handler())
+	t.Cleanup(ts.Close)
+	var sandboxID string
+	t.Cleanup(func() {
+		if sandboxID != "" {
+			_ = dock.Delete(context.Background(), sandboxID)
+		}
+	})
+
+	resp := call(t, ts, http.MethodPost, "/v1/sandboxes", plain, "application/json", []byte(`{"image":"alpine:3.20","ttl_seconds":180,"env":{"FOO":"bar"},"secrets":{"TOKEN":"sekret"}}`))
+	if resp.StatusCode != http.StatusCreated || strings.Contains(string(resp.body), "sekret") {
+		t.Fatalf("create %s %s", resp.Status, resp.body)
+	}
+	var created struct {
+		ID         string   `json:"id"`
+		SecretKeys []string `json:"secret_keys"`
+	}
+	mustDecode(t, resp.body, &created)
+	sandboxID = created.ID
+	if len(created.SecretKeys) != 1 || created.SecretKeys[0] != "TOKEN" {
+		t.Fatalf("%+v", created)
+	}
+	resp = call(t, ts, http.MethodPost, "/v1/sandboxes/"+created.ID+"/exec", plain, "application/json", []byte(`{"cmd":["sh","-c","printf %s \"$TOKEN\""],"timeout_seconds":20}`))
+	var result struct {
+		ExitCode int    `json:"exit_code"`
+		Stdout   string `json:"stdout"`
+	}
+	mustDecode(t, resp.body, &result)
+	if resp.StatusCode != 200 || result.ExitCode != 0 || result.Stdout != "sekret" {
+		t.Fatalf("exec %s %+v", resp.Status, result)
+	}
+	resp = call(t, ts, http.MethodPut, "/v1/sandboxes/"+created.ID+"/secrets", plain, "application/json", []byte(`{"secrets":{"TOKEN":"rotated"}}`))
+	if resp.StatusCode != 200 || strings.Contains(string(resp.body), "rotated") {
+		t.Fatalf("rotate %s %s", resp.Status, resp.body)
+	}
+	resp = call(t, ts, http.MethodPost, "/v1/sandboxes/"+created.ID+"/exec", plain, "application/json", []byte(`{"cmd":["sh","-c","printf %s \"$TOKEN\""],"timeout_seconds":20}`))
+	mustDecode(t, resp.body, &result)
+	if resp.StatusCode != 200 || result.Stdout != "rotated" {
+		t.Fatalf("rotated exec %s %+v", resp.Status, result)
+	}
+}
+
 type httpResult struct {
 	StatusCode int
 	Status     string
