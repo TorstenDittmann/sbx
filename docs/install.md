@@ -1,6 +1,6 @@
 # Install
 
-Releases are git tags of the form `vX.Y.Z`. Each tag publishes GitHub release archives, a multi-arch image at `ghcr.io/torstendittmann/sbx`, and the npm package `@torstendittmann/sbx`.
+Releases are git tags of the form `vX.Y.Z`. Each tag publishes GitHub release archives, a multi-arch image at `ghcr.io/torstendittmann/sbx`, and the npm package `@sbx.torsten.work/sbx`.
 
 ## Binary
 
@@ -55,24 +55,24 @@ Tags:
 
 ## npm and Bun
 
-The unscoped npm name `sbx` is already published by another project (`bhoriuchi/sbx`). This SDK is `@torstendittmann/sbx`.
+The unscoped npm name `sbx` is already published by another project (`bhoriuchi/sbx`). This SDK is `@sbx.torsten.work/sbx`.
 
 ```bash
-npm install @torstendittmann/sbx
+npm install @sbx.torsten.work/sbx
 ```
 
 ```bash
-bun add @torstendittmann/sbx
+bun add @sbx.torsten.work/sbx
 ```
 
 ```ts
-import { Sandbox } from "@torstendittmann/sbx"
+import { Sandbox } from "@sbx.torsten.work/sbx"
 
 const box = await Sandbox.create({ template: "base", ttl: "5m" })
 console.log((await box.exec(["echo", "hello"])).stdout)
 await box.kill()
 ```
 
-The package is ESM and includes TypeScript declarations. It runs on Node 20+ and on Bun. `SBX_URL` defaults to `http://127.0.0.1:8080`. Set `SBX_API_KEY`, or pass `apiKey`. A prerelease tag is published under the npm dist-tag `next` (`npm install @torstendittmann/sbx@next`).
+The package is ESM and includes TypeScript declarations. It runs on Node 20+ and on Bun. `SBX_URL` defaults to `http://127.0.0.1:8080`. Set `SBX_API_KEY`, or pass `apiKey`. A prerelease tag is published under the npm dist-tag `next` (`npm install @sbx.torsten.work/sbx@next`).
 
 The examples in this repo import the TypeScript source directly and do not need the package installed.

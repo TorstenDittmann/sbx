@@ -61,9 +61,9 @@ docker run --rm -p 8080:8080 \
   -v sbx-data:/data \
   ghcr.io/torstendittmann/sbx:latest
 
-npm install @torstendittmann/sbx
-bun add @torstendittmann/sbx</code></pre>
-      <p class="aside">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs the darwin server and the linux agent, because the agent runs in the container. The image already contains both and sets <code>SBX_AGENT_BIN</code>. The npm name <code>sbx</code> is a different project; this package is <code>@torstendittmann/sbx</code>.</p>
+npm install @sbx.torsten.work/sbx
+bun add @sbx.torsten.work/sbx</code></pre>
+      <p class="aside">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs the darwin server and the linux agent, because the agent runs in the container. The image already contains both and sets <code>SBX_AGENT_BIN</code>. The npm name <code>sbx</code> is a different project; this package is <code>@sbx.torsten.work/sbx</code>.</p>
     </section>
 
     <section id="quickstart">
@@ -121,7 +121,7 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
         <p>Auth is <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees its own sandboxes.</p>
       </div>
       <div class="split">
-        <pre class="code"><code>import { Sandbox } from "@torstendittmann/sbx";
+        <pre class="code"><code>import { Sandbox } from "@sbx.torsten.work/sbx";
 
 const box = await Sandbox.create({
   template: "python",

@@ -189,12 +189,12 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
           cache-dependency-path: sdk/typescript/package-lock.json
-      - name: Publish @torstendittmann/sbx
+      - name: Publish @sbx.torsten.work/sbx
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::error title=NPM_TOKEN is not set::Add an npm automation token as the repository secret NPM_TOKEN. The token must be allowed to publish @torstendittmann/sbx. The package was not published, and this job fails on purpose."
+            echo "::error title=NPM_TOKEN is not set::Add an npm automation token as the repository secret NPM_TOKEN. The token must be allowed to publish @sbx.torsten.work/sbx. The package was not published, and this job fails on purpose."
             exit 1
           fi
           version="${GITHUB_REF_NAME#v}"

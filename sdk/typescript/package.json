@@ -1,5 +1,5 @@
 {
-  "name": "@torstendittmann/sbx",
+  "name": "@sbx.torsten.work/sbx",
   "version": "0.2.0",
   "description": "TypeScript client for the sbx sandbox API. Runs on Node and Bun.",
   "license": "MIT",

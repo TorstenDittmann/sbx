@@ -1,19 +1,19 @@
-# @torstendittmann/sbx
+# @sbx.torsten.work/sbx
 
 TypeScript client for [sbx](https://github.com/TorstenDittmann/sbx), a single-binary sandbox server.
 
 The published package is ESM and ships its types. It runs on Node 20+ and on Bun. `sbx` on npm is a different project, so this package is scoped.
 
 ```bash
-npm install @torstendittmann/sbx
+npm install @sbx.torsten.work/sbx
 ```
 
 ```bash
-bun add @torstendittmann/sbx
+bun add @sbx.torsten.work/sbx
 ```
 
 ```ts
-import { Sandbox } from "@torstendittmann/sbx"
+import { Sandbox } from "@sbx.torsten.work/sbx"
 
 const box = await Sandbox.create({ template: "base", ttl: "5m" })
 const result = await box.exec(["echo", "hello"])

@@ -97,7 +97,7 @@ release:
 
     Docker image: `ghcr.io/torstendittmann/sbx:{{ .Version }}` (also tagged `v{{ .Version }}` and `latest` on a final release).
 
-    TypeScript, for Node and Bun: `npm install @torstendittmann/sbx@{{ .Version }}`
+    TypeScript, for Node and Bun: `npm install @sbx.torsten.work/sbx@{{ .Version }}`
 
 dockers_v2:
   - ids:

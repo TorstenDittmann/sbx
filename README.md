@@ -25,11 +25,11 @@ docker run --rm -p 8080:8080 \
 The image listens on port 8080, keeps SQLite in `/data`, and carries `sbx-agent` so injection works without a separate download. Tags are the version (`0.2.0`), the git tag (`v0.2.0`), and `latest` for a final release.
 
 ```bash
-npm install @torstendittmann/sbx
-bun add @torstendittmann/sbx
+npm install @sbx.torsten.work/sbx
+bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@torstendittmann/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -67,7 +67,7 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
   -d '{"cmd":["echo","hello"]}'
 ```
 
-The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@torstendittmann/sbx`; see [Install](#install).
+The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@sbx.torsten.work/sbx`; see [Install](#install).
 
 ```bash
 export SBX_URL=http://127.0.0.1:8080
