@@ -320,6 +320,69 @@ func (c *Client) WriteFile(ctx context.Context, path string, content []byte, mod
 	return c.readOK(ctx, s)
 }
 
+// ExtractArchive unpacks a tar stream into path. max is the uncompressed
+// byte budget; zero means no limit.
+func (c *Client) ExtractArchive(ctx context.Context, path string, r io.Reader, max int64) error {
+	s, err := c.mux.Open()
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if err := s.Send(MsgArchivePut, mustJSON(map[string]any{"path": path, "max": max})); err != nil {
+		return err
+	}
+	buf := make([]byte, ChunkSize)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if sendErr := s.Send(MsgData, append([]byte(nil), buf[:n]...)); sendErr != nil {
+				return sendErr
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := s.Send(MsgStdinEOF, nil); err != nil {
+		return err
+	}
+	return c.readOK(ctx, s)
+}
+
+// PackArchive returns a gzip-compressed tar of the directory. max limits the
+// compressed size; zero means no limit.
+func (c *Client) PackArchive(ctx context.Context, path string, max int) ([]byte, error) {
+	s, err := c.mux.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	if err := s.Send(MsgArchiveGet, mustJSON(map[string]any{"path": path, "max": max})); err != nil {
+		return nil, err
+	}
+	var buf []byte
+	for {
+		frame, err := s.Recv(ctx)
+		if err != nil {
+			return nil, err
+		}
+		switch frame.Type {
+		case MsgData:
+			buf = append(buf, frame.Data...)
+			if max > 0 && len(buf) > max {
+				return nil, errors.New("archive exceeds the size limit")
+			}
+		case MsgOK:
+			return buf, nil
+		case MsgError:
+			return nil, errors.New(string(frame.Data))
+		}
+	}
+}
+
 // RemoveFile deletes a file or directory.
 func (c *Client) RemoveFile(ctx context.Context, path string) error {
 	return c.rpc(ctx, MsgFileRemove, map[string]string{"path": path}, nil)

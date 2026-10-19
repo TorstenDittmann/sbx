@@ -102,7 +102,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 
 `network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
-When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Archives use `tar` either way. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md).
+When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md).
 
 ## Deploying the website with Dokploy
 

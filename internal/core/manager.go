@@ -557,6 +557,14 @@ func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest
 			return invalid("uncompressed archive exceeds the size limit")
 		}
 	}
+	if arc, ok := d.(driver.Archiver); ok && arc.NativeArchive() {
+		if err := arc.ExtractArchive(ctx, sb.ContainerID, dest, bytes.NewReader(raw), int64(m.cfg.Limits.MaxUploadBytes)); err != nil {
+			return m.asDriver(err)
+		}
+		m.touch(ctx, sb)
+		m.Counts.FileOps.Add(1)
+		return nil
+	}
 	tmp := "/tmp/sbx-upload.tar"
 	if err := d.WriteFile(ctx, sb.ContainerID, tmp, raw, 0o644); err != nil {
 		return m.asDriver(err)
@@ -582,6 +590,15 @@ func (m *Manager) ReadArchive(ctx context.Context, actor Actor, sandboxID, dir s
 	sb, d, dir, err := m.fileReady(ctx, actor, sandboxID, dir)
 	if err != nil {
 		return nil, err
+	}
+	if arc, ok := d.(driver.Archiver); ok && arc.NativeArchive() {
+		b, err := arc.PackArchive(ctx, sb.ContainerID, dir, m.cfg.Limits.MaxOutputBytes)
+		if err != nil {
+			return nil, m.asDriver(err)
+		}
+		m.touch(ctx, sb)
+		m.Counts.FileOps.Add(1)
+		return b, nil
 	}
 	res, err := d.Exec(ctx, sb.ContainerID, driver.ExecRequest{
 		Cmd:            []string{"tar", "-czf", "-", "-C", dir, "."},

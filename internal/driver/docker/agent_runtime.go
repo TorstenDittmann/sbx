@@ -420,6 +420,29 @@ func (d *Driver) ResizeProcess(ctx context.Context, id, procID string, cols, row
 	return c.Resize(ctx, procID, cols, rows)
 }
 
+// NativeArchive reports whether archives are packed inside the agent.
+func (d *Driver) NativeArchive() bool {
+	return d.GuestEnabled()
+}
+
+// ExtractArchive unpacks a tar stream through the agent.
+func (d *Driver) ExtractArchive(ctx context.Context, id, dest string, r io.Reader, max int64) error {
+	c, err := d.guest(ctx, id)
+	if err != nil {
+		return guestErr(err)
+	}
+	return c.ExtractArchive(ctx, dest, r, max)
+}
+
+// PackArchive returns a gzip tar of dir built by the agent.
+func (d *Driver) PackArchive(ctx context.Context, id, dir string, max int) ([]byte, error) {
+	c, err := d.guest(ctx, id)
+	if err != nil {
+		return nil, guestErr(err)
+	}
+	return c.PackArchive(ctx, dir, max)
+}
+
 func (d *Driver) DialPort(ctx context.Context, id string, port int) (io.ReadWriteCloser, error) {
 	c, err := d.guest(ctx, id)
 	if err != nil {
@@ -428,7 +451,10 @@ func (d *Driver) DialPort(ctx context.Context, id string, port int) (io.ReadWrit
 	return c.Dial(ctx, port)
 }
 
-var _ driver.Guest = (*Driver)(nil)
+var (
+	_ driver.Guest    = (*Driver)(nil)
+	_ driver.Archiver = (*Driver)(nil)
+)
 
 func guestErr(err error) error {
 	if errors.Is(err, errNoGuest) {

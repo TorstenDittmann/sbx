@@ -45,7 +45,7 @@ func (a *Agent) ServeConn(conn io.ReadWriteCloser) {
 		_ = WriteFrame(conn, 0, MsgError, []byte("unauthorized"))
 		return
 	}
-	body, _ := json.Marshal(HelloOK{Version: ProtocolVersion, Caps: []string{"exec", "pty", "files", "watch", "preview"}})
+	body, _ := json.Marshal(HelloOK{Version: ProtocolVersion, Caps: []string{"exec", "pty", "files", "watch", "archive", "preview"}})
 	if err := WriteFrame(conn, 0, MsgHelloOk, body); err != nil {
 		return
 	}
@@ -104,6 +104,10 @@ func (a *Agent) handle(s *Stream) {
 		a.handleFileMkdir(s, frame)
 	case MsgFileWatch:
 		a.handleWatch(s, frame)
+	case MsgArchivePut:
+		a.handleArchivePut(s, frame)
+	case MsgArchiveGet:
+		a.handleArchiveGet(s, frame)
 	case MsgDial:
 		a.handleDial(s, frame)
 	default:

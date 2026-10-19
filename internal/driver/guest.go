@@ -40,3 +40,12 @@ type Guest interface {
 	ResizeProcess(ctx context.Context, id, procID string, cols, rows int) error
 	DialPort(ctx context.Context, id string, port int) (io.ReadWriteCloser, error)
 }
+
+// Archiver packs and extracts tar archives inside the sandbox. NativeArchive
+// is false when the driver has no in-sandbox agent; callers then use a tar
+// binary in the image.
+type Archiver interface {
+	NativeArchive() bool
+	ExtractArchive(ctx context.Context, id, dest string, r io.Reader, max int64) error
+	PackArchive(ctx context.Context, id, dir string, max int) ([]byte, error)
+}
