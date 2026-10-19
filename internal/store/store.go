@@ -125,10 +125,12 @@ type Volume struct {
 
 // SandboxFilter selects rows. Empty fields are ignored.
 type SandboxFilter struct {
-	Status  string
-	Backend string
-	OwnerID string
-	Labels  map[string]string
+	Status   string
+	Backend  string
+	Template string
+	Query    string
+	OwnerID  string
+	Labels   map[string]string
 }
 
 // Store is a process-local SQLite database.
@@ -490,6 +492,10 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 		q += ` AND backend = ?`
 		args = append(args, f.Backend)
 	}
+	if f.Template != "" {
+		q += ` AND template = ?`
+		args = append(args, f.Template)
+	}
 	if f.OwnerID != "" {
 		q += ` AND owner_key_id = ?`
 		args = append(args, f.OwnerID)
@@ -506,7 +512,7 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 		if err != nil {
 			return nil, err
 		}
-		if !labelsMatch(sb.Labels, f.Labels) {
+		if !labelsMatch(sb.Labels, f.Labels) || !matchesQuery(sb, f.Query) {
 			continue
 		}
 		out = append(out, sb)
@@ -765,6 +771,25 @@ func labelsMatch(have, want map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func matchesQuery(sb Sandbox, q string) bool {
+	if q == "" {
+		return true
+	}
+	q = strings.ToLower(q)
+	fields := []string{sb.ID, sb.Template, sb.Image, sb.Status}
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), q) {
+			return true
+		}
+	}
+	for k, v := range sb.Labels {
+		if strings.Contains(strings.ToLower(k), q) || strings.Contains(strings.ToLower(v), q) {
+			return true
+		}
+	}
+	return false
 }
 
 func millis(t time.Time) int64 {

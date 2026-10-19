@@ -457,10 +457,12 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("GET", `/v1/sandboxes/${encodeURIComponent(id)}`).then(mapSandbox)
   }
 
-  listSandboxes(query: { status?: string; backend?: string; labels?: Record<string, string> } = {}): Promise<SandboxInfo[]> {
+  listSandboxes(query: { status?: string; backend?: string; template?: string; q?: string; labels?: Record<string, string> } = {}): Promise<SandboxInfo[]> {
     const params = new URLSearchParams()
     if (query.status) params.set("status", query.status)
     if (query.backend) params.set("backend", query.backend)
+    if (query.template) params.set("template", query.template)
+    if (query.q) params.set("q", query.q)
     for (const [key, value] of Object.entries(query.labels ?? {})) {
       params.append("label", `${key}:${value}`)
     }

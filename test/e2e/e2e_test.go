@@ -239,7 +239,6 @@ func TestSandboxSecrets(t *testing.T) {
 			_ = dock.Delete(context.Background(), sandboxID)
 		}
 	})
-
 	resp := call(t, ts, http.MethodPost, "/v1/sandboxes", plain, "application/json", []byte(`{"image":"alpine:3.20","ttl_seconds":180,"env":{"FOO":"bar"},"secrets":{"TOKEN":"sekret"}}`))
 	if resp.StatusCode != http.StatusCreated || strings.Contains(string(resp.body), "sekret") {
 		t.Fatalf("create %s %s", resp.Status, resp.body)
@@ -270,6 +269,63 @@ func TestSandboxSecrets(t *testing.T) {
 	mustDecode(t, resp.body, &result)
 	if resp.StatusCode != 200 || result.Stdout != "rotated" {
 		t.Fatalf("rotated exec %s %+v", resp.Status, result)
+	}
+}
+
+func TestListSearch(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Limits.DefaultMemoryMB = 64
+	cfg.Limits.DefaultDiskMB = 32
+	cfg.Limits.DefaultCPU = 0.5
+	st, err := store.Open(filepath.Join(cfg.DataDir, "sbx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	plain := "sbx_e2esearchkey00000000000000000"
+	if err := st.CreateKey(context.Background(), store.APIKey{
+		ID: id.RecordID(), Name: "e2e", Hash: id.Hash(plain), Prefix: plain[:12],
+		Scopes: []string{"admin"}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dock, err := docker.New(docker.Options{Host: cfg.Docker.Host, Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: cfg.Limits.MaxOutputBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := core.New(cfg, st, map[string]driver.Driver{"docker": dock}, log)
+	if err := mgr.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(api.New(mgr, log, apispec.OpenAPI).Handler())
+	t.Cleanup(ts.Close)
+	var sandboxID string
+	t.Cleanup(func() {
+		if sandboxID != "" {
+			_ = dock.Delete(context.Background(), sandboxID)
+		}
+	})
+	resp := call(t, ts, http.MethodPost, "/v1/sandboxes", plain, "application/json", []byte(`{"template":"base","ttl_seconds":180,"labels":{"project":"hansi"}}`))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create %s %s", resp.Status, resp.body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	mustDecode(t, resp.body, &created)
+	sandboxID = created.ID
+	resp = call(t, ts, http.MethodGet, "/v1/sandboxes?q=Hansi&label=project:hansi&template=base", plain, "", nil)
+	if resp.StatusCode != 200 || !strings.Contains(string(resp.body), created.ID) {
+		t.Fatalf("search %s %s", resp.Status, resp.body)
+	}
+	resp = call(t, ts, http.MethodGet, "/v1/sandboxes?q=not-this", plain, "", nil)
+	if resp.StatusCode != 200 || strings.Contains(string(resp.body), created.ID) {
+		t.Fatalf("negative search %s %s", resp.Status, resp.body)
 	}
 }
 

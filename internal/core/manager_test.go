@@ -156,11 +156,11 @@ func TestFilesTemplatesDeleteAndReaper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := mgr.List(ctx, actor, "running", "docker", map[string]string{})
+	listed, err := mgr.List(ctx, actor, ListInput{Status: "running", Backend: "docker"})
 	if err != nil || len(listed) != 1 || listed[0].ID != sb.ID {
 		t.Fatalf("%+v %v", listed, err)
 	}
-	if _, err := mgr.List(ctx, Actor{KeyID: "missing", Admin: true}, "", "", nil); err != nil {
+	if _, err := mgr.List(ctx, Actor{KeyID: "missing", Admin: true}, ListInput{}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := mgr.SetTTL(ctx, actor, sb.ID, 600)

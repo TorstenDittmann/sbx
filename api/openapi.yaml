@@ -232,9 +232,19 @@ paths:
           name: backend
           schema: {type: string}
         - in: query
+          name: template
+          schema: {type: string}
+          description: Exact template name.
+        - in: query
           name: label
           description: Repeatable key:value filter. All must match.
           schema: {type: string}
+        - in: query
+          name: q
+          schema: {type: string, maxLength: 128}
+          description: >
+            Case-insensitive substring matched against id, template, image,
+            status, and label keys and values. Combined with the exact filters.
       responses:
         "200":
           description: Sandboxes visible to the caller

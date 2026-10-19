@@ -84,7 +84,7 @@ Authenticate with `Authorization: Bearer sbx_<key>`. Keys are stored as sha256. 
 
 ```
 POST   /v1/sandboxes
-GET    /v1/sandboxes?status=&backend=&label=k:v
+GET    /v1/sandboxes?status=&backend=&template=&label=k:v&q=
 GET    /v1/sandboxes/{id}
 DELETE /v1/sandboxes/{id}                 idempotent stop
 POST   /v1/sandboxes/{id}/timeout         {"ttl_seconds": 600}
@@ -125,6 +125,8 @@ Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_time
 A user template may set `warm` (0–8), `setup` (an argv run once before the sandbox is offered), `setup_timeout_seconds`, and `network`. The reaper keeps that many sandboxes in status `warm`, owned by `sbx-system`, so they do not use a key's quota and they are not expired by TTL. Create claims the oldest match when the request does not override image, cpu, memory, disk, pids, backend, network, env, secrets, or mounts. Otherwise sbx starts a new sandbox and runs `setup` then. Startup and the reaper refill the pool. `GET /v1/sandboxes` hides `warm` unless the caller is an admin and asks for `status=warm`.
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
+
+`q` matches a case-insensitive substring of the sandbox id, template, image, status, or any label key or value. `label` stays an exact key:value match, and every filter is combined. `q` is at most 128 characters. Env values are not part of the search.
 
 Defaults: bind `127.0.0.1:8080` (compose sets `SBX_ADDR=:8080`), TTL 300s (max 86400), idle timeout off, 1 CPU, 512 MiB, 1024 MiB workspace, 256 pids, 20 sandboxes per key, exec timeout 60s (max 3600), output cap 8 MiB, upload cap 32 MiB. The reaper runs every 5s and stops expired sandboxes, idle sandboxes, creates stuck longer than 15 minutes, and orphan containers labeled `sbx.managed=true`. Stopped rows are pruned after a day.
 

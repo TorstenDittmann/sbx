@@ -45,6 +45,11 @@ test("client maps create, exec, files, and errors", async () => {
         res.end()
         return
       }
+      if (req.method === "GET" && req.url?.startsWith("/v1/sandboxes?")) {
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ sandboxes: [sandboxJSON()] }))
+        return
+      }
       if (req.method === "GET" && req.url === "/v1/sandboxes/sbx_test") {
         res.writeHead(200, { "content-type": "application/json" })
         res.end(JSON.stringify(sandboxJSON()))
@@ -165,6 +170,12 @@ test("client maps create, exec, files, and errors", async () => {
     egress_kbps: 1000,
     max_connections: 8,
   })
+
+  const found = await client.listSandboxes({ template: "base", q: "alp", labels: { user: "1" } })
+  assert.equal(found.length, 1)
+  assert.match(seen.url ?? "", /template=base/)
+  assert.match(seen.url ?? "", /q=alp/)
+  assert.match(seen.url ?? "", /label=user%3A1/)
 
   const sandbox = await Sandbox.connect("sbx_test", { baseUrl, apiKey: "sbx_testkey" })
   assert.equal(sandbox.id, "sbx_test")
