@@ -406,6 +406,9 @@ func writeBaselineFamily(b *strings.Builder, bin, bridge, reject string, base Ba
 		fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -d %s -j REJECT --reject-with %s\n", bin, p.String(), reject)
 	}
 	fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -j RETURN\n", bin)
-	fmt.Fprintf(b, "%s -w 5 -C DOCKER-USER -i %s -j SBX-EGRESS 2>/dev/null || %s -w 5 -A DOCKER-USER -i %s -j SBX-EGRESS\n", bin, bridge, bin, bridge)
-	fmt.Fprintf(b, "%s -w 5 -C INPUT -i %s -j SBX-EGRESS 2>/dev/null || %s -w 5 -A INPUT -i %s -j SBX-EGRESS\n", bin, bridge, bin, bridge)
+	// Insert at the head. An appended jump loses to an earlier ACCEPT on DOCKER-USER.
+	fmt.Fprintf(b, "%s -w 5 -D DOCKER-USER -i %s -j SBX-EGRESS 2>/dev/null || true\n", bin, bridge)
+	fmt.Fprintf(b, "%s -w 5 -I DOCKER-USER 1 -i %s -j SBX-EGRESS\n", bin, bridge)
+	fmt.Fprintf(b, "%s -w 5 -D INPUT -i %s -j SBX-EGRESS 2>/dev/null || true\n", bin, bridge)
+	fmt.Fprintf(b, "%s -w 5 -I INPUT 1 -i %s -j SBX-EGRESS\n", bin, bridge)
 }

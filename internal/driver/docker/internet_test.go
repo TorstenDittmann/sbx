@@ -95,7 +95,7 @@ func runWorkload(t *testing.T, runtime string, full bool) {
 	}
 	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
 	assertResolvers(t, d, ctx, h.ID)
-	assertIPv6WhenEnabled(t, d, ctx, h.ID)
+	assertIPv6WhenEnabled(t, h.ID)
 	script := shortWorkload
 	if full {
 		script = fullWorkload
@@ -204,10 +204,35 @@ func assertResolvers(t *testing.T, d *Driver, ctx context.Context, id string) {
 	}
 }
 
-func assertIPv6WhenEnabled(t *testing.T, d *Driver, ctx context.Context, id string) {
+func assertIPv6WhenEnabled(t *testing.T, id string) {
 	t.Helper()
-	info, err := d.client.Info(ctx)
-	if err != nil || !info.IPv6 {
+	netRaw, err := exec.Command("docker", "network", "inspect", sandboxNetwork).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nets []struct {
+		EnableIPv6 bool `json:"EnableIPv6"`
+		IPAM       struct {
+			Config []struct {
+				Subnet string `json:"Subnet"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+	}
+	if err := json.Unmarshal(netRaw, &nets); err != nil {
+		t.Fatal(err)
+	}
+	hasV6 := false
+	for _, n := range nets {
+		if n.EnableIPv6 {
+			hasV6 = true
+		}
+		for _, cfg := range n.IPAM.Config {
+			if strings.Contains(cfg.Subnet, ":") {
+				hasV6 = true
+			}
+		}
+	}
+	if !hasV6 {
 		return
 	}
 	raw, err := exec.Command("docker", "inspect", id).Output()

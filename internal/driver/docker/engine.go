@@ -214,14 +214,12 @@ func (c *Client) Ping(ctx context.Context) error {
 // Info is a subset of GET /info.
 type Info struct {
 	ServerVersion string
-	IPv6          bool
 	Runtimes      map[string]struct{}
 }
 
 func (c *Client) Info(ctx context.Context) (Info, error) {
 	var raw struct {
 		ServerVersion string `json:"ServerVersion"`
-		IPv6          bool   `json:"IPv6"`
 		Runtimes      map[string]struct {
 			Path string `json:"path"`
 		} `json:"Runtimes"`
@@ -229,7 +227,7 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 	if err := c.DoJSON(ctx, http.MethodGet, "/info", nil, &raw); err != nil {
 		return Info{}, err
 	}
-	info := Info{ServerVersion: raw.ServerVersion, IPv6: raw.IPv6, Runtimes: map[string]struct{}{}}
+	info := Info{ServerVersion: raw.ServerVersion, Runtimes: map[string]struct{}{}}
 	for name := range raw.Runtimes {
 		info.Runtimes[name] = struct{}{}
 	}

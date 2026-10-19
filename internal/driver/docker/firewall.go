@@ -75,7 +75,7 @@ func (d *Driver) ensureEgress(ctx context.Context) error {
 	if d.egressReady {
 		return nil
 	}
-	bridge, err := d.client.EnsureSandboxNetwork(ctx, d.wantIPv6(ctx))
+	bridge, err := d.client.EnsureSandboxNetwork(ctx, d.wantIPv6())
 	if err != nil {
 		return err
 	}
@@ -158,19 +158,11 @@ func (d *Driver) runHelper(ctx context.Context, script string) error {
 	return nil
 }
 
-func (d *Driver) wantIPv6(ctx context.Context) bool {
-	switch d.opt.IPv6 {
-	case "off":
-		return false
-	case "on":
-		return true
-	default:
-		info, err := d.client.Info(ctx)
-		if err != nil {
-			return false
-		}
-		return info.IPv6
-	}
+// wantIPv6 reports whether a new sbx bridge should request IPv6. Docker's
+// /info response has no IPv6 flag, so auto tries IPv6 and
+// EnsureSandboxNetwork falls back to IPv4 when the daemon rejects it.
+func (d *Driver) wantIPv6() bool {
+	return d.opt.IPv6 != "off"
 }
 
 func validateNetwork(n networkInfo) (string, error) {

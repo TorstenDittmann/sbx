@@ -92,7 +92,7 @@ Caddy forwards `Host`, upgrades WebSockets, and terminates HTTP/2. Point the wil
 http:
   routers:
     sbx:
-      rule: Host(`api.example.com`) || HostRegexp(`^[0-9]+-sbx-[0-9a-f]+\\.sbx\\.example\\.com$`)
+      rule: Host(`api.example.com`) || HostRegexp(`^[0-9]+-sbx-[0-9a-f]+\.sbx\.example\.com$`)
       entryPoints: [websecure]
       tls: { certResolver: le }
       service: sbx

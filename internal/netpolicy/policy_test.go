@@ -85,7 +85,7 @@ func TestRenderSandboxAndBaseline(t *testing.T) {
 		BlockPrivate: true, BlockMetadata: true,
 		PrivateAllow: mustPrefixes("10.8.0.0/16"),
 	})
-	for _, want := range []string{"169.254.0.0/16", "10.0.0.0/8", "10.8.0.0/16", "100.100.100.200/32", "fe80::/10", "fc00::/7", "-j RETURN", "-A DOCKER-USER"} {
+	for _, want := range []string{"169.254.0.0/16", "10.0.0.0/8", "10.8.0.0/16", "100.100.100.200/32", "fe80::/10", "fc00::/7", "-j RETURN", "-I DOCKER-USER 1", "-I INPUT 1"} {
 		if !strings.Contains(base, want) {
 			t.Fatalf("baseline missing %s\n%s", want, base)
 		}
