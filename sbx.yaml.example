@@ -11,6 +11,9 @@ docker:
   read_only_rootfs: true
   sandbox_uid: 1000
   sandbox_gid: 1000
+  # Path to the static sbx-agent binary. Empty, or a missing sibling of the
+  # sbx binary, keeps exec and files on the shell path inside the image.
+  # agent_bin: /usr/local/bin/sbx-agent
 
 limits:
   default_ttl_seconds: 300

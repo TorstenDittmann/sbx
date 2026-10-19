@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,7 +46,7 @@ func TestHTTPQuickstart(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	base := docker.Options{Host: cfg.Docker.Host, ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: cfg.Limits.MaxOutputBytes}
+	base := docker.Options{Host: cfg.Docker.Host, ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: cfg.Limits.MaxOutputBytes, AgentBin: buildAgent(t)}
 	dockOpt := base
 	dockOpt.Name = "docker"
 	gOpt := base
@@ -148,6 +149,39 @@ func call(t *testing.T, ts *httptest.Server, method, path, key, contentType stri
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return httpResult{StatusCode: resp.StatusCode, Status: resp.Status, body: b}
+}
+
+func buildAgent(t *testing.T) string {
+	t.Helper()
+	if p := os.Getenv("SBX_AGENT_BIN"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
+	}
+	out := filepath.Join(t.TempDir(), "sbx-agent")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/sbx-agent")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build agent: %v %s", err, raw)
+	}
+	return out
 }
 
 func mustDecode(t *testing.T, body []byte, dst any) {

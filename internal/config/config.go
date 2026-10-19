@@ -29,6 +29,9 @@ type DockerConfig struct {
 	ReadOnlyRootfs bool
 	SandboxUID     int
 	SandboxGID     int
+	// AgentBin is the host path of the static sbx-agent binary. Empty keeps
+	// the shell exec and file path.
+	AgentBin string
 }
 
 // Limits are server-enforced ceilings. Zero values are replaced by Default.
@@ -121,6 +124,7 @@ type fileDocker struct {
 	ReadOnlyRootfs *bool   `yaml:"read_only_rootfs"`
 	SandboxUID     *int    `yaml:"sandbox_uid"`
 	SandboxGID     *int    `yaml:"sandbox_gid"`
+	AgentBin       *string `yaml:"agent_bin"`
 }
 
 type fileLimits struct {
@@ -181,6 +185,7 @@ func (f fileConfig) apply(cfg *Config) {
 		setBool(&cfg.Docker.ReadOnlyRootfs, d.ReadOnlyRootfs)
 		setInt(&cfg.Docker.SandboxUID, d.SandboxUID)
 		setInt(&cfg.Docker.SandboxGID, d.SandboxGID)
+		setString(&cfg.Docker.AgentBin, d.AgentBin)
 	}
 	if l := f.Limits; l != nil {
 		setInt(&cfg.Limits.DefaultTTLSeconds, l.DefaultTTLSeconds)
@@ -217,6 +222,7 @@ func applyEnv(cfg *Config) {
 	envBool(&cfg.Docker.ReadOnlyRootfs, "SBX_READ_ONLY_ROOTFS")
 	envInt(&cfg.Docker.SandboxUID, "SBX_SANDBOX_UID")
 	envInt(&cfg.Docker.SandboxGID, "SBX_SANDBOX_GID")
+	envString(&cfg.Docker.AgentBin, "SBX_AGENT_BIN")
 	envString(&cfg.Auth.BootstrapKey, "SBX_BOOTSTRAP_KEY")
 	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")

@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,6 +189,205 @@ func TestIntegrationFullNetworkBlocksPrivate(t *testing.T) {
 			t.Fatalf("%s was reachable on network=full", host)
 		}
 	}
+}
+
+func TestIntegrationAgent(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	bin := buildAgent(t)
+	d, err := New(Options{Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: 1 << 20, AgentBin: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	h, err := d.Create(ctx, driver.SandboxSpec{
+		ID: id.Sandbox(), Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+		Network: driver.NetNone, Env: map[string]string{"FOO": "bar"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
+
+	res, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "echo $FOO"}, TimeoutSeconds: 20})
+	if err != nil || res.ExitCode != 0 || string(res.Stdout) != "bar\n" {
+		t.Fatalf("env %+v %v", res, err)
+	}
+	if err := d.Mkdir(ctx, h.ID, "/workspace/sub", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WriteFile(ctx, h.ID, "/workspace/sub/note.txt", []byte("agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := d.StatFile(ctx, h.ID, "/workspace/sub/note.txt")
+	if err != nil || st.Type != driver.FileFile || st.Size != 6 {
+		t.Fatalf("stat %+v %v", st, err)
+	}
+	watchCtx, watchCancel := context.WithCancel(ctx)
+	defer watchCancel()
+	seen := make(chan driver.FileEvent, 1)
+	go func() {
+		_ = d.Watch(watchCtx, h.ID, "/workspace/sub", false, func(ev driver.FileEvent) error {
+			select {
+			case seen <- ev:
+			default:
+			}
+			return nil
+		})
+	}()
+	time.Sleep(300 * time.Millisecond)
+	if err := d.WriteFile(ctx, h.ID, "/workspace/sub/later.txt", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case ev := <-seen:
+		if ev.Type == "" || !strings.HasSuffix(ev.Path, "later.txt") {
+			t.Fatalf("%+v", ev)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch timed out")
+	}
+	watchCancel()
+
+	proc, err := d.StartProcess(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sleep", "30"}, TimeoutSeconds: 0}, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := d.ListProcesses(ctx, h.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range listed {
+		if item.ID == proc.ID && item.Status == "running" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%+v", listed)
+	}
+	if err := d.SignalProcess(ctx, h.ID, proc.ID, "KILL"); err != nil {
+		t.Fatal(err)
+	}
+
+	term, err := d.StartProcess(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh"}, TimeoutSeconds: 0}, true, 80, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	termCtx, termCancel := context.WithCancel(ctx)
+	defer termCancel()
+	got := make(chan string, 1)
+	var buf bytes.Buffer
+	var mu sync.Mutex
+	go func() {
+		_, _ = d.StreamProcess(termCtx, h.ID, term.ID, func(chunk driver.ExecChunk) error {
+			mu.Lock()
+			buf.Write(chunk.Data)
+			text := buf.String()
+			mu.Unlock()
+			if strings.Contains(text, "pty-ok") {
+				select {
+				case got <- text:
+				default:
+				}
+			}
+			return nil
+		})
+	}()
+	time.Sleep(200 * time.Millisecond)
+	if err := d.ResizeProcess(ctx, h.ID, term.ID, 100, 30); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.WriteProcessStdin(ctx, h.ID, term.ID, []byte("echo pty-ok\n")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-got:
+	case <-time.After(15 * time.Second):
+		mu.Lock()
+		text := buf.String()
+		mu.Unlock()
+		t.Fatalf("pty output %q", text)
+	}
+	_ = d.SignalProcess(ctx, h.ID, term.ID, "KILL")
+	termCancel()
+
+	httpd, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "command -v httpd"}, TimeoutSeconds: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if httpd.ExitCode != 0 {
+		t.Fatalf("alpine image has no httpd: %s", httpd.Stderr)
+	}
+	if err := d.WriteFile(ctx, h.ID, "/workspace/index.html", []byte("hello-preview"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = d.StartProcess(ctx, h.ID, driver.ExecRequest{
+		Cmd:            []string{"httpd", "-f", "-p", "127.0.0.1:18080", "-h", "/workspace"},
+		TimeoutSeconds: 0,
+	}, false, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var conn io.ReadWriteCloser
+	for {
+		conn, err = d.DialPort(ctx, h.ID, 18080)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal(err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "GET /index.html HTTP/1.0\r\nHost: localhost\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, 2048)
+	n, err := conn.Read(body)
+	if err != nil && n == 0 {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body[:n], []byte("hello-preview")) {
+		t.Fatalf("preview %q", body[:n])
+	}
+}
+
+func buildAgent(t *testing.T) string {
+	t.Helper()
+	if p := os.Getenv("SBX_AGENT_BIN"); p != "" {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found")
+		}
+		dir = parent
+	}
+	out := filepath.Join(t.TempDir(), "sbx-agent")
+	cmd := exec.Command("go", "build", "-o", out, "./cmd/sbx-agent")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	raw, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build agent: %v %s", err, raw)
+	}
+	return out
 }
 
 func TestIntegrationGVisorUnavailable(t *testing.T) {

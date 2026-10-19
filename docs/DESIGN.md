@@ -41,9 +41,11 @@ Docker, containerd, gVisor, Kata, and Kubernetes are Go-shaped ecosystems. A `CG
  │    docker (runc)                   │
  │    gvisor (docker + runsc)         │
  └────────────────────────────────────┘
-                 │  Engine API
+                 │  framed session
+                 │  (docker exec dial today,
+                 │   TCP later)
                  ▼
-            sandbox container
+            sbx-agent inside the sandbox
 ```
 
 Later backends (Kata, Firecracker, Kubernetes) and a controller/node split implement the same driver surface. They are not in v0.1, and there are no stub packages for them.
@@ -53,7 +55,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 - The command is `sbx serve`. `sbx server` is an alias. `controller` and `node` are not implemented.
 - The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. If that runtime is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is gVisor and `runsc` is absent.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
-- There is no in-guest agent. Exec and files use the Engine API. The Docker archive endpoints refuse a read-only rootfs and do not see tmpfs mounts, so file transfer is `cat`, `find`, and `tar` inside an exec. Images need `sh`, `cat`, `mkdir`, `chmod`, `rm`, `find`, `stat`, and `tar`. Distroless images will not work until an agent exists.
+- v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, and previews then go through one framed session. See [AGENT.md](AGENT.md). Archives still shell out to `tar`. With no binary configured, exec and files stay on the engine API and the new routes return `unsupported`.
 - The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real.
 - `network: none` is the default. `network: full` joins a dedicated bridge and rejects metadata, link-local, and private destinations (see the security baseline). An egress allow-list is rejected with HTTP 400 `unsupported`.
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
@@ -61,7 +63,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 
 ### Driver interface
 
-`internal/driver.Driver` is the extension point: ping, ensure image, create, delete, inspect, list, pause, resume, exec, exec stream, and file list/read/write/remove. v0.1 Docker and gVisor satisfy files and exec directly. A later driver can satisfy the same methods with an in-guest agent.
+`internal/driver.Driver` is the extension point: ping, ensure image, create, delete, inspect, list, pause, resume, exec, exec stream, and file list/read/write/remove. `driver.Guest` is the optional agent surface (stat, mkdir, watch, processes, PTY, dial). Docker implements it when `sbx-agent` is configured.
 
 ## 4. Backend ladder
 
@@ -89,6 +91,12 @@ POST   /v1/sandboxes/{id}/pause
 POST   /v1/sandboxes/{id}/resume
 POST   /v1/sandboxes/{id}/exec            wait
 POST   /v1/sandboxes/{id}/exec?stream=1   SSE: stdout, stderr, exit, error
+POST   /v1/sandboxes/{id}/processes      background command; timeout 0 means none
+GET    /v1/sandboxes/{id}/processes
+GET    /v1/sandboxes/{id}/processes/{procId}/stream
+POST   /v1/sandboxes/{id}/terminals      PTY; WebSocket at .../ws
+GET    /v1/sandboxes/{id}/files/watch     SSE
+POST   /v1/sandboxes/{id}/previews       loopback port, then proxy under .../{previewId}/
 
 GET    /v1/sandboxes/{id}/files?path=
 GET    /v1/sandboxes/{id}/files/content?path=
@@ -114,12 +122,13 @@ Defaults: bind `127.0.0.1:8080` (compose sets `SBX_ADDR=:8080`), TTL 300s (max 8
 
 ## 6. SDK
 
-`sdk/typescript` is `@sbx/sdk`. It has no runtime dependencies. `Sandbox.create` reads `SBX_URL` and `SBX_API_KEY`. Durations such as `"5m"` are converted to seconds in the SDK; the server wants integers. A string command is run as `sh -lc`. Python and Go SDKs are later.
+`sdk/typescript` is `@sbx/sdk`. It has no runtime dependencies and uses `fetch` plus the global `WebSocket`. `Sandbox.create` reads `SBX_URL` and `SBX_API_KEY` when `process` exists. Durations such as `"5m"` are converted to seconds in the SDK; the server wants integers. A string command is run as `sh -lc`. The SDK also covers exec streaming, processes, PTY sessions, file watches, and previews. Tests run on Node and Bun. Python and Go SDKs are later.
 
 ## 7. Layout
 
 ```
-cmd/sbx/                 binary
+cmd/sbx/                 server binary
+cmd/sbx-agent/           in-sandbox binary
 api/openapi.yaml         contract, embedded at /openapi.yaml
 internal/api/            HTTP
 internal/core/           lifecycle, reaper, templates
@@ -153,7 +162,7 @@ Inside that container the listen address has to be `:8080`. Binding only `127.0.
 
 `sbx doctor` checks the socket and warns when `runsc` is missing. `sbx keys create --name NAME` mints another key. `sbx healthcheck` hits `/healthz`, mapping `:8080` and `0.0.0.0` to `127.0.0.1`.
 
-Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`.
+Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
 
 The website is separate. [Deploying the website with Dokploy](website.md#deploying-the-website-with-dokploy) covers its build path, Dockerfile, and port.
 
@@ -174,8 +183,8 @@ The rules are installed once per process, before the first `network: full` conta
 
 In rough order, none of these are stubbed in the tree:
 
-1. An in-guest agent so exec, PTY, and files work on images without a shell, and on VM backends.
-2. Egress allow-lists and preview ports. Metadata and private-range blocking for `network: full` is already on.
+1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives still need `tar` in the image. Watches poll.
+2. Egress allow-lists. Preview URLs exist. Metadata and private-range blocking for `network: full` is already on.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
 5. Kata and Firecracker.
