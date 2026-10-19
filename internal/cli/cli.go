@@ -24,6 +24,8 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/driver/docker"
 	"github.com/TorstenDittmann/sbx/internal/id"
+	"github.com/TorstenDittmann/sbx/internal/probe"
+	"github.com/TorstenDittmann/sbx/internal/setup"
 	"github.com/TorstenDittmann/sbx/internal/store"
 	"github.com/TorstenDittmann/sbx/internal/version"
 )
@@ -33,6 +35,7 @@ const usageText = `sbx is a single-node sandbox server.
 Usage:
   sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor]
   sbx doctor [--config sbx.yaml]
+  sbx setup gvisor|kata|firecracker [--apply] [--data-dir ./data]
   sbx keys create --name NAME [--admin] [--data-dir ./data]
   sbx healthcheck
   sbx version
@@ -55,6 +58,8 @@ func Run(args []string) error {
 		return serve(args[1:])
 	case "doctor":
 		return doctor(args[1:])
+	case "setup":
+		return setupCmd(args[1:])
 	case "healthcheck":
 		return healthcheck(args[1:])
 	case "keys":
@@ -186,7 +191,7 @@ func doctor(args []string) error {
 	}
 	gvis := drivers["gvisor"].(*docker.Driver)
 	if err := gvis.Check(ctx); err != nil {
-		detail := err.Error() + " (optional unless --backend gvisor; install runsc and register it as a Docker runtime)"
+		detail := err.Error() + " (optional unless --backend gvisor; sbx setup gvisor prints the steps)"
 		if cfg.Backend == "gvisor" {
 			report(false, "gvisor", detail)
 		} else {
@@ -195,6 +200,7 @@ func doctor(args []string) error {
 	} else {
 		report(true, "gvisor", "runsc is registered")
 	}
+	reportHost(report, cfg)
 	report(true, "backend", cfg.Backend)
 	bin := agentBinary(cfg)
 	if bin == "" {
@@ -207,6 +213,81 @@ func doctor(args []string) error {
 	if !ok {
 		return errors.New("doctor found problems")
 	}
+	return nil
+}
+
+func reportHost(report func(bool, string, string), cfg config.Config) {
+	ok, detail := probe.KVM()
+	if ok {
+		report(true, "kvm", detail)
+	} else {
+		fmt.Printf("%-6s %s — %s\n", "warn", "kvm", detail+" (required for kata and firecracker)")
+	}
+	if path, found := probe.Which("containerd-shim-kata-v2"); found {
+		report(true, "kata shim", path)
+	} else if path, found := probe.Which("kata-runtime"); found {
+		report(true, "kata runtime", path)
+	} else {
+		fmt.Printf("%-6s %s — %s\n", "warn", "kata", "shim not on PATH (sbx setup kata)")
+	}
+	manifest := filepath.Join(cfg.DataDir, "firecracker", "manifest.json")
+	kernel := filepath.Join(cfg.DataDir, "firecracker", "vmlinux")
+	bin := filepath.Join(cfg.DataDir, "firecracker", "firecracker")
+	switch {
+	case probe.File(bin) && probe.File(kernel):
+		report(true, "firecracker", bin)
+		report(true, "kernel", kernel)
+	case probe.File(manifest):
+		fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", "manifest is incomplete")
+	default:
+		if path, found := probe.Which("firecracker"); found {
+			fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", path+" (no kernel in the data dir; sbx setup firecracker --apply)")
+		} else {
+			fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", "not installed (sbx setup firecracker --apply)")
+		}
+	}
+}
+
+func setupCmd(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: sbx setup gvisor|kata|firecracker [--apply]")
+	}
+	name := args[0]
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	apply := fs.Bool("apply", false, "download and write files")
+	dataDir := fs.String("data-dir", "", "data directory")
+	prefix := fs.String("prefix", "", "directory for downloaded binaries")
+	configPath := fs.String("config", os.Getenv("SBX_CONFIG"), "config file")
+	dockerConfig := fs.String("docker-config", "", "daemon.json to update")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	cfg, err := load(*configPath)
+	if err != nil {
+		return err
+	}
+	if *dataDir != "" {
+		cfg.DataDir = *dataDir
+	}
+	opt := setup.Options{DataDir: cfg.DataDir, Prefix: *prefix, Apply: *apply, DockerConfig: *dockerConfig}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	var res setup.Result
+	switch name {
+	case "gvisor":
+		res, err = setup.GVisor(ctx, opt)
+	case "kata":
+		res, err = setup.Kata(ctx, opt)
+	case "firecracker":
+		res, err = setup.Firecracker(ctx, opt)
+	default:
+		return fmt.Errorf("unknown setup target %q (use gvisor, kata, or firecracker)", name)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Fprint(os.Stdout, res.String())
 	return nil
 }
 

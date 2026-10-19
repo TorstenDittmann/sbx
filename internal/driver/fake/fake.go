@@ -72,8 +72,13 @@ func New(name string) *Driver {
 		level = "gvisor"
 	}
 	return &Driver{
-		name:     name,
-		caps:     driver.Caps{Pause: true, IsolationLevel: level},
+		name: name,
+		caps: driver.Caps{
+			Pause: true, NetPolicy: true, IsolationLevel: level,
+			Exec: true, Files: true, PTY: true, Watch: true, Preview: true,
+			Networks:     []driver.NetMode{driver.NetNone, driver.NetFull},
+			Requirements: []string{"docker"},
+		},
 		boxes:    map[string]*box{},
 		files:    map[string]map[string][]byte{},
 		dirs:     map[string]map[string]struct{}{},
@@ -105,6 +110,16 @@ func (d *Driver) Capabilities() driver.Caps {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.caps
+}
+
+// Report describes this fake. PingErr marks it unavailable.
+func (d *Driver) Report(ctx context.Context) driver.Info {
+	err := d.Ping(ctx)
+	detail := "ready"
+	if err != nil {
+		detail = err.Error()
+	}
+	return driver.Describe(d.Name(), d.Capabilities(), err == nil, detail)
 }
 
 func (d *Driver) Ping(context.Context) error { return d.PingErr }

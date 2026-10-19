@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,6 +72,7 @@ type TemplateInput struct {
 	MemoryMB     int
 	DiskMB       int
 	Env          map[string]string
+	Backend      string
 	Network      string
 	Setup        []string
 	SetupTimeout int
@@ -129,6 +131,57 @@ func (m *Manager) Driver(name string) (driver.Driver, bool) {
 	return d, ok
 }
 
+// ListBackends reports every ladder rung. A missing driver is unavailable,
+// not an error, so clients can show what this host can run.
+func (m *Manager) ListBackends(ctx context.Context) []driver.Info {
+	seen := map[string]bool{}
+	var out []driver.Info
+	for _, name := range driver.Known() {
+		seen[name] = true
+		out = append(out, m.backendInfo(ctx, name))
+	}
+	extra := make([]string, 0)
+	for name := range m.drivers {
+		if !seen[name] {
+			extra = append(extra, name)
+		}
+	}
+	sort.Strings(extra)
+	for _, name := range extra {
+		out = append(out, m.backendInfo(ctx, name))
+	}
+	return out
+}
+
+func (m *Manager) backendInfo(ctx context.Context, name string) driver.Info {
+	d, ok := m.drivers[name]
+	if !ok {
+		return driver.Info{
+			Name: name, Available: false, Detail: "not enabled on this server",
+			Networks: []string{}, Requirements: []string{},
+		}
+	}
+	if r, ok := d.(driver.Reporter); ok {
+		info := r.Report(ctx)
+		if info.Name == "" {
+			info.Name = name
+		}
+		if info.Networks == nil {
+			info.Networks = []string{}
+		}
+		if info.Requirements == nil {
+			info.Requirements = []string{}
+		}
+		return info
+	}
+	err := d.Ping(ctx)
+	detail := "ready"
+	if err != nil {
+		detail = err.Error()
+	}
+	return driver.Describe(name, d.Capabilities(), err == nil, detail)
+}
+
 // Seed installs the built-in templates.
 func (m *Manager) Seed(ctx context.Context) error {
 	now := m.now()
@@ -147,14 +200,6 @@ func (m *Manager) Seed(ctx context.Context) error {
 
 // Create starts a sandbox.
 func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (store.Sandbox, error) {
-	backend := in.Backend
-	if backend == "" {
-		backend = m.cfg.Backend
-	}
-	d, ok := m.drivers[backend]
-	if !ok {
-		return store.Sandbox{}, invalid("unknown backend " + backend)
-	}
 	if err := validEnv(in.Env); err != nil {
 		return store.Sandbox{}, err
 	}
@@ -193,6 +238,17 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	}
 	if err := validImage(image); err != nil {
 		return store.Sandbox{}, err
+	}
+	backend := in.Backend
+	if backend == "" {
+		backend = tpl.Backend
+	}
+	if backend == "" {
+		backend = m.cfg.Backend
+	}
+	d, ok := m.drivers[backend]
+	if !ok {
+		return store.Sandbox{}, invalid("unknown backend " + backend)
 	}
 	cpu := pickFloat(in.CPU, pickFloat(nilIfZero(tpl.CPU), m.cfg.Limits.DefaultCPU))
 	mem := pickInt(in.MemoryMB, pickInt(nilIfZeroInt(tpl.MemoryMB), m.cfg.Limits.DefaultMemoryMB))
@@ -714,6 +770,11 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return store.Template{}, err
 	}
+	if in.Backend != "" {
+		if _, ok := m.drivers[in.Backend]; !ok {
+			return store.Template{}, invalid("unknown backend " + in.Backend)
+		}
+	}
 	setup := in.Setup
 	if setup == nil {
 		setup = []string{}
@@ -721,7 +782,7 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 	t := store.Template{
 		Name: in.Name, Image: in.Image, Description: in.Description,
 		CPU: in.CPU, MemoryMB: in.MemoryMB, DiskMB: in.DiskMB, Env: nonNil(in.Env),
-		Network: network, Setup: setup, SetupTimeout: in.SetupTimeout, Warm: in.Warm,
+		Backend: in.Backend, Network: network, Setup: setup, SetupTimeout: in.SetupTimeout, Warm: in.Warm,
 		CreatedAt: m.now(),
 	}
 	if err := m.store.CreateTemplate(ctx, t); err != nil {

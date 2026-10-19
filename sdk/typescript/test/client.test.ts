@@ -228,6 +228,33 @@ test("client maps create, exec, files, and errors", async () => {
   await server.close()
 })
 
+test("listBackends returns the ladder", async () => {
+  const server = createServer((req, res) => {
+    if (req.url === "/v1/backends") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({
+        backends: [{
+          name: "docker", available: true, isolation: "container",
+          pause: true, snapshot: false, exec: true, pty: true, files: true,
+          watch: true, preview: true, networks: ["none", "full"], requirements: ["docker"],
+        }],
+      }))
+      return
+    }
+    res.writeHead(404)
+    res.end()
+  })
+  await listen(server)
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("no port")
+  const client = new SbxClient({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "sbx_testkey" })
+  const rows = await client.listBackends()
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].name, "docker")
+  assert.equal(rows[0].available, true)
+  await server.close()
+})
+
 async function listen(server: Server): Promise<void> {
   server.listen(0, "127.0.0.1")
   await once(server, "listening")

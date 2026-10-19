@@ -152,10 +152,31 @@ func (d *Driver) Name() string { return d.name }
 
 func (d *Driver) Capabilities() driver.Caps {
 	level := "container"
+	reqs := []string{"docker"}
 	if d.runtime != "" {
 		level = "gvisor"
+		reqs = append(reqs, d.runtime)
 	}
-	return driver.Caps{Pause: true, IsolationLevel: level}
+	guest := d.GuestEnabled()
+	return driver.Caps{
+		Pause: true, NetPolicy: true, IsolationLevel: level,
+		Exec: true, Files: true, PTY: guest, Watch: guest, Preview: guest,
+		Networks:     []driver.NetMode{driver.NetNone, driver.NetFull},
+		Requirements: reqs,
+	}
+}
+
+// Report probes the daemon and, for gVisor, the configured runtime.
+func (d *Driver) Report(ctx context.Context) driver.Info {
+	err := d.Check(ctx)
+	detail := "daemon reachable"
+	if d.runtime != "" && err == nil {
+		detail = d.runtime + " is registered"
+	}
+	if err != nil {
+		detail = err.Error()
+	}
+	return driver.Describe(d.name, d.Capabilities(), err == nil, detail)
 }
 
 func (d *Driver) Ping(ctx context.Context) error { return d.client.Ping(ctx) }

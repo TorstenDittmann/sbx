@@ -57,6 +57,7 @@ func (k APIKey) Admin() bool {
 }
 
 // Template is a named image plus optional resource defaults.
+// Backend, when set, is the default driver for sandboxes created from it.
 type Template struct {
 	Name         string
 	Image        string
@@ -65,6 +66,7 @@ type Template struct {
 	MemoryMB     int
 	DiskMB       int
 	Env          map[string]string
+	Backend      string
 	Network      string
 	Setup        []string
 	SetupTimeout int
@@ -181,6 +183,7 @@ func migrate(db *sql.DB) error {
 		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
 		{"templates", "setup_timeout_seconds", `ALTER TABLE templates ADD COLUMN setup_timeout_seconds INTEGER NOT NULL DEFAULT 0`},
+		{"templates", "backend", `ALTER TABLE templates ADD COLUMN backend TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, alt := range alters {
 		have, err := hasColumn(db, alt.table, alt.column)
@@ -237,6 +240,7 @@ CREATE TABLE IF NOT EXISTS templates (
     memory_mb INTEGER NOT NULL DEFAULT 0,
     disk_mb INTEGER NOT NULL DEFAULT 0,
     env_json TEXT NOT NULL DEFAULT '{}',
+    backend TEXT NOT NULL DEFAULT '',
     builtin INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     setup_json TEXT NOT NULL DEFAULT '[]',
@@ -355,8 +359,8 @@ func (s *Store) TouchKey(ctx context.Context, id string, at time.Time) error {
 func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
 	env := mustJSON(t.Env)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, '[]', 0, 'none', 0)
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, '[]', 0, 'none', 0)
 		ON CONFLICT(name) DO UPDATE SET
 			image = excluded.image,
 			description = excluded.description,
@@ -365,16 +369,16 @@ func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
 			disk_mb = excluded.disk_mb,
 			env_json = excluded.env_json,
 			builtin = 1`,
-		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, env, millis(t.CreatedAt))
+		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, env, t.Backend, millis(t.CreatedAt))
 	return err
 }
 
 // CreateTemplate inserts a user template. Names that already exist fail.
 func (s *Store) CreateTemplate(ctx context.Context, t Template) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
-		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), millis(t.CreatedAt),
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), t.Backend, millis(t.CreatedAt),
 		mustJSON(t.Setup), t.Warm, t.Network, t.SetupTimeout)
 	return err
 }
@@ -406,7 +410,7 @@ func (s *Store) DeleteTemplate(ctx context.Context, name string) error {
 // GetTemplate loads one template.
 func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at,
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at,
 		       setup_json, warm, network, setup_timeout_seconds
 		FROM templates WHERE name = ?`, name)
 	return scanTemplate(row)
@@ -415,7 +419,7 @@ func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) 
 // ListTemplates returns every template, built-ins first.
 func (s *Store) ListTemplates(ctx context.Context) ([]Template, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at,
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at,
 		       setup_json, warm, network, setup_timeout_seconds
 		FROM templates ORDER BY builtin DESC, name ASC`)
 	if err != nil {
@@ -655,7 +659,7 @@ func scanTemplate(row scanner) (Template, error) {
 	var env, setup, network string
 	var builtin, warm, setupTimeout int
 	var created int64
-	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &builtin, &created, &setup, &warm, &network, &setupTimeout)
+	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &t.Backend, &builtin, &created, &setup, &warm, &network, &setupTimeout)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Template{}, ErrNotFound
 	}

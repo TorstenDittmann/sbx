@@ -24,6 +24,7 @@ export type TemplateInfo = {
   memoryMb: number
   diskMb: number
   env?: Record<string, string>
+  backend?: string
   network: string
   setup: string[]
   setupTimeoutSeconds: number
@@ -40,6 +41,7 @@ export type CreateTemplateOptions = {
   memoryMb?: number
   diskMb?: number
   env?: Record<string, string>
+  backend?: "docker" | "gvisor"
   network?: "none" | "full"
   setup?: string[]
   setupTimeout?: number | string
@@ -91,6 +93,22 @@ export type NetworkPolicy = {
   deny?: string[]
   egressKbps?: number
   maxConnections?: number
+}
+
+export type BackendInfo = {
+  name: string
+  available: boolean
+  detail?: string
+  isolation: string
+  pause: boolean
+  snapshot: boolean
+  exec: boolean
+  pty: boolean
+  files: boolean
+  watch: boolean
+  preview: boolean
+  networks: Array<"none" | "full" | "allow" | string>
+  requirements: string[]
 }
 
 export type CreateSandboxOptions = {
@@ -278,6 +296,7 @@ type TemplateJSON = {
   memory_mb: number
   disk_mb: number
   env?: Record<string, string>
+  backend?: string
   network: string
   setup?: string[]
   setup_timeout_seconds?: number
@@ -295,6 +314,7 @@ function mapTemplate(raw: TemplateJSON): TemplateInfo {
     memoryMb: raw.memory_mb,
     diskMb: raw.disk_mb,
     env: raw.env,
+    backend: raw.backend,
     network: raw.network,
     setup: raw.setup ?? [],
     setupTimeoutSeconds: raw.setup_timeout_seconds ?? 0,
@@ -427,6 +447,7 @@ export class SbxClient {
     if (options.memoryMb != null) body.memory_mb = options.memoryMb
     if (options.diskMb != null) body.disk_mb = options.diskMb
     if (options.env) body.env = options.env
+    if (options.backend) body.backend = options.backend
     if (options.network) body.network = options.network
     if (options.setup) body.setup = options.setup
     if (options.setupTimeout != null) body.setup_timeout_seconds = parseDuration(options.setupTimeout)
@@ -455,6 +476,10 @@ export class SbxClient {
 
   getSandbox(id: string): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("GET", `/v1/sandboxes/${encodeURIComponent(id)}`).then(mapSandbox)
+  }
+
+  listBackends(): Promise<BackendInfo[]> {
+    return this.requestJSON<{ backends: BackendInfo[] }>("GET", "/v1/backends").then((body) => body.backends)
   }
 
   listSandboxes(query: { status?: string; backend?: string; template?: string; q?: string; labels?: Record<string, string> } = {}): Promise<SandboxInfo[]> {
