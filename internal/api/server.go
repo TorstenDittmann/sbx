@@ -60,6 +60,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/keys", s.auth("admin", s.createKey))
 	mux.HandleFunc("GET /v1/keys", s.auth("admin", s.listKeys))
 
+	mux.HandleFunc("GET /v1/backends", s.auth("sandbox", s.listBackends))
 	mux.HandleFunc("GET /v1/templates", s.auth("sandbox", s.listTemplates))
 	mux.HandleFunc("POST /v1/templates", s.auth("admin", s.createTemplate))
 	mux.HandleFunc("DELETE /v1/templates/{name}", s.auth("admin", s.deleteTemplate))
@@ -351,6 +352,20 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
 
+func (s *Server) listBackends(w http.ResponseWriter, r *http.Request) {
+	items := s.mgr.ListBackends(r.Context())
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, map[string]any{
+			"name": item.Name, "available": item.Available, "detail": item.Detail,
+			"isolation": item.Isolation, "pause": item.Pause, "snapshot": item.Snapshot,
+			"exec": item.Exec, "pty": item.PTY, "files": item.Files, "watch": item.Watch,
+			"preview": item.Preview, "networks": item.Networks, "requirements": item.Requirements,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"backends": out})
+}
+
 func (s *Server) listTemplates(w http.ResponseWriter, r *http.Request) {
 	items, err := s.mgr.ListTemplates(r.Context())
 	if err != nil {
@@ -373,6 +388,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		MemoryMB     int               `json:"memory_mb"`
 		DiskMB       int               `json:"disk_mb"`
 		Env          map[string]string `json:"env"`
+		Backend      string            `json:"backend"`
 		Network      string            `json:"network"`
 		Setup        []string          `json:"setup"`
 		SetupTimeout int               `json:"setup_timeout_seconds"`
@@ -385,7 +401,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 	t, err := s.mgr.CreateTemplate(r.Context(), core.TemplateInput{
 		Name: body.Name, Image: body.Image, Description: body.Description,
 		CPU: body.CPU, MemoryMB: body.MemoryMB, DiskMB: body.DiskMB, Env: body.Env,
-		Network: body.Network, Setup: body.Setup, SetupTimeout: body.SetupTimeout, Warm: body.Warm,
+		Backend: body.Backend, Network: body.Network, Setup: body.Setup, SetupTimeout: body.SetupTimeout, Warm: body.Warm,
 	})
 	if err != nil {
 		writeManager(w, err)
@@ -881,7 +897,7 @@ func templateJSON(t store.Template) map[string]any {
 	return map[string]any{
 		"name": t.Name, "image": t.Image, "description": t.Description,
 		"cpu": t.CPU, "memory_mb": t.MemoryMB, "disk_mb": t.DiskMB,
-		"env": t.Env, "network": network, "setup": setup,
+		"env": t.Env, "backend": t.Backend, "network": network, "setup": setup,
 		"setup_timeout_seconds": t.SetupTimeout, "warm": t.Warm,
 		"builtin": t.Builtin, "created_at": t.CreatedAt,
 	}

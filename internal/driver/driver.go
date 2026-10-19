@@ -39,8 +39,9 @@ const (
 type NetMode string
 
 const (
-	NetNone NetMode = "none"
-	NetFull NetMode = "full"
+	NetNone  NetMode = "none"
+	NetFull  NetMode = "full"
+	NetAllow NetMode = "allow"
 )
 
 // NetPolicy is the egress policy for one sandbox on a connected network.
@@ -62,6 +63,62 @@ type Caps struct {
 	Snapshot       bool
 	NetPolicy      bool
 	IsolationLevel string
+	// Exec is true when the backend can run a command.
+	Exec bool
+	// PTY, Watch, and Preview need the in-sandbox agent.
+	PTY     bool
+	Files   bool
+	Watch   bool
+	Preview bool
+	// Networks lists the modes Create accepts.
+	Networks []NetMode
+	// Requirements are host dependencies (docker, kvm, ...).
+	Requirements []string
+}
+
+// Info is one row of GET /v1/backends.
+type Info struct {
+	Name         string
+	Available    bool
+	Detail       string
+	Isolation    string
+	Pause        bool
+	Snapshot     bool
+	Exec         bool
+	PTY          bool
+	Files        bool
+	Watch        bool
+	Preview      bool
+	Networks     []string
+	Requirements []string
+}
+
+// Reporter is implemented by drivers that can say whether they are usable.
+type Reporter interface {
+	Report(ctx context.Context) Info
+}
+
+// Known is the backend ladder, in order.
+func Known() []string {
+	return []string{"docker", "gvisor", "kata", "firecracker"}
+}
+
+// Describe turns capabilities into an API row. available and detail come from a probe.
+func Describe(name string, caps Caps, available bool, detail string) Info {
+	nets := make([]string, 0, len(caps.Networks))
+	for _, n := range caps.Networks {
+		nets = append(nets, string(n))
+	}
+	reqs := caps.Requirements
+	if reqs == nil {
+		reqs = []string{}
+	}
+	return Info{
+		Name: name, Available: available, Detail: detail, Isolation: caps.IsolationLevel,
+		Pause: caps.Pause, Snapshot: caps.Snapshot, Exec: caps.Exec, PTY: caps.PTY,
+		Files: caps.Files, Watch: caps.Watch, Preview: caps.Preview,
+		Networks: nets, Requirements: reqs,
+	}
 }
 
 // Mount attaches a named volume at a path inside the sandbox.

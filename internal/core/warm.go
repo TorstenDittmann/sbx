@@ -31,7 +31,10 @@ func (m *Manager) Replenish(ctx context.Context) {
 }
 
 func (m *Manager) fillTemplate(ctx context.Context, tpl store.Template) error {
-	backend := m.cfg.Backend
+	backend := tpl.Backend
+	if backend == "" {
+		backend = m.cfg.Backend
+	}
 	for {
 		n, err := m.store.CountWarm(ctx, tpl.Name, backend)
 		if err != nil {

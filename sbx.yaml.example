@@ -29,7 +29,9 @@ limits:
   requests_per_minute: 1200
 
 auth:
-  # Optional. When set, the first boot uses this key instead of generating one.
+  # Optional. Pin a backend on a template via POST /v1/templates {"backend":"gvisor"}.
+# sbx setup gvisor|kata|firecracker prepares host assets. --apply downloads them.
+# Optional. When set, the first boot uses this key instead of generating one.
   # bootstrap_key: sbx_replace_me
 
 # Sandboxes stay offline until default_mode is full or allow.

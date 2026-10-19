@@ -211,25 +211,39 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Runtime is one entry from the daemon's runtime table.
+type Runtime struct {
+	Name        string
+	Path        string
+	RuntimeType string
+}
+
 // Info is a subset of GET /info.
 type Info struct {
 	ServerVersion string
 	Runtimes      map[string]struct{}
+	RuntimeInfo   map[string]Runtime
 }
 
 func (c *Client) Info(ctx context.Context) (Info, error) {
 	var raw struct {
 		ServerVersion string `json:"ServerVersion"`
 		Runtimes      map[string]struct {
-			Path string `json:"path"`
+			Path        string `json:"path"`
+			RuntimeType string `json:"runtimeType"`
 		} `json:"Runtimes"`
 	}
 	if err := c.DoJSON(ctx, http.MethodGet, "/info", nil, &raw); err != nil {
 		return Info{}, err
 	}
-	info := Info{ServerVersion: raw.ServerVersion, Runtimes: map[string]struct{}{}}
-	for name := range raw.Runtimes {
+	info := Info{
+		ServerVersion: raw.ServerVersion,
+		Runtimes:      map[string]struct{}{},
+		RuntimeInfo:   map[string]Runtime{},
+	}
+	for name, rt := range raw.Runtimes {
 		info.Runtimes[name] = struct{}{}
+		info.RuntimeInfo[name] = Runtime{Name: name, Path: rt.Path, RuntimeType: rt.RuntimeType}
 	}
 	return info, nil
 }

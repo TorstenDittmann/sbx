@@ -79,6 +79,21 @@ func TestDoctor(t *testing.T) {
 	}
 }
 
+func TestSetupPlans(t *testing.T) {
+	dir := t.TempDir()
+	if err := Run([]string{"setup"}); err == nil {
+		t.Fatal("expected usage")
+	}
+	if err := Run([]string{"setup", "nope", "--data-dir", dir}); err == nil {
+		t.Fatal("expected unknown target")
+	}
+	for _, name := range []string{"gvisor", "kata", "firecracker"} {
+		if err := Run([]string{"setup", name, "--data-dir", dir}); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+}
+
 func TestHealthcheck(t *testing.T) {
 	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {

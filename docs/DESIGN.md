@@ -111,6 +111,7 @@ GET    /v1/volumes
 GET    /v1/volumes/{id}
 DELETE /v1/volumes/{id}                   409 while a live sandbox mounts it
 
+GET    /v1/backends
 GET    /v1/templates
 POST   /v1/templates                      admin
 DELETE /v1/templates/{name}               admin; built-ins return 403
@@ -120,9 +121,11 @@ GET    /v1/keys                           admin
 GET    /  /healthz  /metrics  /openapi.yaml
 ```
 
-Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
+Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. A template may pin `backend`. Create uses the request backend, then the template backend, then the server default. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
 
 A user template may set `warm` (0–8), `setup` (an argv run once before the sandbox is offered), `setup_timeout_seconds`, and `network`. The reaper keeps that many sandboxes in status `warm`, owned by `sbx-system`, so they do not use a key's quota and they are not expired by TTL. Create claims the oldest match when the request does not override image, cpu, memory, disk, pids, backend, network, env, secrets, or mounts. Otherwise sbx starts a new sandbox and runs `setup` then. Startup and the reaper refill the pool. `GET /v1/sandboxes` hides `warm` unless the caller is an admin and asks for `status=warm`.
+
+`GET /v1/backends` lists the ladder (`docker`, `gvisor`, `kata`, `firecracker`) with `available` and the features that driver implements. Kata and Firecracker are reported as not enabled until those drivers are configured. `sbx doctor` checks KVM, the Kata shim, and a Firecracker kernel under the data directory. `sbx setup gvisor|kata|firecracker` prints the install plan; `--apply` downloads pinned assets and, for the container runtimes, merges a Docker `runtimes` entry without restarting the daemon.
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
 

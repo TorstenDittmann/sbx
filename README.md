@@ -86,7 +86,7 @@ docker compose up --build
 
 The server listens on container port 8080 (`SBX_ADDR=:8080`). `./data` on the host holds SQLite and the initial API key. The compose file mounts the Docker socket; that is the host socket, not something sandboxes can see.
 
-`sbx doctor` reports whether Docker answers and whether the `runsc` runtime is registered. Select gVisor per sandbox with `"backend": "gvisor"`, or set `SBX_BACKEND=gvisor` after `runsc` is installed. A missing runtime is an error.
+`sbx doctor` reports whether Docker answers, whether the `runsc` runtime is registered, whether `/dev/kvm` is writable, and whether Kata or Firecracker assets are present. Select gVisor per sandbox with `"backend": "gvisor"`, or set `SBX_BACKEND=gvisor` after `runsc` is installed. A missing runtime is an error. `sbx setup gvisor`, `sbx setup kata`, and `sbx setup firecracker` print the host steps; add `--apply` to download pinned binaries and register a Docker runtime. `GET /v1/backends` returns the same picture to API clients. A template's `backend` field is the default for sandboxes created from it.
 
 Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment variables, which override the file.
 
