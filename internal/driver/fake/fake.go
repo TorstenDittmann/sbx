@@ -31,7 +31,7 @@ type Driver struct {
 	Deleted      []string
 	TruncateExec bool
 	ExecCode     int
-	execs        [][]string
+	execs        []ExecCall
 	// NoGuest makes the optional agent surface report itself disabled.
 	NoGuest bool
 	// DialErr is returned by DialPort when set.
@@ -226,6 +226,21 @@ func (d *Driver) Resume(_ context.Context, id string) error {
 	return nil
 }
 
+// ExecCall is one recorded exec.
+type ExecCall struct {
+	Cmd []string
+	Env map[string]string
+}
+
+// Execs returns commands the fake has run.
+func (d *Driver) Execs() []ExecCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]ExecCall, len(d.execs))
+	copy(out, d.execs)
+	return out
+}
+
 func (d *Driver) Exec(_ context.Context, id string, req driver.ExecRequest) (driver.ExecResult, error) {
 	return d.run(id, req, nil)
 }
@@ -234,22 +249,16 @@ func (d *Driver) ExecStream(_ context.Context, id string, req driver.ExecRequest
 	return d.run(id, req, emit)
 }
 
-func (d *Driver) Execs() [][]string {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([][]string, len(d.execs))
-	for i, cmd := range d.execs {
-		out[i] = append([]string(nil), cmd...)
-	}
-	return out
-}
-
 func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
 	d.mu.Lock()
 	b, ok := d.boxes[id]
 	truncate := d.TruncateExec
 	if ok {
-		d.execs = append(d.execs, append([]string(nil), req.Cmd...))
+		env := map[string]string{}
+		for k, v := range req.Env {
+			env[k] = v
+		}
+		d.execs = append(d.execs, ExecCall{Cmd: append([]string(nil), req.Cmd...), Env: env})
 	}
 	code := d.ExecCode
 	d.mu.Unlock()

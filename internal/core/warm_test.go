@@ -43,7 +43,7 @@ func TestWarmPoolClaimAndSetup(t *testing.T) {
 	if err != nil || len(warm) != 1 || warm[0].Status != "warm" || warm[0].Network != "full" {
 		t.Fatalf("%+v %v", warm, err)
 	}
-	if len(fd.Execs()) == 0 || fd.Execs()[len(fd.Execs())-1][0] != "echo" {
+	if len(fd.Execs()) == 0 || fd.Execs()[len(fd.Execs())-1].Cmd[0] != "echo" {
 		t.Fatal(fd.Execs())
 	}
 	listed, err := mgr.List(ctx, actor, "", "", nil)

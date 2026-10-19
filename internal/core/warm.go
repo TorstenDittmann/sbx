@@ -196,7 +196,7 @@ func warmCompatible(in CreateInput, tpl store.Template, backend string, baseCPU 
 	if in.Network != "" && in.Network != wantNet {
 		return false
 	}
-	if len(in.Allow) > 0 || in.HasDeny || in.EgressKbps != nil || in.MaxConns != nil || len(in.Mounts) > 0 {
+	if len(in.Allow) > 0 || in.HasDeny || in.EgressKbps != nil || in.MaxConns != nil || len(in.Mounts) > 0 || len(in.Secrets) > 0 {
 		return false
 	}
 	for k, v := range in.Env {

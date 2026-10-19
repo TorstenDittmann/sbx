@@ -129,7 +129,7 @@ func (m *Manager) StartProcess(ctx context.Context, actor Actor, sandboxID strin
 	if err != nil {
 		return driver.Process{}, err
 	}
-	req, err := m.execReq(in)
+	req, err := m.execReq(in, sb.Secrets)
 	if err != nil {
 		return driver.Process{}, err
 	}

@@ -63,6 +63,7 @@ export type SandboxInfo = {
   maxConnections?: number
   env?: Record<string, string>
   labels?: Record<string, string>
+  secretKeys?: string[]
   idleTimeoutSeconds?: number
   expiresAt: string
   createdAt: string
@@ -106,6 +107,7 @@ export type CreateSandboxOptions = {
   backend?: "docker" | "gvisor"
   labels?: Record<string, string>
   mounts?: VolumeMount[]
+  secrets?: Record<string, string>
 }
 
 export type ExecResult = {
@@ -214,6 +216,7 @@ type SandboxJSON = {
   max_connections?: number
   env?: Record<string, string>
   labels?: Record<string, string>
+  secret_keys?: string[]
   idle_timeout_seconds?: number
   expires_at: string
   created_at: string
@@ -254,6 +257,7 @@ function mapSandbox(raw: SandboxJSON): SandboxInfo {
     maxConnections: raw.max_connections,
     env: raw.env,
     labels: raw.labels,
+    secretKeys: raw.secret_keys,
     idleTimeoutSeconds: raw.idle_timeout_seconds,
     expiresAt: raw.expires_at,
     createdAt: raw.created_at,
@@ -343,6 +347,7 @@ function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   if (options.mounts) {
     body.mounts = options.mounts.map((mount) => ({ volume_id: mount.volumeId, path: mount.path }))
   }
+  if (options.secrets) body.secrets = options.secrets
   return body
 }
 
@@ -467,6 +472,10 @@ export class SbxClient {
 
   deleteSandbox(id: string): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("DELETE", `/v1/sandboxes/${encodeURIComponent(id)}`).then(mapSandbox)
+  }
+
+  setSecrets(id: string, secrets: Record<string, string>): Promise<SandboxInfo> {
+    return this.requestJSON<SandboxJSON>("PUT", `/v1/sandboxes/${encodeURIComponent(id)}/secrets`, { secrets }).then(mapSandbox)
   }
 
   setTTL(id: string, ttl: number | string): Promise<SandboxInfo> {
@@ -881,6 +890,7 @@ export class Sandbox {
   network: string
   env?: Record<string, string>
   labels?: Record<string, string>
+  secretKeys?: string[]
   idleTimeoutSeconds?: number
   expiresAt: string
   createdAt: string
@@ -903,6 +913,7 @@ export class Sandbox {
     this.network = info.network
     this.env = info.env
     this.labels = info.labels
+    this.secretKeys = info.secretKeys
     this.idleTimeoutSeconds = info.idleTimeoutSeconds
     this.expiresAt = info.expiresAt
     this.createdAt = info.createdAt

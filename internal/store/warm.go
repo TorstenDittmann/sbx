@@ -46,7 +46,7 @@ func (s *Store) ClaimWarm(ctx context.Context, template, backend, owner string, 
 		RETURNING id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
 		          env_json, network, allow_json, deny_json, egress_kbps, max_conns,
 		          labels_json, owner_key_id, created_at, expires_at,
-		          idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json`,
+		          idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json`,
 		owner, millis(expires), idle, millis(now), millis(now), mustJSON(labels), template, backend)
 	return scanSandbox(row)
 }
