@@ -185,7 +185,7 @@ The baseline is installed once per process, before the first networked container
 
 In rough order, none of these are stubbed in the tree:
 
-1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives still need `tar` in the image. Watches poll.
+1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives still need `tar` in the image. Watches use inotify, with a poll fallback when inotify is unavailable.
 2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Metadata and private-range blocking stay on by default.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.

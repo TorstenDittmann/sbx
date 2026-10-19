@@ -529,35 +529,17 @@ func (a *Agent) handleWatch(s *Stream, frame Frame) {
 		a.fail(s, err)
 		return
 	}
-	prev, err := snapshot(root, body.Recursive)
-	if err != nil {
+	if _, err := os.Lstat(root); err != nil {
 		a.fail(s, err)
 		return
 	}
-	_ = s.Send(MsgOK, []byte(`{}`))
-	every := a.watchEvery
-	if every <= 0 {
-		every = 200 * time.Millisecond
-	}
-	ticker := time.NewTicker(every)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			cur, err := snapshot(root, body.Recursive)
-			if err != nil {
-				a.fail(s, err)
-				return
-			}
-			for _, ev := range diffSnapshot(prev, cur) {
-				if err := s.Send(MsgFileEvent, mustJSON(ev)); err != nil {
-					return
-				}
-			}
-			prev = cur
-		}
+	err = a.watchFiles(s.ctx, root, body.Recursive, func() error {
+		return s.Send(MsgOK, []byte(`{}`))
+	}, func(ev FileEvent) error {
+		return s.Send(MsgFileEvent, mustJSON(ev))
+	})
+	if err != nil && s.ctx.Err() == nil {
+		a.fail(s, err)
 	}
 }
 

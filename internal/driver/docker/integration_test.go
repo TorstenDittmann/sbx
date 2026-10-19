@@ -243,7 +243,7 @@ func TestIntegrationAgent(t *testing.T) {
 	}
 	select {
 	case ev := <-seen:
-		if ev.Type == "" || !strings.HasSuffix(ev.Path, "later.txt") {
+		if (ev.Type != "create" && ev.Type != "write") || !strings.HasSuffix(ev.Path, "later.txt") || strings.Contains(ev.Path, ".sbx-tmp") {
 			t.Fatalf("%+v", ev)
 		}
 	case <-time.After(5 * time.Second):

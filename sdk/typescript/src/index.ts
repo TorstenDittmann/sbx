@@ -122,6 +122,7 @@ export type CreatedKey = {
   network: NetworkPolicy
 }
 
+/** A filesystem change inside a sandbox. `type` is `create`, `write`, or `remove`. */
 export type FileEvent = {
   type: string
   path: string
@@ -399,6 +400,7 @@ export class SbxClient {
     return this.requestJSON("POST", `/v1/sandboxes/${encodeURIComponent(id)}/files/mkdir`, body)
   }
 
+  /** Stream create, write, and remove events. The agent uses inotify and polls if inotify is unavailable. */
   async *watch(id: string, path: string, options: { recursive?: boolean } = {}): AsyncGenerator<FileEvent> {
     const q = new URLSearchParams({ path })
     if (options.recursive) q.set("recursive", "1")
