@@ -20,10 +20,36 @@ type Driver struct {
 	caps         driver.Caps
 	boxes        map[string]*box
 	files        map[string]map[string][]byte
+	dirs         map[string]map[string]struct{}
+	procs        map[string]map[string]*proc
+	watchers     map[string][]*watch
+	seq          int
 	PingErr      error
 	CreateErr    error
 	Deleted      []string
 	TruncateExec bool
+	// NoGuest makes the optional agent surface report itself disabled.
+	NoGuest bool
+	// DialErr is returned by DialPort when set.
+	DialErr error
+	// DropDial accepts a preview connection and closes it without a response.
+	DropDial bool
+}
+
+type proc struct {
+	info  driver.Process
+	stdin []byte
+	cols  int
+	rows  int
+	exit  int
+	done  chan struct{}
+	once  sync.Once
+}
+
+type watch struct {
+	path      string
+	recursive bool
+	ch        chan driver.FileEvent
 }
 
 type box struct {
@@ -42,10 +68,13 @@ func New(name string) *Driver {
 		level = "gvisor"
 	}
 	return &Driver{
-		name:  name,
-		caps:  driver.Caps{Pause: true, IsolationLevel: level},
-		boxes: map[string]*box{},
-		files: map[string]map[string][]byte{},
+		name:     name,
+		caps:     driver.Caps{Pause: true, IsolationLevel: level},
+		boxes:    map[string]*box{},
+		files:    map[string]map[string][]byte{},
+		dirs:     map[string]map[string]struct{}{},
+		procs:    map[string]map[string]*proc{},
+		watchers: map[string][]*watch{},
 	}
 }
 
@@ -96,6 +125,9 @@ func (d *Driver) Delete(_ context.Context, id string) error {
 	d.Deleted = append(d.Deleted, id)
 	delete(d.boxes, id)
 	delete(d.files, id)
+	delete(d.dirs, id)
+	delete(d.procs, id)
+	delete(d.watchers, id)
 	return nil
 }
 
@@ -170,8 +202,12 @@ func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChu
 		stdout = []byte(strings.Join(req.Cmd[1:], " ") + "\n")
 	}
 	if req.Stdin != nil {
-		if _, err := io.ReadAll(req.Stdin); err != nil {
+		b, err := io.ReadAll(req.Stdin)
+		if err != nil {
 			return driver.ExecResult{}, err
+		}
+		if len(req.Cmd) > 0 && req.Cmd[0] == "cat" {
+			stdout = b
 		}
 	}
 	if emit != nil && len(stdout) > 0 {
@@ -243,6 +279,7 @@ func (d *Driver) WriteFile(_ context.Context, id, path string, content []byte, _
 	buf := make([]byte, len(content))
 	copy(buf, content)
 	d.files[id][path] = buf
+	d.notify(id, driver.FileEvent{Type: "write", Path: path})
 	return nil
 }
 

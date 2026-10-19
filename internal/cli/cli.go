@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -39,6 +40,7 @@ Usage:
 Environment (overrides the config file):
   SBX_ADDR SBX_DATA_DIR SBX_BACKEND SBX_DOCKER_HOST SBX_BOOTSTRAP_KEY
   SBX_GVISOR_RUNTIME SBX_READ_ONLY_ROOTFS SBX_LOG_LEVEL SBX_CONFIG
+  SBX_AGENT_BIN
 `
 
 // Run executes a command. args is os.Args[1:].
@@ -82,6 +84,12 @@ func serve(args []string) error {
 	}
 	defer st.Close()
 
+	cfg.Docker.AgentBin = agentBinary(cfg)
+	if cfg.Docker.AgentBin == "" {
+		log.Warn("sbx-agent not found; exec and files use a shell inside the image")
+	} else {
+		log.Info("sandbox agent", "path", cfg.Docker.AgentBin)
+	}
 	drivers, err := openDrivers(cfg)
 	if err != nil {
 		return err
@@ -182,6 +190,14 @@ func doctor(args []string) error {
 		report(true, "gvisor", "runsc is registered")
 	}
 	report(true, "backend", cfg.Backend)
+	bin := agentBinary(cfg)
+	if bin == "" {
+		fmt.Printf("%-6s %s — %s\n", "warn", "agent", "sbx-agent not found; exec and files use a shell inside the image")
+	} else if st, err := os.Stat(bin); err != nil || st.IsDir() {
+		report(false, "agent", bin)
+	} else {
+		report(true, "agent", bin)
+	}
 	if !ok {
 		return errors.New("doctor found problems")
 	}
@@ -287,6 +303,7 @@ func loadFlags(name string, args []string) (config.Config, error) {
 	dataDir := fs.String("data-dir", "", "data directory")
 	backend := fs.String("backend", "", "docker or gvisor")
 	dockerHost := fs.String("docker-host", "", "docker socket")
+	agentBin := fs.String("agent-bin", "", "path to the sbx-agent binary")
 	bootstrap := fs.String("bootstrap-key", "", "API key created on first boot")
 	if err := fs.Parse(args); err != nil {
 		return config.Config{}, err
@@ -307,6 +324,9 @@ func loadFlags(name string, args []string) (config.Config, error) {
 	if *dockerHost != "" {
 		cfg.Docker.Host = *dockerHost
 	}
+	if *agentBin != "" {
+		cfg.Docker.AgentBin = *agentBin
+	}
 	if *bootstrap != "" {
 		cfg.Auth.BootstrapKey = *bootstrap
 	}
@@ -325,6 +345,22 @@ func load(path string) (config.Config, error) {
 	return config.Load(path)
 }
 
+func agentBinary(cfg config.Config) string {
+	if cfg.Docker.AgentBin != "" {
+		return cfg.Docker.AgentBin
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(exe), "sbx-agent")
+	st, err := os.Stat(candidate)
+	if err != nil || st.IsDir() {
+		return ""
+	}
+	return candidate
+}
+
 func openDrivers(cfg config.Config) (map[string]driver.Driver, error) {
 	base := docker.Options{
 		Host:           cfg.Docker.Host,
@@ -332,6 +368,7 @@ func openDrivers(cfg config.Config) (map[string]driver.Driver, error) {
 		UID:            cfg.Docker.SandboxUID,
 		GID:            cfg.Docker.SandboxGID,
 		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
+		AgentBin:       agentBinary(cfg),
 	}
 	dockOpt := base
 	dockOpt.Name = "docker"

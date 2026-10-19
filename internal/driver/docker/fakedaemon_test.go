@@ -33,6 +33,9 @@ type fakeDaemon struct {
 	failStart  bool
 	failPull   bool
 	pullGhost  bool
+	volumes    map[string]map[string]string
+	archives   map[string][]byte
+	onAttach   func(stdin io.Reader, stdout io.Writer)
 }
 
 type fakeContainer struct {
@@ -48,6 +51,8 @@ func startFakeDaemon(t *testing.T) (*fakeDaemon, string) {
 		containers: map[string]*fakeContainer{},
 		execs:      map[string]string{},
 		runtimes:   map[string]bool{"runc": true},
+		volumes:    map[string]map[string]string{},
+		archives:   map[string][]byte{},
 	}
 	ln, err := net.Listen("unix", t.TempDir()+"/docker.sock")
 	if err != nil {
@@ -205,7 +210,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"Id": id, "State": map[string]any{"Status": ctn.status, "Running": ctn.status == "running", "Paused": ctn.status == "paused"},
-			"Config": map[string]any{"Image": ctn.body.Image, "Labels": ctn.body.Labels},
+			"Config": map[string]any{"Image": ctn.body.Image, "Labels": ctn.body.Labels, "Env": ctn.body.Env},
 		})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/exec"):
 		var body execConfig
@@ -217,6 +222,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		writeJSON(w, http.StatusCreated, map[string]string{"Id": id})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/exec/") && strings.HasSuffix(p, "/start"):
+		_, _ = io.Copy(io.Discard, r.Body)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "no hijack", 500)
@@ -231,7 +237,12 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = bufrw.Flush()
 		f.mu.Lock()
 		cmd := strings.Join(f.lastCmd, " ")
+		bridge := f.onAttach
 		f.mu.Unlock()
+		if bridge != nil && strings.Contains(cmd, "sbx-agent") && strings.Contains(cmd, "dial") {
+			bridge(bufrw, conn)
+			return
+		}
 		stdout := "hello\n"
 		if strings.Contains(cmd, "stat -c") {
 			stdout = "regular file|5|1700000000|81a4|/workspace/a.txt\n" +
@@ -240,6 +251,49 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeFrame(conn, 1, stdout)
 		writeFrame(conn, 2, "warn\n")
+	case r.Method == http.MethodPost && p == "/v1.44/volumes/create":
+		var body struct {
+			Name   string            `json:"Name"`
+			Labels map[string]string `json:"Labels"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		f.mu.Lock()
+		_, exists := f.volumes[body.Name]
+		if !exists {
+			if body.Labels == nil {
+				body.Labels = map[string]string{}
+			}
+			f.volumes[body.Name] = body.Labels
+		}
+		f.mu.Unlock()
+		if exists {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "volume exists"})
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"Name": body.Name})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/volumes/"):
+		name := strings.TrimPrefix(p, "/v1.44/volumes/")
+		f.mu.Lock()
+		labels, ok := f.volumes[name]
+		f.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such volume"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"Name": name, "Labels": labels})
+	case r.Method == http.MethodPut && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/archive"):
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		f.mu.Lock()
+		f.archives[containerID(p)] = body
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/exec/") && strings.HasSuffix(p, "/json"):
 		f.mu.Lock()
 		code := f.execCode

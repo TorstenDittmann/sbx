@@ -34,6 +34,9 @@ func validEnv(env map[string]string) error {
 		if !envKeyRE.MatchString(k) {
 			return fmtInvalid("invalid env name %q", k)
 		}
+		if strings.HasPrefix(k, "SBX_AGENT_") {
+			return fmtInvalid("env %q is reserved", k)
+		}
 		if strings.ContainsRune(v, 0) || len(v) > 32*1024 {
 			return fmtInvalid("invalid env value for %s", k)
 		}

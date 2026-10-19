@@ -62,6 +62,38 @@ export type ExecOptions = {
   cwd?: string
   env?: Record<string, string>
   timeout?: number | string
+  stdin?: string | Uint8Array
+}
+
+export type ProcessInfo = {
+  id: string
+  pid: number
+  cmd: string[]
+  cwd?: string
+  tty: boolean
+  status: "running" | "exited"
+  exitCode: number
+  startedAt?: string
+}
+
+export type TerminalInfo = {
+  id: string
+  pid: number
+  cols: number
+  rows: number
+}
+
+export type PreviewInfo = {
+  id: string
+  sandboxId: string
+  port: number
+  url: string
+  createdAt?: string
+}
+
+export type FileEvent = {
+  type: string
+  path: string
 }
 
 export type ExecEvent = {
@@ -175,7 +207,29 @@ function execBody(cmd: string | string[], options: ExecOptions = {}): Record<str
   if (options.cwd) body.cwd = options.cwd
   if (options.env) body.env = options.env
   if (options.timeout != null) body.timeout_seconds = parseDuration(options.timeout)
+  if (typeof options.stdin === "string") body.stdin = options.stdin
+  else if (options.stdin) body.stdin_base64 = bytesToBase64(options.stdin)
   return body
+}
+
+function envValue(name: string): string | undefined {
+  const proc = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+  return proc?.env?.[name]
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ""
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(binary)
+}
+
+function wsBase(httpBase: string): string {
+  if (httpBase.startsWith("https://")) return "wss://" + httpBase.slice("https://".length)
+  if (httpBase.startsWith("http://")) return "ws://" + httpBase.slice("http://".length)
+  return httpBase
 }
 
 function modeQuery(mode?: number | string): string | undefined {
@@ -191,8 +245,8 @@ export class SbxClient {
   readonly fetchImpl: typeof fetch
 
   constructor(options: ConnectionOptions = {}) {
-    const baseUrl = (options.baseUrl ?? process.env.SBX_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "")
-    const apiKey = options.apiKey ?? process.env.SBX_API_KEY ?? ""
+    const baseUrl = (options.baseUrl ?? envValue("SBX_URL") ?? "http://127.0.0.1:8080").replace(/\/$/, "")
+    const apiKey = options.apiKey ?? envValue("SBX_API_KEY") ?? ""
     if (!apiKey) throw new Error("an API key is required (pass apiKey or set SBX_API_KEY)")
     this.baseUrl = baseUrl
     this.apiKey = apiKey
@@ -245,22 +299,7 @@ export class SbxClient {
   async *execStream(id: string, cmd: string | string[], options?: ExecOptions): AsyncGenerator<ExecEvent> {
     const response = await this.request("POST", `/v1/sandboxes/${encodeURIComponent(id)}/exec?stream=1`, execBody(cmd, options))
     if (!response.body) throw new SbxError(response.status, "driver", "empty exec stream")
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let split = buffer.indexOf("\n\n")
-      while (split >= 0) {
-        const block = buffer.slice(0, split)
-        buffer = buffer.slice(split + 2)
-        const event = parseExecEvent(block)
-        if (event) yield event
-        split = buffer.indexOf("\n\n")
-      }
-    }
+    yield* readExecEvents(response.body)
   }
 
   listFiles(id: string, path: string): Promise<{ path: string; entries: FileEntry[] }> {
@@ -290,6 +329,113 @@ export class SbxClient {
   async uploadArchive(id: string, path: string, content: Uint8Array): Promise<void> {
     const q = new URLSearchParams({ path })
     await this.request("POST", `/v1/sandboxes/${encodeURIComponent(id)}/files/archive?${q}`, content, "application/octet-stream")
+  }
+
+  statFile(id: string, path: string): Promise<FileEntry> {
+    const q = new URLSearchParams({ path })
+    return this.requestJSON("GET", `/v1/sandboxes/${encodeURIComponent(id)}/files/stat?${q}`)
+  }
+
+  mkdir(id: string, path: string, mode?: number | string): Promise<void> {
+    const body: Record<string, unknown> = { path }
+    const modeValue = modeQuery(mode)
+    if (modeValue) body.mode = modeValue
+    return this.requestJSON("POST", `/v1/sandboxes/${encodeURIComponent(id)}/files/mkdir`, body)
+  }
+
+  async *watch(id: string, path: string, options: { recursive?: boolean } = {}): AsyncGenerator<FileEvent> {
+    const q = new URLSearchParams({ path })
+    if (options.recursive) q.set("recursive", "1")
+    const response = await this.request("GET", `/v1/sandboxes/${encodeURIComponent(id)}/files/watch?${q}`)
+    if (!response.body) throw new SbxError(response.status, "driver", "empty watch stream")
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ""
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      buffer += decoder.decode(chunk.value, { stream: true })
+      let split = buffer.indexOf("\n\n")
+      while (split >= 0) {
+        const block = buffer.slice(0, split)
+        buffer = buffer.slice(split + 2)
+        const event = parseSSE(block)
+        if (event?.event === "change") {
+          const raw = event.json
+          yield { type: String(raw.type ?? ""), path: String(raw.path ?? "") }
+        } else if (event?.event === "error") {
+          throw new SbxError(502, String(event.json.code ?? "driver"), String(event.json.message ?? "watch failed"))
+        }
+        split = buffer.indexOf("\n\n")
+      }
+    }
+  }
+
+  startProcess(id: string, cmd: string | string[], options: ExecOptions = {}): Promise<ProcessInfo> {
+    return this.requestJSON<ProcessJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/processes`, execBody(cmd, options)).then(mapProcess)
+  }
+
+  listProcesses(id: string): Promise<ProcessInfo[]> {
+    return this.requestJSON<{ processes: ProcessJSON[] }>("GET", `/v1/sandboxes/${encodeURIComponent(id)}/processes`).then((body) =>
+      (body.processes ?? []).map(mapProcess),
+    )
+  }
+
+  signalProcess(id: string, procId: string, signal: "TERM" | "KILL" | "INT" | "HUP" | "QUIT"): Promise<void> {
+    return this.requestJSON("POST", `/v1/sandboxes/${encodeURIComponent(id)}/processes/${encodeURIComponent(procId)}/signal`, { signal })
+  }
+
+  async writeProcessStdin(id: string, procId: string, data: string | Uint8Array): Promise<void> {
+    const body = typeof data === "string" ? new TextEncoder().encode(data) : data
+    await this.request("POST", `/v1/sandboxes/${encodeURIComponent(id)}/processes/${encodeURIComponent(procId)}/stdin`, body, "application/octet-stream")
+  }
+
+  async *streamProcess(id: string, procId: string): AsyncGenerator<ExecEvent> {
+    const response = await this.request("GET", `/v1/sandboxes/${encodeURIComponent(id)}/processes/${encodeURIComponent(procId)}/stream`)
+    if (!response.body) throw new SbxError(response.status, "driver", "empty process stream")
+    yield* readExecEvents(response.body)
+  }
+
+  startTerminal(id: string, cmd: string | string[], options: ExecOptions & { cols?: number; rows?: number } = {}): Promise<TerminalInfo> {
+    const body = execBody(cmd, options)
+    if (options.cols != null) body.cols = options.cols
+    if (options.rows != null) body.rows = options.rows
+    return this.requestJSON<TerminalJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/terminals`, body).then(mapTerminal)
+  }
+
+  resizeTerminal(id: string, termId: string, cols: number, rows: number): Promise<void> {
+    return this.requestJSON("POST", `/v1/sandboxes/${encodeURIComponent(id)}/terminals/${encodeURIComponent(termId)}/resize`, { cols, rows })
+  }
+
+  connectTerminal(id: string, termId: string): TerminalSession {
+    const WS = (globalThis as { WebSocket?: typeof WebSocket }).WebSocket
+    if (!WS) throw new Error("WebSocket is not available")
+    const url = `${wsBase(this.baseUrl)}/v1/sandboxes/${encodeURIComponent(id)}/terminals/${encodeURIComponent(termId)}/ws?access_token=${encodeURIComponent(this.apiKey)}`
+    return new TerminalSession(termId, new WS(url))
+  }
+
+  createPreview(id: string, port: number): Promise<PreviewInfo> {
+    return this.requestJSON<PreviewJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/previews`, { port }).then(mapPreview)
+  }
+
+  listPreviews(id: string): Promise<PreviewInfo[]> {
+    return this.requestJSON<{ previews: PreviewJSON[] }>("GET", `/v1/sandboxes/${encodeURIComponent(id)}/previews`).then((body) =>
+      (body.previews ?? []).map(mapPreview),
+    )
+  }
+
+  deletePreview(id: string, previewId: string): Promise<void> {
+    return this.requestJSON("DELETE", `/v1/sandboxes/${encodeURIComponent(id)}/previews/${encodeURIComponent(previewId)}`)
+  }
+
+  previewFetch(id: string, previewId: string, path = "/", init: RequestInit = {}): Promise<Response> {
+    const suffix = path.startsWith("/") ? path : `/${path}`
+    const headers = new Headers(init.headers)
+    headers.set("Authorization", `Bearer ${this.apiKey}`)
+    return this.fetchImpl(`${this.baseUrl}/v1/sandboxes/${encodeURIComponent(id)}/previews/${encodeURIComponent(previewId)}${suffix}`, {
+      ...init,
+      headers,
+    })
   }
 
   async downloadArchive(id: string, path: string): Promise<Uint8Array> {
@@ -331,6 +477,79 @@ async function errorFrom(response: Response): Promise<SbxError> {
     // Keep the status text when the body is not JSON.
   }
   return new SbxError(response.status, code, message)
+}
+
+type ProcessJSON = {
+  id: string
+  pid: number
+  cmd: string[]
+  cwd?: string
+  tty?: boolean
+  status: "running" | "exited"
+  exit_code: number
+  started_at?: string
+}
+
+type TerminalJSON = { id: string; pid: number; cols: number; rows: number }
+
+type PreviewJSON = {
+  id: string
+  sandbox_id: string
+  port: number
+  url: string
+  created_at?: string
+}
+
+function mapProcess(raw: ProcessJSON): ProcessInfo {
+  return {
+    id: raw.id,
+    pid: raw.pid,
+    cmd: raw.cmd,
+    cwd: raw.cwd,
+    tty: Boolean(raw.tty),
+    status: raw.status,
+    exitCode: raw.exit_code,
+    startedAt: raw.started_at,
+  }
+}
+
+function mapTerminal(raw: TerminalJSON): TerminalInfo {
+  return { id: raw.id, pid: raw.pid, cols: raw.cols, rows: raw.rows }
+}
+
+function mapPreview(raw: PreviewJSON): PreviewInfo {
+  return { id: raw.id, sandboxId: raw.sandbox_id, port: raw.port, url: raw.url, createdAt: raw.created_at }
+}
+
+async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ExecEvent> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
+    let split = buffer.indexOf("\n\n")
+    while (split >= 0) {
+      const block = buffer.slice(0, split)
+      buffer = buffer.slice(split + 2)
+      const event = parseExecEvent(block)
+      if (event) yield event
+      split = buffer.indexOf("\n\n")
+    }
+  }
+}
+
+function parseSSE(block: string): { event: string; json: Record<string, unknown> } | undefined {
+  let event = ""
+  const dataLines: string[] = []
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim()
+    else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim())
+  }
+  if (!event) return undefined
+  const json = dataLines.length ? (JSON.parse(dataLines.join("\n")) as Record<string, unknown>) : {}
+  return { event, json }
 }
 
 function parseExecEvent(block: string): ExecEvent | undefined {
@@ -390,6 +609,18 @@ export class SandboxFiles {
 
   remove(path: string): Promise<void> {
     return this.#client.removeFile(this.#id, path)
+  }
+
+  stat(path: string): Promise<FileEntry> {
+    return this.#client.statFile(this.#id, path)
+  }
+
+  mkdir(path: string, mode?: number | string): Promise<void> {
+    return this.#client.mkdir(this.#id, path, mode)
+  }
+
+  watch(path = "/workspace", options: { recursive?: boolean } = {}): AsyncGenerator<FileEvent> {
+    return this.#client.watch(this.#id, path, options)
   }
 }
 
@@ -477,6 +708,50 @@ export class Sandbox {
     return info
   }
 
+  startProcess(cmd: string | string[], options?: ExecOptions): Promise<ProcessInfo> {
+    return this.#client.startProcess(this.id, cmd, options)
+  }
+
+  listProcesses(): Promise<ProcessInfo[]> {
+    return this.#client.listProcesses(this.id)
+  }
+
+  signalProcess(procId: string, signal: "TERM" | "KILL" | "INT" | "HUP" | "QUIT"): Promise<void> {
+    return this.#client.signalProcess(this.id, procId, signal)
+  }
+
+  writeProcessStdin(procId: string, data: string | Uint8Array): Promise<void> {
+    return this.#client.writeProcessStdin(this.id, procId, data)
+  }
+
+  streamProcess(procId: string): AsyncGenerator<ExecEvent> {
+    return this.#client.streamProcess(this.id, procId)
+  }
+
+  startTerminal(cmd: string | string[], options?: ExecOptions & { cols?: number; rows?: number }): Promise<TerminalInfo> {
+    return this.#client.startTerminal(this.id, cmd, options)
+  }
+
+  connectTerminal(termId: string): TerminalSession {
+    return this.#client.connectTerminal(this.id, termId)
+  }
+
+  createPreview(port: number): Promise<PreviewInfo> {
+    return this.#client.createPreview(this.id, port)
+  }
+
+  listPreviews(): Promise<PreviewInfo[]> {
+    return this.#client.listPreviews(this.id)
+  }
+
+  deletePreview(previewId: string): Promise<void> {
+    return this.#client.deletePreview(this.id, previewId)
+  }
+
+  previewFetch(previewId: string, path?: string, init?: RequestInit): Promise<Response> {
+    return this.#client.previewFetch(this.id, previewId, path, init)
+  }
+
   async setTTL(ttl: number | string): Promise<SandboxInfo> {
     const info = await this.#client.setTTL(this.id, ttl)
     this.apply(info)
@@ -492,4 +767,58 @@ export class Sandbox {
 
 function clientFrom(options: ConnectionOptions): SbxClient {
   return new SbxClient({ baseUrl: options.baseUrl, apiKey: options.apiKey, fetch: options.fetch })
+}
+
+// TerminalSession is a WebSocket attached to a PTY. Binary frames are bytes.
+// Text frames are JSON control messages.
+export class TerminalSession {
+  readonly id: string
+  readonly socket: WebSocket
+  #output = new Set<(data: Uint8Array) => void>()
+  #exit = new Set<(code: number) => void>()
+
+  constructor(id: string, socket: WebSocket) {
+    this.id = id
+    this.socket = socket
+    this.socket.binaryType = "arraybuffer"
+    this.socket.addEventListener("message", (event) => {
+      const data = event.data
+      if (typeof data === "string") {
+        try {
+          const msg = JSON.parse(data) as { type?: string; exit_code?: number }
+          if (msg.type === "exit") {
+            for (const fn of this.#exit) fn(Number(msg.exit_code ?? 0))
+          }
+        } catch {
+          // Ignore non-JSON text.
+        }
+        return
+      }
+      const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array()
+      for (const fn of this.#output) fn(bytes)
+    })
+  }
+
+  send(data: string | Uint8Array): void {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data
+    this.socket.send(bytes)
+  }
+
+  resize(cols: number, rows: number): void {
+    this.socket.send(JSON.stringify({ type: "resize", cols, rows }))
+  }
+
+  onOutput(fn: (data: Uint8Array) => void): () => void {
+    this.#output.add(fn)
+    return () => this.#output.delete(fn)
+  }
+
+  onExit(fn: (code: number) => void): () => void {
+    this.#exit.add(fn)
+    return () => this.#exit.delete(fn)
+  }
+
+  close(): void {
+    this.socket.close()
+  }
 }

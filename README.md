@@ -10,6 +10,7 @@ Docker must be running, and your user must be able to use `/var/run/docker.sock`
 
 ```bash
 go build -o sbx ./cmd/sbx
+go build -o sbx-agent ./cmd/sbx-agent
 ./sbx serve
 ```
 
@@ -63,7 +64,8 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 ## What you get
 
 - `POST /v1/sandboxes`, get, list, delete, pause, resume, and TTL updates.
-- Exec that waits, and exec as server-sent events with `?stream=1`.
+- Exec that waits, and exec as server-sent events with `?stream=1`. Optional `stdin` or `stdin_base64`.
+- Background processes, interactive terminals over WebSocket, file watches, and preview URLs for a service on the sandbox loopback. These need `sbx-agent` (see [docs/AGENT.md](docs/AGENT.md)).
 - File list, upload, download, delete, and tar archives.
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes.
 - A reaper for TTL, idle timeout, stuck creates, and orphan containers.
@@ -79,7 +81,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 
 Public addresses stay reachable. The bridge has inter-container communication disabled. If the rules cannot be installed, `network: full` fails closed and the sandbox is not created. The server applies them with the host `iptables` when it can, and otherwise with a short-lived privileged helper that enters the host network namespace through the mounted Docker socket. Egress allow-lists are still rejected in this version.
 
-Images need a shell and the usual tools (`sh`, `cat`, `find`, `stat`, `tar`). Exec timeouts are enforced by a shell wrapper, so a `timeout` binary is not required. When the image has `setsid`, the wrapper runs the command in its own session so the watchdog cannot signal the sandbox entrypoint. The design notes and the roadmap are in [docs/DESIGN.md](docs/DESIGN.md).
+When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Archives use `tar` either way. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md).
 
 ## Deploying the website with Dokploy
 
@@ -100,6 +102,7 @@ The landing page is `website/`. Its image listens on port **80**, has no environ
 go test ./...
 SBX_INTEGRATION=1 go test -count=1 -timeout 20m ./internal/driver/docker/ ./test/e2e/
 npm test --prefix sdk/typescript
+bun test --cwd sdk/typescript test
 ```
 
 Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build.

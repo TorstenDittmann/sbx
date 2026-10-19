@@ -35,6 +35,11 @@ func RecordID() string {
 	return "key_" + hex.EncodeToString(random(8))
 }
 
+// Preview is an id for a port preview.
+func Preview() string {
+	return "prv_" + hex.EncodeToString(random(8))
+}
+
 // Hash is the sha256 hex digest of an API key.
 func Hash(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))

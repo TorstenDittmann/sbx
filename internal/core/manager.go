@@ -44,11 +44,14 @@ type CreateInput struct {
 }
 
 // ExecInput runs a command. TimeoutSeconds 0 uses the server default.
+// Stdin is optional raw input. Background processes treat timeout 0 as none.
 type ExecInput struct {
 	Cmd            []string
 	Cwd            string
 	Env            map[string]string
 	TimeoutSeconds int
+	Stdin          []byte
+	Background     bool
 }
 
 // TemplateInput creates a template.
@@ -74,13 +77,14 @@ type Counters struct {
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	cfg     config.Config
-	store   *store.Store
-	drivers map[string]driver.Driver
-	log     *slog.Logger
-	now     func() time.Time
-	mu      sync.Mutex
-	Counts  Counters
+	cfg      config.Config
+	store    *store.Store
+	drivers  map[string]driver.Driver
+	log      *slog.Logger
+	now      func() time.Time
+	mu       sync.Mutex
+	previews map[string]Preview
+	Counts   Counters
 }
 
 // New builds a manager. drivers is keyed by backend name ("docker", "gvisor").
@@ -88,7 +92,11 @@ func New(cfg config.Config, st *store.Store, drivers map[string]driver.Driver, l
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{cfg: cfg, store: st, drivers: drivers, log: log, now: func() time.Time { return time.Now().UTC() }}
+	return &Manager{
+		cfg: cfg, store: st, drivers: drivers, log: log,
+		now:      func() time.Time { return time.Now().UTC() },
+		previews: map[string]Preview{},
+	}
 }
 
 // SetClock replaces the clock. Tests use it.
@@ -426,13 +434,21 @@ func (m *Manager) execReq(in ExecInput) (driver.ExecRequest, error) {
 		return driver.ExecRequest{}, err
 	}
 	timeout := in.TimeoutSeconds
-	if timeout == 0 {
+	if timeout == 0 && !in.Background {
 		timeout = m.cfg.Limits.DefaultExecSeconds
 	}
-	if timeout < 1 || timeout > m.cfg.Limits.MaxExecSeconds {
+	if in.Background {
+		if timeout < 0 || timeout > m.cfg.Limits.MaxExecSeconds {
+			return driver.ExecRequest{}, fmtInvalid("timeout_seconds must be between 0 and %d", m.cfg.Limits.MaxExecSeconds)
+		}
+	} else if timeout < 1 || timeout > m.cfg.Limits.MaxExecSeconds {
 		return driver.ExecRequest{}, fmtInvalid("timeout_seconds must be between 1 and %d", m.cfg.Limits.MaxExecSeconds)
 	}
-	return driver.ExecRequest{Cmd: in.Cmd, Cwd: cwd, Env: in.Env, TimeoutSeconds: timeout}, nil
+	req := driver.ExecRequest{Cmd: in.Cmd, Cwd: cwd, Env: in.Env, TimeoutSeconds: timeout}
+	if len(in.Stdin) > 0 {
+		req.Stdin = bytes.NewReader(in.Stdin)
+	}
+	return req, nil
 }
 
 // ListFiles lists one directory.
@@ -706,6 +722,7 @@ func (m *Manager) destroy(ctx context.Context, sb store.Sandbox, reason string) 
 	}
 	containerID := cur.ContainerID
 	backend := cur.Backend
+	m.dropPreviews(cur.ID)
 	m.mu.Unlock()
 
 	if containerID != "" {

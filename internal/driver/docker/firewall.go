@@ -141,10 +141,11 @@ func (d *Driver) runHelper(ctx context.Context, script string) error {
 	if err := d.EnsureImage(ctx, helperImage); err != nil {
 		return err
 	}
+	cmd := []string{nsenterCommand(script)}
 	body := createRequest{
 		Image:      helperImage,
 		Entrypoint: []string{"sh", "-c"},
-		Cmd:        []string{nsenterCommand(script)},
+		Cmd:        &cmd,
 		HostConfig: hostConfig{
 			NetworkMode: "host",
 			PidMode:     "host",

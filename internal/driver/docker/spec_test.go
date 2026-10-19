@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ func TestBuildCreateSecureDefaults(t *testing.T) {
 		ID: "sbx_abc", Image: "alpine:3.20", CPU: 0.5, MemoryMB: 128, DiskMB: 32, PIDs: 64,
 		Env: map[string]string{"FOO": "bar"}, Network: driver.NetNone,
 		Labels: map[string]string{"user": "42", "sbx.id": "sbx_other", "sbx.managed": "false"},
-	}, Options{Name: "docker", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, []string{"PATH=/usr/bin"})
+	}, Options{Name: "docker", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, []string{"PATH=/usr/bin"}, "")
 
 	if body.User != "1000:1000" {
 		t.Fatalf("user %s", body.User)
@@ -63,7 +65,7 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 	body := buildCreate(driver.SandboxSpec{
 		ID: "sbx_g", Image: "alpine:3.20", CPU: 1, MemoryMB: 64, DiskMB: 64, PIDs: 32,
 		Network: driver.NetFull,
-	}, Options{Name: "gvisor", Runtime: "runsc", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, nil)
+	}, Options{Name: "gvisor", Runtime: "runsc", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, nil, "tok")
 	if body.HostConfig.Runtime != "runsc" {
 		t.Fatal(body.HostConfig.Runtime)
 	}
@@ -72,6 +74,28 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 	}
 	if body.Labels["sbx.backend"] != "gvisor" {
 		t.Fatal(body.Labels)
+	}
+	if len(body.Entrypoint) != 2 || body.Entrypoint[0] != agentBinary || body.Entrypoint[1] != "init" {
+		t.Fatalf("entrypoint %v", body.Entrypoint)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"Cmd":[]`)) {
+		t.Fatalf("image cmd was not cleared: %s", raw)
+	}
+	if len(body.HostConfig.Binds) != 1 || body.HostConfig.Binds[0] != agentVolume+":/opt/sbx:ro" {
+		t.Fatal(body.HostConfig.Binds)
+	}
+	foundToken := false
+	for _, e := range body.Env {
+		if e == agentTokenEnv+"=tok" {
+			foundToken = true
+		}
+	}
+	if !foundToken {
+		t.Fatal(body.Env)
 	}
 }
 

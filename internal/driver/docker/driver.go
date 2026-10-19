@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TorstenDittmann/sbx/internal/agent"
 	"github.com/TorstenDittmann/sbx/internal/driver"
 )
 
@@ -38,6 +39,10 @@ type Options struct {
 	// ScriptRunner applies the firewall script. When nil, the driver tries
 	// the host iptables and then a privileged helper.
 	ScriptRunner func(ctx context.Context, script string) error
+	// AgentBin is the host path of the static sbx-agent binary. When set,
+	// sandboxes run it as their entrypoint and exec, files, terminals, and
+	// previews go through it. When empty, exec and files use the engine API.
+	AgentBin string
 }
 
 // Driver implements driver.Driver using the Docker Engine API.
@@ -48,6 +53,15 @@ type Driver struct {
 	client      *Client
 	egressMu    sync.Mutex
 	egressReady bool
+
+	agentMu    sync.Mutex
+	agentReady string
+	guestHook  func(context.Context, string) (*agent.Client, error)
+
+	sessMu    sync.Mutex
+	tokens    map[string]string
+	sessions  map[string]*agent.Client
+	sessLocks map[string]*sync.Mutex
 }
 
 // New connects to the Docker socket.
@@ -68,7 +82,9 @@ func New(opt Options) (*Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}, nil
+	d := &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}
+	d.initSessions()
+	return d, nil
 }
 
 // NewWithClient builds a driver around an existing client. Tests use it.
@@ -85,7 +101,9 @@ func NewWithClient(opt Options, cli *Client) *Driver {
 	if opt.MaxOutputBytes == 0 {
 		opt.MaxOutputBytes = 8 << 20
 	}
-	return &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}
+	d := &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}
+	d.initSessions()
+	return d
 }
 
 var _ driver.Driver = (*Driver)(nil)
@@ -148,6 +166,13 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 			return driver.Handle{}, err
 		}
 	}
+	token := ""
+	if d.opt.AgentBin != "" {
+		if err := d.ensureAgentVolume(ctx); err != nil {
+			return driver.Handle{}, err
+		}
+		token = newAgentToken()
+	}
 	if err := d.EnsureImage(ctx, spec.Image); err != nil {
 		return driver.Handle{}, err
 	}
@@ -155,7 +180,7 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	if err != nil {
 		return driver.Handle{}, err
 	}
-	body := buildCreate(spec, d.opt, meta.Env)
+	body := buildCreate(spec, d.opt, meta.Env, token)
 	id, err := d.client.ContainerCreate(ctx, spec.ID, body)
 	if err != nil {
 		return driver.Handle{}, err
@@ -163,6 +188,9 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	if err := d.client.ContainerStart(ctx, id); err != nil {
 		_ = d.client.ContainerRemove(context.Background(), id)
 		return driver.Handle{}, err
+	}
+	if token != "" {
+		d.rememberToken(id, token)
 	}
 	rt := d.runtime
 	if rt == "" {
@@ -172,6 +200,7 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 }
 
 func (d *Driver) Delete(ctx context.Context, id string) error {
+	d.closeSession(id)
 	return d.client.ContainerRemove(ctx, id)
 }
 
@@ -241,6 +270,16 @@ func (d *Driver) ExecStream(ctx context.Context, id string, req driver.ExecReque
 }
 
 func (d *Driver) exec(ctx context.Context, id string, req driver.ExecRequest, limit int, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+	guest, gerr := d.guest(ctx, id)
+	if gerr == nil {
+		if limit <= 0 {
+			limit = d.opt.MaxOutputBytes
+		}
+		return execViaAgent(ctx, guest, req, limit, emit)
+	}
+	if !errors.Is(gerr, errNoGuest) {
+		return driver.ExecResult{}, gerr
+	}
 	start := time.Now()
 	if len(req.Cmd) == 0 {
 		return driver.ExecResult{}, fmt.Errorf("cmd is required")
@@ -322,6 +361,11 @@ func (d *Driver) waitExec(ctx context.Context, execID string) (ExecState, error)
 }
 
 func (d *Driver) ListFiles(ctx context.Context, id, dir string) ([]driver.FileEntry, error) {
+	if c, err := d.guest(ctx, id); err == nil {
+		return listViaAgent(ctx, c, dir)
+	} else if !errors.Is(err, errNoGuest) {
+		return nil, err
+	}
 	// POSIX sh + BusyBox/GNU stat. The name is the last field so it may contain '|'.
 	script := `find "$1" -mindepth 1 -maxdepth 1 -exec stat -c '%F|%s|%Y|%f|%n' {} \;`
 	res, err := d.Exec(ctx, id, driver.ExecRequest{
@@ -378,6 +422,14 @@ func fileType(kind string) driver.FileType {
 }
 
 func (d *Driver) ReadFile(ctx context.Context, id, filePath string, max int) ([]byte, error) {
+	if c, err := d.guest(ctx, id); err == nil {
+		if max <= 0 {
+			max = d.opt.MaxOutputBytes
+		}
+		return c.ReadFile(ctx, filePath, max)
+	} else if !errors.Is(err, errNoGuest) {
+		return nil, err
+	}
 	if max <= 0 {
 		max = d.opt.MaxOutputBytes
 	}
@@ -413,6 +465,11 @@ func (d *Driver) ReadFile(ctx context.Context, id, filePath string, max int) ([]
 }
 
 func (d *Driver) WriteFile(ctx context.Context, id, filePath string, content []byte, mode uint32) error {
+	if c, err := d.guest(ctx, id); err == nil {
+		return c.WriteFile(ctx, filePath, content, mode)
+	} else if !errors.Is(err, errNoGuest) {
+		return err
+	}
 	parent := path.Dir(filePath)
 	mk, err := d.Exec(ctx, id, driver.ExecRequest{
 		Cmd:            []string{"mkdir", "-p", parent},
@@ -459,6 +516,11 @@ func (d *Driver) WriteFile(ctx context.Context, id, filePath string, content []b
 }
 
 func (d *Driver) RemoveFile(ctx context.Context, id, filePath string) error {
+	if c, err := d.guest(ctx, id); err == nil {
+		return c.RemoveFile(ctx, filePath)
+	} else if !errors.Is(err, errNoGuest) {
+		return err
+	}
 	switch filePath {
 	case "/", "/workspace", "/tmp":
 		return fmt.Errorf("refusing to delete %s", filePath)
