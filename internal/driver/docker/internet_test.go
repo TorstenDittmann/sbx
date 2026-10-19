@@ -123,20 +123,24 @@ func runAllowList(t *testing.T, runtime string) {
 	}
 	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
 	ok, err := d.Exec(ctx, h.ID, driver.ExecRequest{
-		Cmd: []string{"wget", "-T", "10", "-q", "-O", "-", "http://1.1.1.1/"}, TimeoutSeconds: 20,
+		Cmd: []string{"sh", "-c", httpProbe("1.1.1.1")}, TimeoutSeconds: 20,
 	})
-	if err != nil || ok.ExitCode != 0 || len(ok.Stdout) == 0 {
+	if err != nil || ok.ExitCode != 0 || !strings.Contains(string(ok.Stdout), "HTTP/") {
 		t.Fatalf("allowed %+v %v", ok, err)
 	}
 	blocked, err := d.Exec(ctx, h.ID, driver.ExecRequest{
-		Cmd: []string{"wget", "-T", "5", "-q", "-O", "/dev/null", "http://8.8.8.8/"}, TimeoutSeconds: 15,
+		Cmd: []string{"sh", "-c", httpProbe("1.0.0.1")}, TimeoutSeconds: 15,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocked.ExitCode == 0 {
-		t.Fatal("8.8.8.8 was reachable through an allow list of 1.1.1.1/32")
+	if blocked.ExitCode == 0 && strings.Contains(string(blocked.Stdout), "HTTP/") {
+		t.Fatal("1.0.0.1 was reachable through an allow list of 1.1.1.1/32")
 	}
+}
+
+func httpProbe(host string) string {
+	return "printf 'GET / HTTP/1.0\\r\\nHost: " + host + "\\r\\n\\r\\n' | nc -w 8 " + host + " 80"
 }
 
 func runApt(t *testing.T, d *Driver) {

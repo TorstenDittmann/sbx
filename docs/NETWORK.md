@@ -47,7 +47,7 @@ docker:
   sandbox_root: true
 ```
 
-`sandbox_root` runs the container as uid 0. It stays off unless the operator turns it on.
+`sandbox_root` runs the container as uid 0 and adds `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, and `SETUID` so `apt` can drop to its sandbox user. Every other capability stays dropped, and `no-new-privileges` stays on. It stays off unless the operator turns it on.
 
 ## Limits
 

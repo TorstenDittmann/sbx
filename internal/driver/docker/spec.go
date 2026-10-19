@@ -127,7 +127,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		HostConfig: hostConfig{
 			NetworkMode:    network,
 			CapDrop:        []string{"ALL"},
-			CapAdd:         []string{},
+			CapAdd:         rootCaps(opt),
 			SecurityOpt:    []string{"no-new-privileges:true"},
 			ReadonlyRootfs: opt.ReadOnlyRootfs,
 			Privileged:     false,
@@ -148,6 +148,16 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 			DnsOptions: dnsOpt,
 		},
 	}
+}
+
+// rootCaps is empty for the default uid 1000 sandbox. sandbox_root keeps the
+// capabilities apt and apk need to change user while installing packages.
+// Everything else stays dropped, and no-new-privileges still applies.
+func rootCaps(opt Options) []string {
+	if opt.UID != 0 {
+		return []string{}
+	}
+	return []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"}
 }
 
 func envSlice(env map[string]string) []string {

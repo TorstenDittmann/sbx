@@ -28,6 +28,18 @@ func TestBuildCreateSecureDefaults(t *testing.T) {
 	if len(body.HostConfig.CapAdd) != 0 {
 		t.Fatal("expected no added caps")
 	}
+	root := buildCreate(driver.SandboxSpec{
+		ID: "sbx_root", Image: "debian:bookworm-slim", CPU: 1, MemoryMB: 256, DiskMB: 512, PIDs: 256,
+	}, Options{Name: "docker", UID: 0, GID: 0, ReadOnlyRootfs: false}, nil, "")
+	if root.User != "0:0" || len(root.HostConfig.CapDrop) != 1 || root.HostConfig.CapDrop[0] != "ALL" {
+		t.Fatalf("root host %+v", root.HostConfig)
+	}
+	got := strings.Join(root.HostConfig.CapAdd, ",")
+	for _, cap := range []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID"} {
+		if !strings.Contains(got, cap) {
+			t.Fatalf("root caps %s", got)
+		}
+	}
 	joined := strings.Join(body.HostConfig.SecurityOpt, ",")
 	if !strings.Contains(joined, "no-new-privileges:true") {
 		t.Fatal(joined)
