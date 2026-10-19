@@ -35,7 +35,7 @@ If the firewall cannot be installed, `full` and `allow` fail and the container i
 
 `network.dns` is written into the container resolvers. The default is `1.1.1.1` and `8.8.8.8`, with `timeout:2`, `attempts:3`, and `rotate`. IPv6 resolvers are omitted from the default because they stall when the host has no IPv6 route.
 
-`network.ipv6` is `auto` (follow the daemon), `on`, or `off`. When IPv6 is on, a new `sbx` bridge also gets `fd16:5b00::/64`. An existing bridge is left as it is. Outbound IPv6 still needs a route on the host. gVisor (`runsc`) uses this same Docker network namespace, so DNS, the bridge, and the filter apply there too.
+`network.ipv6` is `auto` (follow the daemon), `on`, or `off`. When IPv6 is on, a new `sbx` bridge also gets `fd16:5b00::/64`. An existing bridge is left as it is. Outbound IPv6 still needs a route on the host. gVisor (`runsc`) uses this same Docker network namespace when it is installed with `runsc install -- --network=host`. That flag selects the Linux stack in the namespace Docker created. The default gVisor netstack does not, and DNS from the sandbox fails. The bridge and the filter apply either way.
 
 ## Package managers and root
 

@@ -68,7 +68,13 @@ func TestIntegrationBandwidthRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("iptables", "-S", chain).CombinedOutput()
+	iptables := "iptables"
+	args := []string{"-S", chain}
+	if os.Geteuid() != 0 {
+		iptables = "sudo"
+		args = append([]string{"-n", "iptables"}, args...)
+	}
+	out, err := exec.Command(iptables, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("iptables %v %s", err, out)
 	}
@@ -150,7 +156,7 @@ apt-get install -y --no-install-recommends ca-certificates curl python3-pip
 curl -fsSL --max-time 30 -o /workspace/example.html https://example.com/
 test -s /workspace/example.html
 pip3 install --target /workspace/py six==1.16.0
-test -d /workspace/py/six
+PYTHONPATH=/workspace/py python3 -c 'import six'
 `
 	res, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", script}, TimeoutSeconds: 420})
 	if err != nil || res.ExitCode != 0 {
@@ -286,7 +292,7 @@ print(data.decode("ascii", "replace"))
 PY
 npm view is-odd version --fetch-timeout=60000
 pip3 install --target /workspace/py six==1.16.0
-test -d /workspace/py/six
+PYTHONPATH=/workspace/py python3 -c 'import six'
 mkdir -p /workspace/gomod
 cd /workspace/gomod
 go mod init example.com/sbxnet
