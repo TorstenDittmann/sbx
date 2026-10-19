@@ -43,6 +43,8 @@ type hostConfig struct {
 	LogConfig      logConfig         `json:"LogConfig"`
 	IpcMode        string            `json:"IpcMode"`
 	Binds          []string          `json:"Binds,omitempty"`
+	Dns            []string          `json:"Dns,omitempty"`
+	DnsOptions     []string          `json:"DnsOptions,omitempty"`
 }
 
 type logConfig struct {
@@ -106,8 +108,13 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		tmp = disk
 	}
 	network := "none"
+	var dns, dnsOpt []string
 	if spec.Network == driver.NetFull {
 		network = sandboxNetwork
+		if len(spec.Policy.DNS) > 0 {
+			dns = append([]string{}, spec.Policy.DNS...)
+			dnsOpt = []string{"timeout:2", "attempts:3", "rotate"}
+		}
 	}
 	return createRequest{
 		Image:      spec.Image,
@@ -134,9 +141,11 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 				"/workspace": fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=755", disk, opt.UID, opt.GID),
 				"/tmp":       fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=1777", tmp, opt.UID, opt.GID),
 			},
-			LogConfig: logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
-			IpcMode:   "private",
-			Binds:     binds,
+			LogConfig:  logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
+			IpcMode:    "private",
+			Binds:      binds,
+			Dns:        dns,
+			DnsOptions: dnsOpt,
 		},
 	}
 }

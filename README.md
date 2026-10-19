@@ -99,14 +99,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - Prometheus text at `/metrics`, OpenAPI at `/openapi.yaml`.
 - Secure defaults: no network, all capabilities dropped, non-root, read-only rootfs, memory without swap, PID limit. `disk_mb` is the size of the writable `/workspace` tmpfs.
 
-`network: full` attaches the sandbox to a dedicated bridge (`sbx`, interface `sbx0`, `172.30.0.0/16`). Before the container starts, sbx installs an `SBX-EGRESS` chain on `DOCKER-USER` and `INPUT` that rejects traffic from that bridge to cloud metadata and to private or link-local ranges:
-
-- `169.254.0.0/16` (AWS, GCP, Azure, and other metadata services on `169.254.169.254`)
-- RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
-- Alibaba Cloud metadata `100.100.100.200/32`
-- IPv6 link-local `fe80::/10`, unique-local `fc00::/7` (including `fd00:ec2::254`), and `::1`
-
-Public addresses stay reachable. The bridge has inter-container communication disabled. If the rules cannot be installed, `network: full` fails closed and the sandbox is not created. The server applies them with the host `iptables` when it can, and otherwise with a short-lived privileged helper that enters the host network namespace through the mounted Docker socket. Egress allow-lists are still rejected in this version.
+`network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
 When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Archives use `tar` either way. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md).
 
@@ -128,7 +121,7 @@ The landing page is `website/`. Its image listens on port **80**, has no environ
 
 ```bash
 go test ./...
-SBX_INTEGRATION=1 go test -count=1 -timeout 20m ./internal/driver/docker/ ./test/e2e/
+SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test/e2e/
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
 ```

@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/TorstenDittmann/sbx/internal/netpolicy"
 )
 
 const (
@@ -20,68 +22,46 @@ const (
 	helperImage    = "alpine:3.20"
 )
 
-// blockedIPv4 are destinations a sandbox must not reach even on network=full.
-// Link-local covers the metadata address used by AWS, GCP, Azure, and others.
-// 100.100.100.200 is the Alibaba Cloud metadata service.
-var blockedIPv4 = []string{
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"169.254.0.0/16",
-	"100.100.100.200/32",
-}
-
-var blockedIPv6 = []string{
-	"fe80::/10",
-	"fc00::/7",
-	"::1/128",
-}
+const sandboxV6Subnet = "fd16:5b00::/64"
+const sandboxV6Gateway = "fd16:5b00::1"
 
 var bridgeNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,15}$`)
 
 // runScriptHook applies a firewall script on the host. Tests replace it.
 var runScriptHook = runHostScript
 
-func blockedPrefixes() []netip.Prefix {
-	all := append(append([]string{}, blockedIPv4...), blockedIPv6...)
-	out := make([]netip.Prefix, 0, len(all))
-	for _, cidr := range all {
-		out = append(out, netip.MustParsePrefix(cidr))
-	}
-	return out
-}
-
-// destinationBlocked reports whether ip is metadata, link-local, or private.
+// destinationBlocked reports whether ip is metadata, link-local, or private
+// under the default operator policy.
 func destinationBlocked(ip netip.Addr) bool {
-	for _, prefix := range blockedPrefixes() {
-		if prefix.Contains(ip) {
-			return true
-		}
-	}
-	return false
+	return netpolicy.Blocked(ip, netpolicy.Baseline{BlockPrivate: true, BlockMetadata: true})
 }
 
 // egressScript drops blocked destinations that arrive on the sandbox bridge.
 // It is applied in DOCKER-USER (forwarded traffic) and INPUT (traffic to the host).
 func egressScript(bridge string) string {
-	var b strings.Builder
-	b.WriteString("set -e\n")
-	writeFamily(&b, "iptables", bridge, "icmp-host-prohibited", blockedIPv4)
-	b.WriteString("if command -v ip6tables >/dev/null 2>&1 && ip6tables -w 5 -L DOCKER-USER -n >/dev/null 2>&1; then\n")
-	writeFamily(&b, "ip6tables", bridge, "icmp6-adm-prohibited", blockedIPv6)
-	b.WriteString("fi\n")
-	return b.String()
+	return netpolicy.RenderBaseline(bridge, netpolicy.Baseline{BlockPrivate: true, BlockMetadata: true})
 }
 
-func writeFamily(b *strings.Builder, bin, bridge, reject string, cidrs []string) {
-	fmt.Fprintf(b, "%s -w 5 -N SBX-EGRESS 2>/dev/null || true\n", bin)
-	fmt.Fprintf(b, "%s -w 5 -F SBX-EGRESS\n", bin)
-	for _, cidr := range cidrs {
-		fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -d %s -j REJECT --reject-with %s\n", bin, cidr, reject)
+func (d *Driver) baseline() netpolicy.Baseline {
+	var allow []netip.Prefix
+	for _, raw := range d.opt.PrivateAllow {
+		if p, err := netip.ParsePrefix(raw); err == nil {
+			allow = append(allow, p.Masked())
+			continue
+		}
+		if addr, err := netip.ParseAddr(raw); err == nil {
+			bits := 32
+			if addr.Is6() {
+				bits = 128
+			}
+			allow = append(allow, netip.PrefixFrom(addr, bits))
+		}
 	}
-	fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -j RETURN\n", bin)
-	fmt.Fprintf(b, "%s -w 5 -C DOCKER-USER -i %s -j SBX-EGRESS 2>/dev/null || %s -w 5 -I DOCKER-USER 1 -i %s -j SBX-EGRESS\n", bin, bridge, bin, bridge)
-	fmt.Fprintf(b, "%s -w 5 -C INPUT -i %s -j SBX-EGRESS 2>/dev/null || %s -w 5 -I INPUT 1 -i %s -j SBX-EGRESS\n", bin, bridge, bin, bridge)
+	return netpolicy.Baseline{
+		BlockPrivate:  d.opt.BlockPrivate,
+		BlockMetadata: d.opt.BlockMetadata,
+		PrivateAllow:  allow,
+	}
 }
 
 func nsenterCommand(script string) string {
@@ -95,11 +75,12 @@ func (d *Driver) ensureEgress(ctx context.Context) error {
 	if d.egressReady {
 		return nil
 	}
-	bridge, err := d.client.EnsureSandboxNetwork(ctx)
+	bridge, err := d.client.EnsureSandboxNetwork(ctx, d.wantIPv6(ctx))
 	if err != nil {
 		return err
 	}
-	script := egressScript(bridge)
+	d.bridge = bridge
+	script := netpolicy.RenderBaseline(bridge, d.baseline())
 	if err := d.installScript(ctx, script); err != nil {
 		return fmt.Errorf("refusing network=full: %w", err)
 	}
@@ -177,10 +158,28 @@ func (d *Driver) runHelper(ctx context.Context, script string) error {
 	return nil
 }
 
+func (d *Driver) wantIPv6(ctx context.Context) bool {
+	switch d.opt.IPv6 {
+	case "off":
+		return false
+	case "on":
+		return true
+	default:
+		info, err := d.client.Info(ctx)
+		if err != nil {
+			return false
+		}
+		return info.IPv6
+	}
+}
+
 func validateNetwork(n networkInfo) (string, error) {
-	if len(n.IPAM.Config) > 0 {
-		sub := n.IPAM.Config[0].Subnet
-		if sub != "" && sub != sandboxSubnet {
+	for _, cfg := range n.IPAM.Config {
+		sub := cfg.Subnet
+		if sub == "" || strings.Contains(sub, ":") {
+			continue
+		}
+		if sub != sandboxSubnet {
 			return "", fmt.Errorf("docker network %s has subnet %s, want %s (remove the network and retry)", sandboxNetwork, sub, sandboxSubnet)
 		}
 	}
@@ -194,22 +193,34 @@ func validateNetwork(n networkInfo) (string, error) {
 	return bridge, nil
 }
 
-func sandboxNetworkSpec() map[string]any {
+func sandboxNetworkSpec(ipv6 bool) map[string]any {
+	v6 := "false"
+	if ipv6 {
+		v6 = "true"
+	}
+	ipam := []map[string]string{{
+		"Subnet":  sandboxSubnet,
+		"Gateway": sandboxGateway,
+	}}
+	if ipv6 {
+		ipam = append(ipam, map[string]string{
+			"Subnet":  sandboxV6Subnet,
+			"Gateway": sandboxV6Gateway,
+		})
+	}
 	return map[string]any{
 		"Name":           sandboxNetwork,
 		"Driver":         "bridge",
 		"CheckDuplicate": true,
+		"EnableIPv6":     ipv6,
 		"Options": map[string]string{
 			"com.docker.network.bridge.name":        sandboxBridge,
 			"com.docker.network.bridge.enable_icc":  "false",
-			"com.docker.network.bridge.enable_ipv6": "false",
+			"com.docker.network.bridge.enable_ipv6": v6,
 		},
 		"IPAM": map[string]any{
 			"Driver": "default",
-			"Config": []map[string]string{{
-				"Subnet":  sandboxSubnet,
-				"Gateway": sandboxGateway,
-			}},
+			"Config": ipam,
 		},
 	}
 }

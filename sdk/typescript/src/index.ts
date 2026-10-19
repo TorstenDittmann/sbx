@@ -27,12 +27,26 @@ export type SandboxInfo = {
   diskMb: number
   pids: number
   network: string
+  egressAllow?: string[]
+  egressDeny?: string[]
+  egressKbps?: number
+  maxConnections?: number
   env?: Record<string, string>
   labels?: Record<string, string>
   idleTimeoutSeconds?: number
   expiresAt: string
   createdAt: string
   node: string
+}
+
+export type NetworkMode = "none" | "full" | "allow"
+
+export type NetworkPolicy = {
+  mode?: NetworkMode
+  allow?: string[]
+  deny?: string[]
+  egressKbps?: number
+  maxConnections?: number
 }
 
 export type CreateSandboxOptions = {
@@ -45,7 +59,7 @@ export type CreateSandboxOptions = {
   ttl?: number | string
   idleTimeout?: number | string
   env?: Record<string, string>
-  network?: { mode: "none" | "full"; allow?: string[] }
+  network?: NetworkPolicy
   backend?: "docker" | "gvisor"
   labels?: Record<string, string>
 }
@@ -87,8 +101,25 @@ export type PreviewInfo = {
   id: string
   sandboxId: string
   port: number
+  public: boolean
   url: string
+  publicUrl?: string
+  host?: string
+  token?: string
   createdAt?: string
+}
+
+export type CreatePreviewOptions = {
+  public?: boolean
+}
+
+export type CreatedKey = {
+  id: string
+  name: string
+  prefix: string
+  scopes: string[]
+  key: string
+  network: NetworkPolicy
 }
 
 export type FileEvent = {
@@ -132,6 +163,10 @@ type SandboxJSON = {
   disk_mb: number
   pids: number
   network: string
+  egress_allow?: string[]
+  egress_deny?: string[]
+  egress_kbps?: number
+  max_connections?: number
   env?: Record<string, string>
   labels?: Record<string, string>
   idle_timeout_seconds?: number
@@ -160,6 +195,10 @@ function mapSandbox(raw: SandboxJSON): SandboxInfo {
     diskMb: raw.disk_mb,
     pids: raw.pids,
     network: raw.network,
+    egressAllow: raw.egress_allow,
+    egressDeny: raw.egress_deny,
+    egressKbps: raw.egress_kbps,
+    maxConnections: raw.max_connections,
     env: raw.env,
     labels: raw.labels,
     idleTimeoutSeconds: raw.idle_timeout_seconds,
@@ -179,6 +218,16 @@ function mapExec(raw: ExecJSON): ExecResult {
   }
 }
 
+function networkBody(policy: NetworkPolicy): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (policy.mode) body.mode = policy.mode
+  if (policy.allow != null) body.allow = policy.allow
+  if (policy.deny != null) body.deny = policy.deny
+  if (policy.egressKbps != null) body.egress_kbps = policy.egressKbps
+  if (policy.maxConnections != null) body.max_connections = policy.maxConnections
+  return body
+}
+
 function commandArgs(cmd: string | string[]): string[] {
   if (typeof cmd === "string") return ["sh", "-lc", cmd]
   if (cmd.length === 0) throw new Error("cmd must not be empty")
@@ -196,7 +245,7 @@ function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   if (options.ttl != null) body.ttl_seconds = parseDuration(options.ttl)
   if (options.idleTimeout != null) body.idle_timeout_seconds = parseDuration(options.idleTimeout)
   if (options.env) body.env = options.env
-  if (options.network) body.network = options.network
+  if (options.network) body.network = networkBody(options.network)
   if (options.backend) body.backend = options.backend
   if (options.labels) body.labels = options.labels
   return body
@@ -255,6 +304,13 @@ export class SbxClient {
 
   createSandbox(options: CreateSandboxOptions = {}): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
+  }
+
+  createKey(name: string, options: { scopes?: string[]; network?: NetworkPolicy } = {}): Promise<CreatedKey> {
+    const body: Record<string, unknown> = { name }
+    if (options.scopes) body.scopes = options.scopes
+    if (options.network) body.network = networkBody(options.network)
+    return this.requestJSON<CreatedKeyJSON>("POST", "/v1/keys", body).then(mapKey)
   }
 
   getSandbox(id: string): Promise<SandboxInfo> {
@@ -414,8 +470,10 @@ export class SbxClient {
     return new TerminalSession(termId, new WS(url))
   }
 
-  createPreview(id: string, port: number): Promise<PreviewInfo> {
-    return this.requestJSON<PreviewJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/previews`, { port }).then(mapPreview)
+  createPreview(id: string, port: number, options: CreatePreviewOptions = {}): Promise<PreviewInfo> {
+    const body: Record<string, unknown> = { port }
+    if (options.public) body.public = true
+    return this.requestJSON<PreviewJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/previews`, body).then(mapPreview)
   }
 
   listPreviews(id: string): Promise<PreviewInfo[]> {
@@ -496,7 +554,11 @@ type PreviewJSON = {
   id: string
   sandbox_id: string
   port: number
+  public?: boolean
   url: string
+  public_url?: string
+  host?: string
+  token?: string
   created_at?: string
 }
 
@@ -517,8 +579,51 @@ function mapTerminal(raw: TerminalJSON): TerminalInfo {
   return { id: raw.id, pid: raw.pid, cols: raw.cols, rows: raw.rows }
 }
 
+type CreatedKeyJSON = {
+  id: string
+  name: string
+  prefix: string
+  scopes?: string[]
+  key: string
+  network?: {
+    mode?: NetworkMode
+    allow?: string[]
+    deny?: string[]
+    egress_kbps?: number
+    max_connections?: number
+  }
+}
+
+function mapKey(raw: CreatedKeyJSON): CreatedKey {
+  const network = raw.network ?? {}
+  return {
+    id: raw.id,
+    name: raw.name,
+    prefix: raw.prefix,
+    scopes: raw.scopes ?? [],
+    key: raw.key,
+    network: {
+      mode: network.mode,
+      allow: network.allow,
+      deny: network.deny,
+      egressKbps: network.egress_kbps,
+      maxConnections: network.max_connections,
+    },
+  }
+}
+
 function mapPreview(raw: PreviewJSON): PreviewInfo {
-  return { id: raw.id, sandboxId: raw.sandbox_id, port: raw.port, url: raw.url, createdAt: raw.created_at }
+  return {
+    id: raw.id,
+    sandboxId: raw.sandbox_id,
+    port: raw.port,
+    public: Boolean(raw.public),
+    url: raw.url,
+    publicUrl: raw.public_url,
+    host: raw.host,
+    token: raw.token,
+    createdAt: raw.created_at,
+  }
 }
 
 async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ExecEvent> {
@@ -736,8 +841,8 @@ export class Sandbox {
     return this.#client.connectTerminal(this.id, termId)
   }
 
-  createPreview(port: number): Promise<PreviewInfo> {
-    return this.#client.createPreview(this.id, port)
+  createPreview(port: number, options?: CreatePreviewOptions): Promise<PreviewInfo> {
+    return this.#client.createPreview(this.id, port, options)
   }
 
   listPreviews(): Promise<PreviewInfo[]> {

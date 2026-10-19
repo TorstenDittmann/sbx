@@ -209,8 +209,11 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"Id": id, "State": map[string]any{"Status": ctn.status, "Running": ctn.status == "running", "Paused": ctn.status == "paused"},
+			"Id": id, "State": map[string]any{"Status": ctn.status, "Running": ctn.status == "running", "Paused": ctn.status == "paused", "Pid": 4242},
 			"Config": map[string]any{"Image": ctn.body.Image, "Labels": ctn.body.Labels, "Env": ctn.body.Env},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{
+				"sbx": map[string]any{"IPAddress": "172.30.0.8", "GlobalIPv6Address": ""},
+			}},
 		})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/exec"):
 		var body execConfig

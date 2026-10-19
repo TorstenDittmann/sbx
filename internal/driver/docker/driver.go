@@ -36,6 +36,16 @@ type Options struct {
 	// NoEgressFilter skips the metadata firewall. Tests set it. Production
 	// creates with network=full always install the filter or fail closed.
 	NoEgressFilter bool
+	// ConfiguredPolicy keeps BlockPrivate and BlockMetadata as given.
+	// Without it, both default to true.
+	ConfiguredPolicy bool
+	BlockPrivate     bool
+	BlockMetadata    bool
+	PrivateAllow     []string
+	// IPv6 is auto, on, or off. Empty means auto.
+	IPv6 string
+	// Root runs the sandbox as uid 0. The default keeps uid 1000.
+	Root bool
 	// ScriptRunner applies the firewall script. When nil, the driver tries
 	// the host iptables and then a privileged helper.
 	ScriptRunner func(ctx context.Context, script string) error
@@ -53,6 +63,7 @@ type Driver struct {
 	client      *Client
 	egressMu    sync.Mutex
 	egressReady bool
+	bridge      string
 
 	agentMu    sync.Mutex
 	agentReady string
@@ -62,6 +73,17 @@ type Driver struct {
 	tokens    map[string]string
 	sessions  map[string]*agent.Client
 	sessLocks map[string]*sync.Mutex
+
+	polMu    sync.Mutex
+	policies map[string]appliedNet
+}
+
+type appliedNet struct {
+	spec    driver.SandboxSpec
+	ipv4    string
+	ipv6    string
+	chain   string
+	hostDev string
 }
 
 // New connects to the Docker socket.
@@ -69,15 +91,11 @@ func New(opt Options) (*Driver, error) {
 	if opt.Name == "" {
 		opt.Name = "docker"
 	}
-	if opt.UID == 0 {
-		opt.UID = 1000
-	}
-	if opt.GID == 0 {
-		opt.GID = 1000
-	}
+	opt = normalizeIdentity(opt)
 	if opt.MaxOutputBytes == 0 {
 		opt.MaxOutputBytes = 8 << 20
 	}
+	opt = normalizeNetOptions(opt)
 	cli, err := NewClient(opt.Host)
 	if err != nil {
 		return nil, err
@@ -92,18 +110,40 @@ func NewWithClient(opt Options, cli *Client) *Driver {
 	if opt.Name == "" {
 		opt.Name = "docker"
 	}
+	opt = normalizeIdentity(opt)
+	if opt.MaxOutputBytes == 0 {
+		opt.MaxOutputBytes = 8 << 20
+	}
+	opt = normalizeNetOptions(opt)
+	d := &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}
+	d.initSessions()
+	return d
+}
+
+func normalizeIdentity(opt Options) Options {
+	if opt.Root {
+		opt.UID = 0
+		opt.GID = 0
+		return opt
+	}
 	if opt.UID == 0 {
 		opt.UID = 1000
 	}
 	if opt.GID == 0 {
 		opt.GID = 1000
 	}
-	if opt.MaxOutputBytes == 0 {
-		opt.MaxOutputBytes = 8 << 20
+	return opt
+}
+
+func normalizeNetOptions(opt Options) Options {
+	if opt.IPv6 == "" {
+		opt.IPv6 = "auto"
 	}
-	d := &Driver{name: opt.Name, runtime: opt.Runtime, opt: opt, client: cli}
-	d.initSessions()
-	return d
+	if !opt.ConfiguredPolicy {
+		opt.BlockPrivate = true
+		opt.BlockMetadata = true
+	}
+	return opt
 }
 
 var _ driver.Driver = (*Driver)(nil)
@@ -192,6 +232,12 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	if token != "" {
 		d.rememberToken(id, token)
 	}
+	if spec.Network == driver.NetFull && !d.opt.NoEgressFilter {
+		if err := d.ApplyNetPolicy(ctx, id, spec); err != nil {
+			_ = d.client.ContainerRemove(context.Background(), id)
+			return driver.Handle{}, err
+		}
+	}
 	rt := d.runtime
 	if rt == "" {
 		rt = "runc"
@@ -200,6 +246,7 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 }
 
 func (d *Driver) Delete(ctx context.Context, id string) error {
+	d.dropNetPolicy(ctx, id)
 	d.closeSession(id)
 	return d.client.ContainerRemove(ctx, id)
 }

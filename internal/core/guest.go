@@ -2,6 +2,8 @@ package core
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"strings"
@@ -14,10 +16,15 @@ import (
 
 // Preview is a loopback port published through the API.
 type Preview struct {
-	ID        string
-	SandboxID string
-	Port      int
-	CreatedAt time.Time
+	ID          string
+	SandboxID   string
+	Port        int
+	Public      bool
+	Token       string
+	TokenHash   string
+	BytesPerSec int
+	MaxStreams  int
+	CreatedAt   time.Time
 }
 
 func (m *Manager) guest(ctx context.Context, actor Actor, sandboxID string) (store.Sandbox, driver.Guest, error) {
@@ -230,11 +237,20 @@ func (m *Manager) ResizeProcess(ctx context.Context, actor Actor, sandboxID, pro
 }
 
 // CreatePreview registers a loopback port on a sandbox.
-func (m *Manager) CreatePreview(ctx context.Context, actor Actor, sandboxID string, port int) (Preview, error) {
+// public previews can be opened without a credential when the operator allows it.
+// The returned Token is shown once.
+func (m *Manager) CreatePreview(ctx context.Context, actor Actor, sandboxID string, port int, public bool) (Preview, error) {
 	if port < 1 || port > 65535 {
 		return Preview{}, invalid("port must be between 1 and 65535")
 	}
+	if public && !m.cfg.Network.AllowPublicPreviews {
+		return Preview{}, forbidden("public previews are disabled")
+	}
 	sb, _, err := m.guest(ctx, actor, sandboxID)
+	if err != nil {
+		return Preview{}, err
+	}
+	token, hash, err := newPreviewToken()
 	if err != nil {
 		return Preview{}, err
 	}
@@ -252,10 +268,34 @@ func (m *Manager) CreatePreview(ctx context.Context, actor Actor, sandboxID stri
 	if n >= 16 {
 		return Preview{}, invalid("too many previews")
 	}
-	pv := Preview{ID: id.Preview(), SandboxID: sb.ID, Port: port, CreatedAt: m.now()}
+	maxStreams := m.cfg.Network.PreviewMaxStreams
+	if maxStreams < 1 {
+		maxStreams = 64
+	}
+	if sb.MaxConns > 0 && sb.MaxConns < maxStreams {
+		maxStreams = sb.MaxConns
+	}
+	bytesPerSec := 0
+	if sb.EgressKbps > 0 {
+		bytesPerSec = sb.EgressKbps * 1000 / 8
+	}
+	pv := Preview{
+		ID: id.Preview(), SandboxID: sb.ID, Port: port, Public: public,
+		Token: token, TokenHash: hash, BytesPerSec: bytesPerSec, MaxStreams: maxStreams,
+		CreatedAt: m.now(),
+	}
 	m.previews[pv.ID] = pv
 	m.touch(ctx, sb)
 	return pv, nil
+}
+
+func newPreviewToken() (string, string, error) {
+	var raw [24]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", "", err
+	}
+	plain := "pvt_" + hex.EncodeToString(raw[:])
+	return plain, id.Hash(plain), nil
 }
 
 // ListPreviews returns previews for one sandbox.
@@ -269,10 +309,135 @@ func (m *Manager) ListPreviews(ctx context.Context, actor Actor, sandboxID strin
 	out := []Preview{}
 	for _, pv := range m.previews {
 		if pv.SandboxID == sb.ID {
+			pv.Token = ""
 			out = append(out, pv)
 		}
 	}
 	return out, nil
+}
+
+// PreviewByID returns one preview. The token plaintext is not included.
+func (m *Manager) PreviewByID(sandboxID, previewID string) (Preview, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	pv, ok := m.previews[previewID]
+	if !ok || pv.SandboxID != sandboxID {
+		return Preview{}, false
+	}
+	pv.Token = ""
+	return pv, true
+}
+
+// PreviewByPort returns the preview published on a sandbox port.
+func (m *Manager) PreviewByPort(sandboxID string, port int) (Preview, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pv := range m.previews {
+		if pv.SandboxID == sandboxID && pv.Port == port {
+			pv.Token = ""
+			return pv, true
+		}
+	}
+	return Preview{}, false
+}
+
+// PreviewTokenOK reports whether plaintext matches the preview token.
+func (m *Manager) PreviewTokenOK(pv Preview, plaintext string) bool {
+	if plaintext == "" {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.previews[pv.ID]
+	if !ok {
+		return false
+	}
+	return cur.TokenHash == id.Hash(plaintext)
+}
+
+// AcquirePreview reserves one concurrent stream. ReleasePreview frees it.
+func (m *Manager) AcquirePreview(sandboxID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	max := m.cfg.Network.PreviewMaxStreams
+	if max < 1 {
+		max = 64
+	}
+	for _, pv := range m.previews {
+		if pv.SandboxID == sandboxID && pv.MaxStreams > 0 && pv.MaxStreams < max {
+			max = pv.MaxStreams
+		}
+	}
+	if m.streams == nil {
+		m.streams = map[string]int{}
+	}
+	if m.streams[sandboxID] >= max {
+		return quota("too many preview connections")
+	}
+	m.streams[sandboxID]++
+	return nil
+}
+
+// ReleasePreview frees a stream reserved by AcquirePreview.
+func (m *Manager) ReleasePreview(sandboxID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.streams == nil {
+		return
+	}
+	if m.streams[sandboxID] > 0 {
+		m.streams[sandboxID]--
+	}
+}
+
+// ThrottlePreview waits so preview traffic stays under the sandbox byte rate.
+func (m *Manager) ThrottlePreview(sandboxID string, n int) {
+	if n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	var rate float64
+	for _, pv := range m.previews {
+		if pv.SandboxID == sandboxID && pv.BytesPerSec > 0 {
+			rate = float64(pv.BytesPerSec)
+			break
+		}
+	}
+	if rate <= 0 {
+		m.mu.Unlock()
+		return
+	}
+	if m.budgets == nil {
+		m.budgets = map[string]*byteBudget{}
+	}
+	b := m.budgets[sandboxID]
+	if b == nil {
+		b = &byteBudget{rate: rate, tokens: rate}
+		m.budgets[sandboxID] = b
+	}
+	now := m.now()
+	if !b.last.IsZero() {
+		b.tokens += now.Sub(b.last).Seconds() * b.rate
+		if b.tokens > b.rate {
+			b.tokens = b.rate
+		}
+	}
+	b.last = now
+	b.tokens -= float64(n)
+	wait := time.Duration(0)
+	if b.tokens < 0 {
+		wait = time.Duration((-b.tokens / b.rate) * float64(time.Second))
+	}
+	m.mu.Unlock()
+	if wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+type byteBudget struct {
+	rate   float64
+	tokens float64
+	last   time.Time
 }
 
 // DeletePreview removes one preview.
@@ -297,6 +462,37 @@ func (m *Manager) DialPreview(ctx context.Context, actor Actor, sandboxID, previ
 	if err != nil {
 		return nil, Preview{}, err
 	}
+	return m.dialPreview(ctx, sb, g, previewID)
+}
+
+// OpenPreview dials a preview after the HTTP layer has authorized it.
+// It does not check which API key owns the sandbox.
+func (m *Manager) OpenPreview(ctx context.Context, sandboxID, previewID string) (io.ReadWriteCloser, Preview, error) {
+	sb, err := m.store.GetSandbox(ctx, sandboxID)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, Preview{}, notFound("sandbox not found")
+	}
+	if err != nil {
+		return nil, Preview{}, err
+	}
+	if sb.Status == "paused" {
+		return nil, Preview{}, conflict("sandbox is paused")
+	}
+	if sb.Status != "running" {
+		return nil, Preview{}, conflict("sandbox is not running")
+	}
+	d, err := m.backend(sb)
+	if err != nil {
+		return nil, Preview{}, err
+	}
+	g, ok := d.(driver.Guest)
+	if !ok || !g.GuestEnabled() {
+		return nil, Preview{}, unsupported("sandbox agent is not enabled")
+	}
+	return m.dialPreview(ctx, sb, g, previewID)
+}
+
+func (m *Manager) dialPreview(ctx context.Context, sb store.Sandbox, g driver.Guest, previewID string) (io.ReadWriteCloser, Preview, error) {
 	m.mu.Lock()
 	pv, ok := m.previews[previewID]
 	m.mu.Unlock()
@@ -308,6 +504,7 @@ func (m *Manager) DialPreview(ctx context.Context, actor Actor, sandboxID, previ
 		return nil, Preview{}, m.mapGuest(err)
 	}
 	m.touch(ctx, sb)
+	pv.Token = ""
 	return conn, pv, nil
 }
 

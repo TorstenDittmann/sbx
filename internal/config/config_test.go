@@ -57,6 +57,52 @@ func TestLoadFileAndEnv(t *testing.T) {
 	if cfg.Limits.DefaultTTLSeconds != 300 {
 		t.Fatal("unspecified limit should stay at the default")
 	}
+	if cfg.Network.DefaultMode != "none" || !cfg.Network.BlockPrivate || cfg.Network.IPv6 != "auto" {
+		t.Fatalf("network defaults %+v", cfg.Network)
+	}
+}
+
+func TestNetworkConfigFileAndEnv(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sbx.yaml")
+	body := []byte("" +
+		"network:\n" +
+		"  default_mode: full\n" +
+		"  block_private: false\n" +
+		"  private_allow:\n" +
+		"    - 10.1.0.0/16\n" +
+		"  dns:\n" +
+		"    - 9.9.9.9\n" +
+		"  ipv6: \"on\"\n" +
+		"  egress_deny:\n" +
+		"    - example.net\n" +
+		"  preview_domain: sbx.example.com\n" +
+		"  public_url: https://api.example.com\n" +
+		"docker:\n" +
+		"  sandbox_root: true\n")
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SBX_NETWORK_MODE", "allow")
+	t.Setenv("SBX_EGRESS_ALLOW", "1.1.1.1/32,example.com")
+	t.Setenv("SBX_BLOCK_METADATA", "false")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.DefaultMode != "allow" || cfg.Network.BlockPrivate || cfg.Network.BlockMetadata {
+		t.Fatalf("%+v", cfg.Network)
+	}
+	if len(cfg.Network.EgressAllow) != 2 || cfg.Network.DNS[0] != "9.9.9.9" || cfg.Network.IPv6 != "on" {
+		t.Fatalf("%+v", cfg.Network)
+	}
+	if cfg.Network.PreviewDomain != "sbx.example.com" || !cfg.Docker.SandboxRoot {
+		t.Fatalf("%+v %+v", cfg.Network, cfg.Docker)
+	}
+	cfg.Network.DefaultMode = "weird"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid mode")
+	}
 }
 
 func TestValidateEdges(t *testing.T) {

@@ -98,8 +98,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/previews/{previewId}", s.auth("sandbox", s.deletePreview))
 	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{$}", s.auth("sandbox", s.proxyPreview))
 	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{path...}", s.auth("sandbox", s.proxyPreview))
+	mux.HandleFunc("/p/{sandboxId}/{port}/{$}", s.proxyPublicPath)
+	mux.HandleFunc("/p/{sandboxId}/{port}/{path...}", s.proxyPublicPath)
 
-	return s.recover(s.logRequests(mux))
+	return s.recover(s.logRequests(s.routePreviewHost(mux)))
 }
 
 func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
@@ -223,8 +225,15 @@ func actor(r *http.Request) core.Actor {
 
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name   string   `json:"name"`
-		Scopes []string `json:"scopes"`
+		Name    string   `json:"name"`
+		Scopes  []string `json:"scopes"`
+		Network *struct {
+			Mode       string    `json:"mode"`
+			Allow      *[]string `json:"allow"`
+			Deny       *[]string `json:"deny"`
+			EgressKbps int       `json:"egress_kbps"`
+			MaxConns   int       `json:"max_connections"`
+		} `json:"network"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
@@ -243,24 +252,64 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	var network store.KeyNetwork
+	if body.Network != nil {
+		network.Mode = body.Network.Mode
+		network.Allow = body.Network.Allow
+		network.Deny = body.Network.Deny
+		network.EgressKbps = body.Network.EgressKbps
+		network.MaxConns = body.Network.MaxConns
+		if network.Mode != "" && network.Mode != "none" && network.Mode != "full" && network.Mode != "allow" {
+			writeErr(w, http.StatusBadRequest, "invalid", "network.mode must be none, full, or allow")
+			return
+		}
+		if network.EgressKbps < 0 || network.MaxConns < 0 {
+			writeErr(w, http.StatusBadRequest, "invalid", "bandwidth and connection limits must be >= 0")
+			return
+		}
+	}
 	plain, hash, prefix := id.Key()
 	key := store.APIKey{
 		ID: id.RecordID(), Name: body.Name, Hash: hash, Prefix: prefix,
-		Scopes: body.Scopes, CreatedAt: time.Now().UTC(),
+		Scopes: body.Scopes, Network: network, CreatedAt: time.Now().UTC(),
 	}
 	if err := s.mgr.Store().CreateKey(r.Context(), key); err != nil {
 		s.log.Error("create key", "err", err)
 		writeErr(w, http.StatusInternalServerError, "internal", "could not create key")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{
+	writeJSON(w, http.StatusCreated, keyJSON(key, plain))
+}
+
+func keyJSON(key store.APIKey, secret string) map[string]any {
+	body := map[string]any{
 		"id":         key.ID,
 		"name":       key.Name,
 		"prefix":     key.Prefix,
 		"scopes":     key.Scopes,
-		"key":        plain,
 		"created_at": key.CreatedAt,
-	})
+		"network": map[string]any{
+			"mode":            key.Network.Mode,
+			"allow":           stringSlice(key.Network.Allow),
+			"deny":            stringSlice(key.Network.Deny),
+			"egress_kbps":     key.Network.EgressKbps,
+			"max_connections": key.Network.MaxConns,
+		},
+	}
+	if secret != "" {
+		body["key"] = secret
+	}
+	if key.LastUsedAt != nil {
+		body["last_used_at"] = key.LastUsedAt
+	}
+	return body
+}
+
+func stringSlice(v *[]string) []string {
+	if v == nil {
+		return []string{}
+	}
+	return *v
 }
 
 func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
@@ -271,13 +320,7 @@ func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(keys))
 	for _, k := range keys {
-		item := map[string]any{
-			"id": k.ID, "name": k.Name, "prefix": k.Prefix, "scopes": k.Scopes, "created_at": k.CreatedAt,
-		}
-		if k.LastUsedAt != nil {
-			item["last_used_at"] = k.LastUsedAt
-		}
-		out = append(out, item)
+		out = append(out, keyJSON(k, ""))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -341,7 +384,16 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Network != nil {
 		in.Network = body.Network.Mode
-		in.Allow = body.Network.Allow
+		if body.Network.Allow != nil {
+			in.HasAllow = true
+			in.Allow = *body.Network.Allow
+		}
+		if body.Network.Deny != nil {
+			in.HasDeny = true
+			in.Deny = *body.Network.Deny
+		}
+		in.EgressKbps = body.Network.EgressKbps
+		in.MaxConns = body.Network.MaxConns
 	}
 	sb, err := s.mgr.Create(r.Context(), actor(r), in)
 	if err != nil {
@@ -625,8 +677,11 @@ type createRequest struct {
 	IdleTimeoutSeconds *int              `json:"idle_timeout_seconds"`
 	Env                map[string]string `json:"env"`
 	Network            *struct {
-		Mode  string   `json:"mode"`
-		Allow []string `json:"allow"`
+		Mode       string    `json:"mode"`
+		Allow      *[]string `json:"allow"`
+		Deny       *[]string `json:"deny"`
+		EgressKbps *int      `json:"egress_kbps"`
+		MaxConns   *int      `json:"max_connections"`
 	} `json:"network"`
 	Backend string            `json:"backend"`
 	Labels  map[string]string `json:"labels"`
@@ -652,6 +707,10 @@ type sandboxResponse struct {
 	DiskMB             int               `json:"disk_mb"`
 	PIDs               int               `json:"pids"`
 	Network            string            `json:"network"`
+	Allow              []string          `json:"egress_allow,omitempty"`
+	Deny               []string          `json:"egress_deny,omitempty"`
+	EgressKbps         int               `json:"egress_kbps,omitempty"`
+	MaxConns           int               `json:"max_connections,omitempty"`
 	Env                map[string]string `json:"env,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 	IdleTimeoutSeconds int               `json:"idle_timeout_seconds,omitempty"`
@@ -664,6 +723,7 @@ func sandboxJSON(sb store.Sandbox) sandboxResponse {
 	return sandboxResponse{
 		ID: sb.ID, Status: sb.Status, Backend: sb.Backend, Template: sb.Template, Image: sb.Image,
 		CPU: sb.CPU, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB, PIDs: sb.PIDs, Network: sb.Network,
+		Allow: sb.Allow, Deny: sb.Deny, EgressKbps: sb.EgressKbps, MaxConns: sb.MaxConns,
 		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds,
 		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local",
 	}

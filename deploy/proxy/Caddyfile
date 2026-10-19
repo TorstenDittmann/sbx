@@ -1,0 +1,5 @@
+# Terminate TLS here. sbx stays on HTTP/1.1 so WebSocket upgrades reach the sandbox.
+# DNS: api.example.com and *.sbx.example.com both point at this proxy.
+api.example.com, *.sbx.example.com {
+	reverse_proxy sbx:8080
+}

@@ -39,8 +39,9 @@ Usage:
 
 Environment (overrides the config file):
   SBX_ADDR SBX_DATA_DIR SBX_BACKEND SBX_DOCKER_HOST SBX_BOOTSTRAP_KEY
-  SBX_GVISOR_RUNTIME SBX_READ_ONLY_ROOTFS SBX_LOG_LEVEL SBX_CONFIG
-  SBX_AGENT_BIN
+  SBX_GVISOR_RUNTIME SBX_READ_ONLY_ROOTFS SBX_SANDBOX_ROOT SBX_LOG_LEVEL
+  SBX_CONFIG SBX_AGENT_BIN SBX_NETWORK_MODE SBX_DNS SBX_IPV6
+  SBX_PREVIEW_DOMAIN SBX_PUBLIC_URL
 `
 
 // Run executes a command. args is os.Args[1:].
@@ -363,12 +364,18 @@ func agentBinary(cfg config.Config) string {
 
 func openDrivers(cfg config.Config) (map[string]driver.Driver, error) {
 	base := docker.Options{
-		Host:           cfg.Docker.Host,
-		ReadOnlyRootfs: cfg.Docker.ReadOnlyRootfs,
-		UID:            cfg.Docker.SandboxUID,
-		GID:            cfg.Docker.SandboxGID,
-		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
-		AgentBin:       agentBinary(cfg),
+		Host:             cfg.Docker.Host,
+		ReadOnlyRootfs:   cfg.Docker.ReadOnlyRootfs,
+		UID:              cfg.Docker.SandboxUID,
+		GID:              cfg.Docker.SandboxGID,
+		MaxOutputBytes:   cfg.Limits.MaxOutputBytes,
+		AgentBin:         agentBinary(cfg),
+		Root:             cfg.Docker.SandboxRoot,
+		ConfiguredPolicy: true,
+		BlockPrivate:     cfg.Network.BlockPrivate,
+		BlockMetadata:    cfg.Network.BlockMetadata,
+		PrivateAllow:     append([]string{}, cfg.Network.PrivateAllow...),
+		IPv6:             cfg.Network.IPv6,
 	}
 	dockOpt := base
 	dockOpt.Name = "docker"

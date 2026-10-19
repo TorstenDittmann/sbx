@@ -43,8 +43,23 @@ jobs:
           go-version: "1.22"
       - name: build agent
         run: CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
+      - name: install gvisor
+        run: |
+          set -euo pipefail
+          ARCH=$(uname -m)
+          TAG=$(curl -fsSL https://api.github.com/repos/google/gvisor/releases/latest | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1)
+          test -n "$TAG"
+          curl -fsSL -o "gvisor-${ARCH}.tar.bz2" "https://github.com/google/gvisor/releases/download/${TAG}/gvisor-${ARCH}.tar.bz2"
+          curl -fsSL -o SHA512SUMS "https://github.com/google/gvisor/releases/download/${TAG}/SHA512SUMS"
+          grep "gvisor-${ARCH}.tar.bz2" SHA512SUMS | sha512sum -c
+          tar -xf "gvisor-${ARCH}.tar.bz2" runsc containerd-shim-runsc-v1
+          chmod a+rx runsc containerd-shim-runsc-v1
+          sudo mv runsc containerd-shim-runsc-v1 /usr/local/bin
+          sudo runsc install
+          sudo systemctl restart docker
+          docker info --format '{{json .Runtimes}}' | grep -q runsc
       - name: docker integration
-        run: SBX_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 20m ./internal/driver/docker/ ./test/e2e/
+        run: SBX_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 40m ./internal/driver/docker/ ./test/e2e/
 
   sdk:
     runs-on: ubuntu-latest
