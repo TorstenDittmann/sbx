@@ -38,6 +38,7 @@
 		{ method: "POST", path: "/v1/sandboxes/{id}/terminals", detail: "PTY, then a WebSocket" },
 		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "inotify, or a poll fallback" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/previews", detail: "a port on the sandbox loopback" },
+		{ method: "POST", path: "/v1/volumes", detail: "a disk that outlives the sandbox" },
 		{ method: "PUT", path: "/v1/sandboxes/{id}/files/content", detail: "upload" },
 		{ method: "GET", path: "/healthz", detail: "Docker reachable, or 503" },
 		{ method: "GET", path: "/openapi.yaml", detail: "the contract" },
@@ -145,7 +146,7 @@
 	<h2>Limits</h2>
 	<ul>
 		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and per-sandbox bandwidth. Metadata and private ranges stay blocked unless the operator opts out. Previews can be public or token-protected, including <code>{'{port}-sbx-{id}.example.com'}</code>.</li>
-		<li><code>disk_mb</code> is the size of the writable <code>/workspace</code> tmpfs. The root filesystem is read-only, memory has no swap, and a PID limit applies.</li>
+		<li><code>disk_mb</code> is the size of the writable <code>/workspace</code> tmpfs. Mount a volume at <code>/workspace</code> when a coding agent should keep its project; <code>disk_mb</code> does not cap that path. The root filesystem is read-only, memory has no swap, and a PID limit applies.</li>
 		<li>The agent packs and extracts archives, so the image does not need <code>tar</code>. Without the agent, archives still call <code>tar</code>. Pause, resume, templates, quotas, and <code>/metrics</code> are real. A multi-node scheduler is not.</li>
 	</ul>
 </section>
