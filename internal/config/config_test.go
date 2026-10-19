@@ -148,9 +148,16 @@ func TestValidateEdges(t *testing.T) {
 
 func TestRejectsBadBackend(t *testing.T) {
 	cfg := Default()
-	cfg.Backend = "firecracker"
+	cfg.Backend = "kubernetes"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error")
+	}
+	cfg = Default()
+	cfg.Backend = "firecracker"
+	cfg.Firecracker.Jailer = "/usr/bin/jailer"
+	cfg.Firecracker.UID = 0
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected jailer uid error")
 	}
 }
 

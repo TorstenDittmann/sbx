@@ -80,6 +80,9 @@ func TestDoctor(t *testing.T) {
 	if err := Run([]string{"doctor", "--data-dir", t.TempDir(), "--docker-host", sock, "--backend", "kata"}); err == nil {
 		t.Fatal("expected kata failure")
 	}
+	if err := Run([]string{"doctor", "--data-dir", t.TempDir(), "--docker-host", sock, "--backend", "firecracker"}); err == nil {
+		t.Fatal("expected firecracker failure")
+	}
 }
 
 func TestSetupPlans(t *testing.T) {

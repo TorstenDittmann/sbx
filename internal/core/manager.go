@@ -1068,6 +1068,9 @@ func (m *Manager) asDriver(err error) error {
 	if errors.Is(err, driver.ErrRuntimeUnavailable) {
 		return unsupported(err.Error())
 	}
+	if errors.Is(err, driver.ErrConfig) {
+		return invalid(err.Error())
+	}
 	if errors.Is(err, driver.ErrImage) {
 		return invalid(err.Error())
 	}

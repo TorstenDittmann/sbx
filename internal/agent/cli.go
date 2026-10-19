@@ -9,6 +9,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -25,9 +27,18 @@ const (
 )
 
 // Run is the sbx-agent command line. args does not include argv0.
+// With no arguments, a guest.json (Firecracker init) serves on vsock.
+// Otherwise it listens on the unix socket used by Docker and Kata.
 func Run(args []string) error {
-	if len(args) == 0 {
-		args = []string{"init"}
+	if len(args) == 0 || (len(args) > 0 && strings.Contains(args[0], "=")) {
+		if cfg, err := loadGuest(); err == nil && cfg.Token != "" {
+			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+			defer stop()
+			return serveGuest(ctx, cfg)
+		}
+		if len(args) == 0 {
+			args = []string{"init"}
+		}
 	}
 	switch args[0] {
 	case "init":
@@ -37,7 +48,7 @@ func Run(args []string) error {
 	case "dial":
 		return Dial(os.Stdin, os.Stdout)
 	case "serve":
-		return serveTCP(args[1:])
+		return serveListen(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprint(os.Stdout, version.FormatBinary("sbx-agent"))
 		return nil
@@ -51,9 +62,10 @@ func Run(args []string) error {
 
 // Init listens on the unix socket and serves until ctx is cancelled.
 func Init(ctx context.Context) error {
-	token := os.Getenv(EnvToken)
-	if token == "" {
-		return errors.New("SBX_AGENT_TOKEN is required")
+	cfg, _ := loadGuest()
+	token, err := tokenFrom(cfg)
+	if err != nil {
+		return err
 	}
 	sock := os.Getenv(EnvSocket)
 	if sock == "" {
@@ -150,23 +162,69 @@ func dialUnix(sock string, wait time.Duration) (net.Conn, error) {
 	}
 }
 
-func serveTCP(args []string) error {
+func serveListen(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	listen := fs.String("listen", "127.0.0.1:0", "tcp address")
+	listen := fs.String("listen", "127.0.0.1:0", "tcp, unix:PATH, or vsock:PORT")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	token := os.Getenv(EnvToken)
-	if token == "" {
-		return errors.New("SBX_AGENT_TOKEN is required")
+	cfg, _ := loadGuest()
+	token, err := tokenFrom(cfg)
+	if err != nil {
+		return err
 	}
-	ln, err := net.Listen("tcp", *listen)
+	ln, err := listenAddr(*listen)
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	return serveListener(ctx, ln, token)
+}
+
+func listenAddr(addr string) (net.Listener, error) {
+	switch {
+	case strings.HasPrefix(addr, "vsock:"):
+		port, err := strconv.ParseUint(strings.TrimPrefix(addr, "vsock:"), 10, 32)
+		if err != nil || port == 0 {
+			return nil, fmt.Errorf("vsock port %q", strings.TrimPrefix(addr, "vsock:"))
+		}
+		return listenVsock(uint32(port))
+	case strings.HasPrefix(addr, "unix:"):
+		path := strings.TrimPrefix(addr, "unix:")
+		_ = os.Remove(path)
+		return net.Listen("unix", path)
+	default:
+		return net.Listen("tcp", addr)
+	}
+}
+
+// serveGuest is PID 1 inside a Firecracker microVM.
+func serveGuest(ctx context.Context, cfg GuestConfig) error {
+	token, err := tokenFrom(cfg)
+	if err != nil {
+		return err
+	}
+	if err := preparePID1(); err != nil {
+		return err
+	}
+	reapZombies()
+	applyGuestEnv(cfg)
+	if err := configureGuestNet(cfg.IP, cfg.Gateway); err != nil {
+		return err
+	}
+	if err := writeResolv("/etc/resolv.conf", cfg.DNS); err != nil {
+		return err
+	}
+	port := cfg.VsockPort
+	if port == 0 {
+		port = DefaultVsockPort
+	}
+	ln, err := listenVsock(uint32(port))
+	if err != nil {
+		return err
+	}
 	return serveListener(ctx, ln, token)
 }
 

@@ -14,15 +14,16 @@ import (
 
 // Config is the resolved server configuration.
 type Config struct {
-	Addr     string
-	DataDir  string
-	Backend  string
-	LogLevel string
-	Docker   DockerConfig
-	Kata     KataConfig
-	Limits   Limits
-	Auth     AuthConfig
-	Network  NetworkConfig
+	Addr        string
+	DataDir     string
+	Backend     string
+	LogLevel    string
+	Docker      DockerConfig
+	Kata        KataConfig
+	Firecracker FirecrackerConfig
+	Limits      Limits
+	Auth        AuthConfig
+	Network     NetworkConfig
 }
 
 // DockerConfig controls the engine socket and sandbox hardening.
@@ -46,6 +47,18 @@ type KataConfig struct {
 	Runtime string
 	// RuntimeType is the containerd shim. Default "io.containerd.kata.v2".
 	RuntimeType string
+}
+
+// FirecrackerConfig selects the microVM binary, kernel, and optional jailer.
+// Empty Bin and Kernel mean the files written by `sbx setup firecracker`
+// under the data directory, then a firecracker binary on PATH.
+type FirecrackerConfig struct {
+	Bin    string
+	Kernel string
+	// Jailer is a path to the Firecracker jailer. Empty leaves the jailer off.
+	Jailer string
+	UID    int
+	GID    int
 }
 
 // Limits are server-enforced ceilings. Zero values are replaced by Default.
@@ -117,6 +130,10 @@ func Default() Config {
 			Runtime:     "kata",
 			RuntimeType: "io.containerd.kata.v2",
 		},
+		Firecracker: FirecrackerConfig{
+			UID: 123,
+			GID: 123,
+		},
 		Limits: Limits{
 			DefaultTTLSeconds:      300,
 			MaxTTLSeconds:          86400,
@@ -162,15 +179,16 @@ func (c Config) KeyPath() string {
 }
 
 type fileConfig struct {
-	Addr     *string      `yaml:"addr"`
-	DataDir  *string      `yaml:"data_dir"`
-	Backend  *string      `yaml:"backend"`
-	LogLevel *string      `yaml:"log_level"`
-	Docker   *fileDocker  `yaml:"docker"`
-	Kata     *fileKata    `yaml:"kata"`
-	Limits   *fileLimits  `yaml:"limits"`
-	Auth     *fileAuth    `yaml:"auth"`
-	Network  *fileNetwork `yaml:"network"`
+	Addr        *string          `yaml:"addr"`
+	DataDir     *string          `yaml:"data_dir"`
+	Backend     *string          `yaml:"backend"`
+	LogLevel    *string          `yaml:"log_level"`
+	Docker      *fileDocker      `yaml:"docker"`
+	Kata        *fileKata        `yaml:"kata"`
+	Firecracker *fileFirecracker `yaml:"firecracker"`
+	Limits      *fileLimits      `yaml:"limits"`
+	Auth        *fileAuth        `yaml:"auth"`
+	Network     *fileNetwork     `yaml:"network"`
 }
 
 type fileDocker struct {
@@ -186,6 +204,14 @@ type fileDocker struct {
 type fileKata struct {
 	Runtime     *string `yaml:"runtime"`
 	RuntimeType *string `yaml:"runtime_type"`
+}
+
+type fileFirecracker struct {
+	Bin    *string `yaml:"bin"`
+	Kernel *string `yaml:"kernel"`
+	Jailer *string `yaml:"jailer"`
+	UID    *int    `yaml:"uid"`
+	GID    *int    `yaml:"gid"`
 }
 
 type fileLimits struct {
@@ -272,6 +298,13 @@ func (f fileConfig) apply(cfg *Config) {
 		setString(&cfg.Kata.Runtime, k.Runtime)
 		setString(&cfg.Kata.RuntimeType, k.RuntimeType)
 	}
+	if fc := f.Firecracker; fc != nil {
+		setString(&cfg.Firecracker.Bin, fc.Bin)
+		setString(&cfg.Firecracker.Kernel, fc.Kernel)
+		setString(&cfg.Firecracker.Jailer, fc.Jailer)
+		setInt(&cfg.Firecracker.UID, fc.UID)
+		setInt(&cfg.Firecracker.GID, fc.GID)
+	}
 	if l := f.Limits; l != nil {
 		setInt(&cfg.Limits.DefaultTTLSeconds, l.DefaultTTLSeconds)
 		setInt(&cfg.Limits.MaxTTLSeconds, l.MaxTTLSeconds)
@@ -337,6 +370,11 @@ func applyEnv(cfg *Config) {
 	envBool(&cfg.Docker.SandboxRoot, "SBX_SANDBOX_ROOT")
 	envString(&cfg.Kata.Runtime, "SBX_KATA_RUNTIME")
 	envString(&cfg.Kata.RuntimeType, "SBX_KATA_RUNTIME_TYPE")
+	envString(&cfg.Firecracker.Bin, "SBX_FIRECRACKER_BIN")
+	envString(&cfg.Firecracker.Kernel, "SBX_FIRECRACKER_KERNEL")
+	envString(&cfg.Firecracker.Jailer, "SBX_FIRECRACKER_JAILER")
+	envInt(&cfg.Firecracker.UID, "SBX_FIRECRACKER_UID")
+	envInt(&cfg.Firecracker.GID, "SBX_FIRECRACKER_GID")
 	envString(&cfg.Auth.BootstrapKey, "SBX_BOOTSTRAP_KEY")
 	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")
@@ -364,9 +402,15 @@ func applyEnv(cfg *Config) {
 // Validate checks the resolved configuration.
 func (c Config) Validate() error {
 	switch c.Backend {
-	case "docker", "gvisor", "kata":
+	case "docker", "gvisor", "kata", "firecracker":
 	default:
-		return fmt.Errorf("backend must be docker, gvisor, or kata, got %q", c.Backend)
+		return fmt.Errorf("backend must be docker, gvisor, kata, or firecracker, got %q", c.Backend)
+	}
+	if c.Firecracker.UID < 0 || c.Firecracker.GID < 0 {
+		return fmt.Errorf("firecracker uid and gid must be >= 0")
+	}
+	if c.Firecracker.Jailer != "" && (c.Firecracker.UID < 1 || c.Firecracker.GID < 1) {
+		return fmt.Errorf("firecracker jailer requires uid and gid >= 1")
 	}
 	if c.Kata.Runtime == "" || c.Kata.RuntimeType == "" {
 		return fmt.Errorf("kata runtime and runtime_type are required")

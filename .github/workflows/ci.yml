@@ -84,6 +84,38 @@ jobs:
           CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
           SBX_KATA_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 20m ./internal/driver/kata/ -run TestIntegrationBoot -v
 
+  firecracker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: firecracker integration
+        run: |
+          set -euo pipefail
+          if [ ! -e /dev/kvm ]; then
+            echo "no /dev/kvm; skipping Firecracker boot"
+            exit 0
+          fi
+          if [ ! -w /dev/kvm ] && ! sudo -n test -w /dev/kvm; then
+            echo "/dev/kvm is not writable; skipping Firecracker boot"
+            exit 0
+          fi
+          if [ "$(id -u)" -ne 0 ] && ! sudo -n true; then
+            echo "root or passwordless sudo is required to mount the ext4 rootfs; skipping"
+            exit 0
+          fi
+          CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
+          chmod 755 /tmp/sbx-agent
+          if [ "$(id -u)" -eq 0 ]; then
+            SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v
+          else
+            sudo -E env PATH="$PATH" GOCACHE=/tmp/sbx-go-cache GOMODCACHE=/tmp/sbx-go-mod \
+              SBX_FC_INTEGRATION=1 SBX_AGENT_BIN=/tmp/sbx-agent \
+              go test -count=1 -timeout 30m ./internal/driver/firecracker/ -run TestIntegrationBoot -v
+          fi
+
   sdk:
     runs-on: ubuntu-latest
     steps:

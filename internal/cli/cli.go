@@ -23,6 +23,7 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/core"
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/driver/docker"
+	"github.com/TorstenDittmann/sbx/internal/driver/firecracker"
 	"github.com/TorstenDittmann/sbx/internal/driver/kata"
 	"github.com/TorstenDittmann/sbx/internal/id"
 	"github.com/TorstenDittmann/sbx/internal/probe"
@@ -201,7 +202,7 @@ func doctor(args []string) error {
 	} else {
 		report(true, "gvisor", "runsc is registered")
 	}
-	reportHost(report, cfg)
+	reportHost(report)
 	if k, ok := drivers["kata"].(*kata.Driver); ok {
 		if err := k.Check(ctx); err != nil {
 			detail := err.Error() + " (optional unless --backend kata)"
@@ -212,6 +213,18 @@ func doctor(args []string) error {
 			}
 		} else {
 			report(true, "kata", "runtime class is registered")
+		}
+	}
+	if fc, ok := drivers["firecracker"].(*firecracker.Driver); ok {
+		if err := fc.Check(ctx); err != nil {
+			detail := err.Error() + " (optional unless --backend firecracker; sbx setup firecracker --apply)"
+			if cfg.Backend == "firecracker" {
+				report(false, "firecracker", detail)
+			} else {
+				fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", detail)
+			}
+		} else {
+			report(true, "firecracker", "kernel and binary are ready")
 		}
 	}
 	report(true, "backend", cfg.Backend)
@@ -229,28 +242,12 @@ func doctor(args []string) error {
 	return nil
 }
 
-func reportHost(report func(bool, string, string), cfg config.Config) {
+func reportHost(report func(bool, string, string)) {
 	ok, detail := probe.KVM()
 	if ok {
 		report(true, "kvm", detail)
 	} else {
 		fmt.Printf("%-6s %s — %s\n", "warn", "kvm", detail+" (required for kata and firecracker)")
-	}
-	manifest := filepath.Join(cfg.DataDir, "firecracker", "manifest.json")
-	kernel := filepath.Join(cfg.DataDir, "firecracker", "vmlinux")
-	bin := filepath.Join(cfg.DataDir, "firecracker", "firecracker")
-	switch {
-	case probe.File(bin) && probe.File(kernel):
-		report(true, "firecracker", bin)
-		report(true, "kernel", kernel)
-	case probe.File(manifest):
-		fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", "manifest is incomplete")
-	default:
-		if path, found := probe.Which("firecracker"); found {
-			fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", path+" (no kernel in the data dir; sbx setup firecracker --apply)")
-		} else {
-			fmt.Printf("%-6s %s — %s\n", "warn", "firecracker", "not installed (sbx setup firecracker --apply)")
-		}
 	}
 }
 
@@ -394,7 +391,7 @@ func loadFlags(name string, args []string) (config.Config, error) {
 	configPath := fs.String("config", os.Getenv("SBX_CONFIG"), "config file")
 	addr := fs.String("addr", "", "listen address")
 	dataDir := fs.String("data-dir", "", "data directory")
-	backend := fs.String("backend", "", "docker, gvisor, or kata")
+	backend := fs.String("backend", "", "docker, gvisor, kata, or firecracker")
 	dockerHost := fs.String("docker-host", "", "docker socket")
 	agentBin := fs.String("agent-bin", "", "path to the sbx-agent binary")
 	bootstrap := fs.String("bootstrap-key", "", "API key created on first boot")
@@ -496,7 +493,21 @@ func openDrivers(cfg config.Config) (map[string]driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]driver.Driver{"docker": dock, "gvisor": gvis, "kata": kataDrv}, nil
+	fc, err := firecracker.New(firecracker.Options{
+		Bin:            cfg.Firecracker.Bin,
+		Kernel:         cfg.Firecracker.Kernel,
+		Jailer:         cfg.Firecracker.Jailer,
+		DataDir:        cfg.DataDir,
+		DockerHost:     cfg.Docker.Host,
+		AgentBin:       agentBinary(cfg),
+		UID:            cfg.Firecracker.UID,
+		GID:            cfg.Firecracker.GID,
+		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]driver.Driver{"docker": dock, "gvisor": gvis, "kata": kataDrv, "firecracker": fc}, nil
 }
 
 func checkDrivers(ctx context.Context, cfg config.Config, drivers map[string]driver.Driver, log *slog.Logger) error {
@@ -517,6 +528,14 @@ func checkDrivers(ctx context.Context, cfg config.Config, drivers map[string]dri
 				return err
 			}
 			log.Warn("kata runtime is not registered; backend=kata will fail until the runtime class is installed", "err", err)
+		}
+	}
+	if fc, ok := drivers["firecracker"].(*firecracker.Driver); ok {
+		if err := fc.Check(ctx); err != nil {
+			if cfg.Backend == "firecracker" {
+				return err
+			}
+			log.Warn("firecracker is not ready; backend=firecracker will fail until the binary and kernel are installed", "err", err)
 		}
 	}
 	return nil

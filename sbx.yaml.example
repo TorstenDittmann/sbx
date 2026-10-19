@@ -10,6 +10,14 @@ kata:
   runtime: kata
   runtime_type: io.containerd.kata.v2
 
+firecracker:
+  # Empty bin and kernel use data/firecracker/ after `sbx setup firecracker --apply`.
+  # bin: data/firecracker/firecracker
+  # kernel: data/firecracker/vmlinux
+  # jailer: data/firecracker/jailer
+  uid: 123
+  gid: 123
+
 docker:
   host: /var/run/docker.sock
   gvisor_runtime: runsc

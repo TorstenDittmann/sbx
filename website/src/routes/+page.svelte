@@ -21,8 +21,8 @@
 		},
 		{
 			name: "firecracker",
-			isolation: "A microVM per sandbox.",
-			status: "Planned",
+			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock. Snapshot restore is not in this build.",
+			status: "Ships, optional",
 		},
 		{
 			name: "kubernetes",
@@ -78,7 +78,7 @@
 
 <section class="container compare" id="backends">
 	<h2>Easy now, stronger later</h2>
-	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata ships when the host has the runtime class. Firecracker and Kubernetes are planned. They keep this API.</p>
+	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata and Firecracker use the same API when the host has KVM and their runtime. Kubernetes is planned.</p>
 	<div class="table">
 		<table>
 			<colgroup>

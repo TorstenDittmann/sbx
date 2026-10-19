@@ -193,6 +193,8 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/unpause"):
 		f.setStatus(containerID(p), "running")
 		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/export"):
+		_, _ = w.Write([]byte("rootfs-tar"))
 	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v1.44/containers/"):
 		id := containerID(p)
 		f.mu.Lock()
