@@ -1,0 +1,128 @@
+version: 2
+
+project_name: sbx
+
+snapshot:
+  version_template: "{{ .Version }}-snapshot.{{ .ShortCommit }}"
+
+builds:
+  - id: sbx
+    main: ./cmd/sbx
+    binary: sbx
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/TorstenDittmann/sbx/internal/version.Version={{ .Version }}
+      - -X github.com/TorstenDittmann/sbx/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/TorstenDittmann/sbx/internal/version.Date={{ .CommitDate }}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+  # sbx-agent runs inside Linux sandboxes, including containers started from
+  # a macOS Docker daemon, so it is not built for darwin. The release workflow
+  # sets SBX_SKIP_AGENT=true when cmd/sbx-agent is not in the tree yet.
+  - id: sbx-agent
+    # Unset means build the agent. The snapshot job sets SBX_SKIP_AGENT=true
+    # until cmd/sbx-agent is on the branch.
+    skip: '{{ eq (envOrDefault "SBX_SKIP_AGENT" "false") "true" }}'
+    main: ./cmd/sbx-agent
+    binary: sbx-agent
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/TorstenDittmann/sbx/internal/version.Version={{ .Version }}
+      - -X github.com/TorstenDittmann/sbx/internal/version.Commit={{ .FullCommit }}
+      - -X github.com/TorstenDittmann/sbx/internal/version.Date={{ .CommitDate }}
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: sbx
+    ids:
+      - sbx
+    formats:
+      - tar.gz
+    name_template: "sbx_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+  - id: sbx-agent
+    ids:
+      - sbx-agent
+    formats:
+      - tar.gz
+    name_template: "sbx-agent_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+
+release:
+  name_template: "sbx {{ .Tag }}"
+  extra_files:
+    - glob: install.sh
+  footer: |
+    ## Install
+
+    ```sh
+    curl -fsSL https://raw.githubusercontent.com/TorstenDittmann/sbx/main/install.sh | sh
+    ```
+
+    Or pin this release: `curl -fsSL https://raw.githubusercontent.com/TorstenDittmann/sbx/{{ .Tag }}/install.sh | sh -s -- --version {{ .Tag }}`
+
+    Docker image: `ghcr.io/torstendittmann/sbx:{{ .Version }}` (also tagged `v{{ .Version }}` and `latest` on a final release).
+
+    TypeScript, for Node and Bun: `npm install @torstendittmann/sbx@{{ .Version }}`
+
+dockers_v2:
+  - ids:
+      - sbx
+      - sbx-agent
+    dockerfile: packaging/docker/Dockerfile
+    extra_files:
+      - packaging/docker/entrypoint.sh
+    images:
+      - ghcr.io/torstendittmann/sbx
+    tags:
+      - "{{ .Version }}"
+      - "v{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    sbom: false
+    flags:
+      - --provenance=false
+    labels:
+      org.opencontainers.image.title: sbx
+      org.opencontainers.image.description: Single-binary sandbox server
+      org.opencontainers.image.url: https://github.com/TorstenDittmann/sbx
+      org.opencontainers.image.source: https://github.com/TorstenDittmann/sbx
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"

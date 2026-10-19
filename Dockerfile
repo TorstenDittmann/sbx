@@ -1,4 +1,6 @@
-# sbx server. Listens on 8080. Mount the Docker socket and a data volume.
+# sbx server, compiled from source for `docker compose`.
+# Release images are built from packaging/docker/Dockerfile and published to
+# ghcr.io/torstendittmann/sbx. Listens on 8080. Mount the Docker socket and a data volume.
 FROM golang:1.22-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
