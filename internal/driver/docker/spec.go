@@ -40,6 +40,7 @@ type hostConfig struct {
 	Tmpfs          map[string]string `json:"Tmpfs,omitempty"`
 	LogConfig      logConfig         `json:"LogConfig"`
 	IpcMode        string            `json:"IpcMode"`
+	Binds          []string          `json:"Binds,omitempty"`
 }
 
 type logConfig struct {
@@ -58,7 +59,7 @@ type execConfig struct {
 	User         string   `json:"User,omitempty"`
 }
 
-func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) createRequest {
+func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentToken string) createRequest {
 	workdir := spec.Workdir
 	if workdir == "" {
 		workdir = "/workspace"
@@ -76,6 +77,14 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) create
 	env["HOME"] = workdir
 	for k, v := range spec.Env {
 		env[k] = v
+	}
+	entrypoint := []string{"sleep", "infinity"}
+	var binds []string
+	if agentToken != "" {
+		entrypoint = []string{agentBinary, "init"}
+		binds = []string{agentVolume + ":/opt/sbx:ro"}
+		env[agentTokenEnv] = agentToken
+		env[agentSockEnv] = agentSocket
 	}
 	labels := map[string]string{}
 	for k, v := range spec.Labels {
@@ -100,7 +109,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) create
 		Image:      spec.Image,
 		User:       fmt.Sprintf("%d:%d", opt.UID, opt.GID),
 		Env:        envSlice(env),
-		Entrypoint: []string{"sleep", "infinity"},
+		Entrypoint: entrypoint,
 		WorkingDir: workdir,
 		Labels:     labels,
 		HostConfig: hostConfig{
@@ -122,6 +131,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string) create
 			},
 			LogConfig: logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
 			IpcMode:   "private",
+			Binds:     binds,
 		},
 	}
 }

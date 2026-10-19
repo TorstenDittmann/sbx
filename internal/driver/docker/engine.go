@@ -342,6 +342,7 @@ type ContainerState struct {
 	Paused    bool
 	Labels    map[string]string
 	SandboxID string
+	Env       []string
 }
 
 func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerState, error) {
@@ -356,6 +357,7 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 		Config struct {
 			Image  string            `json:"Image"`
 			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
 		} `json:"Config"`
 	}
 	if err := c.DoJSON(ctx, http.MethodGet, "/containers/"+id+"/json", nil, &raw); err != nil {
@@ -367,7 +369,7 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 	}
 	return ContainerState{
 		ID: raw.ID, Image: image, Status: raw.State.Status, Running: raw.State.Running, Paused: raw.State.Paused,
-		Labels: raw.Config.Labels, SandboxID: raw.Config.Labels[labelID],
+		Labels: raw.Config.Labels, SandboxID: raw.Config.Labels[labelID], Env: raw.Config.Env,
 	}, nil
 }
 
@@ -488,6 +490,73 @@ func (c *Client) ExecStart(ctx context.Context, execID string, stdin io.Reader) 
 	return &streamConn{Conn: conn, r: br}, nil
 }
 
+// ExecAttach hijacks an exec and leaves stdin open. Reads are demultiplexed
+// stdout. Writes are raw stdin. The caller closes the stream.
+func (c *Client) ExecAttach(ctx context.Context, execID string) (io.ReadWriteCloser, error) {
+	if err := c.ensure(); err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]any{"Detach": false, "Tty": false})
+	if err != nil {
+		return nil, err
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", c.socket)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://docker"+c.path("/exec/"+execID+"/start"), bytes.NewReader(payload))
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	req.Host = "docker"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "tcp")
+	req.ContentLength = int64(len(payload))
+	if err := req.Write(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, req)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols && resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		conn.Close()
+		return nil, statusErr(resp.StatusCode, b)
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		_, _, err := CopyDemux(br, 0, func(stream byte, data []byte) error {
+			if stream != 1 || len(data) == 0 {
+				return nil
+			}
+			_, err := pw.Write(data)
+			return err
+		})
+		_ = pw.CloseWithError(err)
+	}()
+	return &attachConn{Conn: conn, pr: pr}, nil
+}
+
+type attachConn struct {
+	net.Conn
+	pr *io.PipeReader
+}
+
+func (a *attachConn) Read(p []byte) (int, error) { return a.pr.Read(p) }
+
+func (a *attachConn) Close() error {
+	err := a.Conn.Close()
+	_ = a.pr.Close()
+	return err
+}
+
 type streamConn struct {
 	net.Conn
 	r    io.Reader
@@ -547,6 +616,58 @@ func (c *Client) networkInspect(ctx context.Context, name string) (networkInfo, 
 		return networkInfo{}, err
 	}
 	return info, nil
+}
+
+// VolumeInspect reads a named volume.
+func (c *Client) VolumeInspect(ctx context.Context, name string) (map[string]string, error) {
+	var raw struct {
+		Labels map[string]string `json:"Labels"`
+	}
+	if err := c.DoJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, &raw); err != nil {
+		return nil, err
+	}
+	if raw.Labels == nil {
+		raw.Labels = map[string]string{}
+	}
+	return raw.Labels, nil
+}
+
+// VolumeCreate creates a named volume. A conflict means it already exists.
+func (c *Client) VolumeCreate(ctx context.Context, name string, labels map[string]string) error {
+	body := map[string]any{"Name": name, "Labels": labels}
+	err := c.DoJSON(ctx, http.MethodPost, "/volumes/create", body, nil)
+	if err == nil {
+		return nil
+	}
+	var status *StatusError
+	if errors.As(err, &status) && status.Status == http.StatusConflict {
+		return nil
+	}
+	return err
+}
+
+// PutArchive extracts a tar into a container path.
+func (c *Client) PutArchive(ctx context.Context, id, dest string, body []byte) error {
+	if err := c.ensure(); err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("path", dest)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, "http://docker"+c.path("/containers/"+id+"/archive")+"?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-tar")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return statusErr(resp.StatusCode, raw)
+	}
+	return nil
 }
 
 // ContainerWait blocks until the container exits.
