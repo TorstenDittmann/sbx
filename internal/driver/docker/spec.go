@@ -99,6 +99,9 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 	labels[labelManaged] = "true"
 	labels[labelID] = spec.ID
 	labels[labelBackend] = opt.Name
+	for _, m := range spec.Mounts {
+		binds = append(binds, m.Source+":"+m.Target)
+	}
 	disk := spec.DiskMB
 	if disk < 16 {
 		disk = 16
@@ -114,6 +117,15 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		if len(spec.Policy.DNS) > 0 {
 			dns = append([]string{}, spec.Policy.DNS...)
 			dnsOpt = []string{"timeout:2", "attempts:3", "rotate"}
+		}
+	}
+	tmpfs := map[string]string{
+		"/workspace": fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=755", disk, opt.UID, opt.GID),
+		"/tmp":       fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=1777", tmp, opt.UID, opt.GID),
+	}
+	for _, m := range spec.Mounts {
+		if m.Target == "/workspace" {
+			delete(tmpfs, "/workspace")
 		}
 	}
 	return createRequest{
@@ -137,15 +149,12 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 			NanoCpus:       int64(spec.CPU * 1e9),
 			PidsLimit:      int64(spec.PIDs),
 			Runtime:        opt.Runtime,
-			Tmpfs: map[string]string{
-				"/workspace": fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=755", disk, opt.UID, opt.GID),
-				"/tmp":       fmt.Sprintf("rw,nosuid,nodev,size=%dm,uid=%d,gid=%d,mode=1777", tmp, opt.UID, opt.GID),
-			},
-			LogConfig:  logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
-			IpcMode:    "private",
-			Binds:      binds,
-			Dns:        dns,
-			DnsOptions: dnsOpt,
+			Tmpfs:          tmpfs,
+			LogConfig:      logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
+			IpcMode:        "private",
+			Binds:          binds,
+			Dns:            dns,
+			DnsOptions:     dnsOpt,
 		},
 	}
 }

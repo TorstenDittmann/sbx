@@ -40,6 +40,11 @@ func Preview() string {
 	return "prv_" + hex.EncodeToString(random(8))
 }
 
+// Volume is an id of the form vol_<16 hex chars>.
+func Volume() string {
+	return "vol_" + hex.EncodeToString(random(8))
+}
+
 // Hash is the sha256 hex digest of an API key.
 func Hash(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))

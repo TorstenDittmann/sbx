@@ -64,6 +64,12 @@ type Caps struct {
 	IsolationLevel string
 }
 
+// Mount attaches a named volume at a path inside the sandbox.
+type Mount struct {
+	Source string
+	Target string
+}
+
 // SandboxSpec is the desired sandbox. ID is assigned by sbx, not the backend.
 type SandboxSpec struct {
 	ID       string
@@ -77,6 +83,13 @@ type SandboxSpec struct {
 	Policy   NetPolicy
 	Labels   map[string]string
 	Workdir  string
+	Mounts   []Mount
+}
+
+// VolumeOps creates and deletes named volumes that outlive a sandbox.
+type VolumeOps interface {
+	CreateVolume(ctx context.Context, name string) error
+	DeleteVolume(ctx context.Context, name string) error
 }
 
 // Handle is returned once the sandbox is running.

@@ -37,6 +37,19 @@ export type SandboxInfo = {
   expiresAt: string
   createdAt: string
   node: string
+  mounts?: VolumeMount[]
+}
+
+export type VolumeMount = {
+  volumeId: string
+  path: string
+}
+
+export type VolumeInfo = {
+  id: string
+  name: string
+  backend: string
+  createdAt: string
 }
 
 export type NetworkMode = "none" | "full" | "allow"
@@ -62,6 +75,7 @@ export type CreateSandboxOptions = {
   network?: NetworkPolicy
   backend?: "docker" | "gvisor"
   labels?: Record<string, string>
+  mounts?: VolumeMount[]
 }
 
 export type ExecResult = {
@@ -174,6 +188,14 @@ type SandboxJSON = {
   expires_at: string
   created_at: string
   node: string
+  mounts?: { volume_id: string; path: string }[]
+}
+
+type VolumeJSON = {
+  id: string
+  name: string
+  backend: string
+  created_at: string
 }
 
 type ExecJSON = {
@@ -206,7 +228,12 @@ function mapSandbox(raw: SandboxJSON): SandboxInfo {
     expiresAt: raw.expires_at,
     createdAt: raw.created_at,
     node: raw.node,
+    mounts: raw.mounts?.map((mount) => ({ volumeId: mount.volume_id, path: mount.path })),
   }
+}
+
+function mapVolume(raw: VolumeJSON): VolumeInfo {
+  return { id: raw.id, name: raw.name, backend: raw.backend, createdAt: raw.created_at }
 }
 
 function mapExec(raw: ExecJSON): ExecResult {
@@ -249,6 +276,9 @@ function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   if (options.network) body.network = networkBody(options.network)
   if (options.backend) body.backend = options.backend
   if (options.labels) body.labels = options.labels
+  if (options.mounts) {
+    body.mounts = options.mounts.map((mount) => ({ volume_id: mount.volumeId, path: mount.path }))
+  }
   return body
 }
 
@@ -301,6 +331,24 @@ export class SbxClient {
     this.baseUrl = baseUrl
     this.apiKey = apiKey
     this.fetchImpl = options.fetch ?? globalThis.fetch
+  }
+
+  createVolume(name: string, backend?: "docker" | "gvisor"): Promise<VolumeInfo> {
+    const body: { name: string; backend?: string } = { name }
+    if (backend) body.backend = backend
+    return this.requestJSON<VolumeJSON>("POST", "/v1/volumes", body).then(mapVolume)
+  }
+
+  listVolumes(): Promise<VolumeInfo[]> {
+    return this.requestJSON<{ volumes: VolumeJSON[] }>("GET", "/v1/volumes").then((body) => body.volumes.map(mapVolume))
+  }
+
+  getVolume(id: string): Promise<VolumeInfo> {
+    return this.requestJSON<VolumeJSON>("GET", `/v1/volumes/${encodeURIComponent(id)}`).then(mapVolume)
+  }
+
+  deleteVolume(id: string): Promise<void> {
+    return this.request("DELETE", `/v1/volumes/${encodeURIComponent(id)}`).then(() => undefined)
   }
 
   createSandbox(options: CreateSandboxOptions = {}): Promise<SandboxInfo> {
@@ -751,6 +799,7 @@ export class Sandbox {
   expiresAt: string
   createdAt: string
   node: string
+  mounts?: VolumeMount[]
   readonly files: SandboxFiles
   #client: SbxClient
 
@@ -772,6 +821,7 @@ export class Sandbox {
     this.expiresAt = info.expiresAt
     this.createdAt = info.createdAt
     this.node = info.node
+    this.mounts = info.mounts
     this.files = new SandboxFiles(client, info.id)
   }
 

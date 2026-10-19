@@ -63,6 +63,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/templates", s.auth("admin", s.createTemplate))
 	mux.HandleFunc("DELETE /v1/templates/{name}", s.auth("admin", s.deleteTemplate))
 
+	mux.HandleFunc("POST /v1/volumes", s.auth("sandbox", s.createVolume))
+	mux.HandleFunc("GET /v1/volumes", s.auth("sandbox", s.listVolumes))
+	mux.HandleFunc("GET /v1/volumes/{id}", s.auth("sandbox", s.getVolume))
+	mux.HandleFunc("DELETE /v1/volumes/{id}", s.auth("sandbox", s.deleteVolume))
+
 	mux.HandleFunc("POST /v1/sandboxes", s.auth("sandbox", s.createSandbox))
 	mux.HandleFunc("GET /v1/sandboxes", s.auth("sandbox", s.listSandboxes))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("sandbox", s.getSandbox))
@@ -382,6 +387,53 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, templateJSON(t))
 }
 
+func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name    string `json:"name"`
+		Backend string `json:"backend"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	vol, err := s.mgr.CreateVolume(r.Context(), actor(r), body.Name, body.Backend)
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, volumeJSON(vol))
+}
+
+func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
+	items, err := s.mgr.ListVolumes(r.Context(), actor(r))
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	out := make([]volumeResponse, 0, len(items))
+	for _, vol := range items {
+		out = append(out, volumeJSON(vol))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"volumes": out})
+}
+
+func (s *Server) getVolume(w http.ResponseWriter, r *http.Request) {
+	vol, err := s.mgr.GetVolume(r.Context(), actor(r), r.PathValue("id"))
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, volumeJSON(vol))
+}
+
+func (s *Server) deleteVolume(w http.ResponseWriter, r *http.Request) {
+	if err := s.mgr.DeleteVolume(r.Context(), actor(r), r.PathValue("id")); err != nil {
+		writeManager(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	if err := s.mgr.DeleteTemplate(r.Context(), r.PathValue("name")); err != nil {
 		writeManager(w, err)
@@ -413,6 +465,9 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		}
 		in.EgressKbps = body.Network.EgressKbps
 		in.MaxConns = body.Network.MaxConns
+	}
+	for _, m := range body.Mounts {
+		in.Mounts = append(in.Mounts, core.MountInput{VolumeID: m.VolumeID, Path: m.Path})
 	}
 	sb, err := s.mgr.Create(r.Context(), actor(r), in)
 	if err != nil {
@@ -704,6 +759,10 @@ type createRequest struct {
 	} `json:"network"`
 	Backend string            `json:"backend"`
 	Labels  map[string]string `json:"labels"`
+	Mounts  []struct {
+		VolumeID string `json:"volume_id"`
+		Path     string `json:"path"`
+	} `json:"mounts"`
 }
 
 type execRequest struct {
@@ -736,16 +795,37 @@ type sandboxResponse struct {
 	ExpiresAt          time.Time         `json:"expires_at"`
 	CreatedAt          time.Time         `json:"created_at"`
 	Node               string            `json:"node"`
+	Mounts             []mountResponse   `json:"mounts,omitempty"`
+}
+
+type mountResponse struct {
+	VolumeID string `json:"volume_id"`
+	Path     string `json:"path"`
+}
+
+type volumeResponse struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Backend   string    `json:"backend"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func sandboxJSON(sb store.Sandbox) sandboxResponse {
+	var mounts []mountResponse
+	for _, m := range sb.Mounts {
+		mounts = append(mounts, mountResponse{VolumeID: m.VolumeID, Path: m.Path})
+	}
 	return sandboxResponse{
 		ID: sb.ID, Status: sb.Status, Backend: sb.Backend, Template: sb.Template, Image: sb.Image,
 		CPU: sb.CPU, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB, PIDs: sb.PIDs, Network: sb.Network,
 		Allow: sb.Allow, Deny: sb.Deny, EgressKbps: sb.EgressKbps, MaxConns: sb.MaxConns,
 		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds,
-		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local",
+		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local", Mounts: mounts,
 	}
+}
+
+func volumeJSON(v store.Volume) volumeResponse {
+	return volumeResponse{ID: v.ID, Name: v.Name, Backend: v.Backend, CreatedAt: v.CreatedAt}
 }
 
 func templateJSON(t store.Template) map[string]any {

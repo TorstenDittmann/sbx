@@ -56,7 +56,8 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 - The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. If that runtime is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is gVisor and `runsc` is absent.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
 - v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, archives, and previews then go through one framed session. See [AGENT.md](AGENT.md). With no binary configured, exec and files stay on the engine API, archives still call `tar`, and the new routes return `unsupported`.
-- The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real.
+- The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real. A named volume mounted at `/workspace` replaces that tmpfs. `disk_mb` then does not apply to the persisted workspace. Paths under `/workspace/` are rejected. Other absolute paths (for example `/cache`) are extra mounts. At most eight mounts. `/`, `/tmp`, `/opt`, `/opt/sbx`, `/proc`, `/sys`, `/dev`, and `/etc` are reserved.
+- Volumes are Docker volumes named by sbx (`sbx-` plus the volume id). A fresh volume is chowned to the sandbox uid (1000 when the server is configured as root) without walking existing files, so a project stays owned by the same uid across sandboxes. The caller never chooses a host path.
 - `network: none` is the default. `full` and `allow` join a dedicated bridge. Metadata and private ranges stay blocked unless the operator opts out. Allow and deny lists, bandwidth, and connection limits are in [NETWORK.md](NETWORK.md).
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
 - The landing page is the static site in `website/`, deployed with Dokploy. See [website.md](website.md). There is no GitHub Pages workflow.
@@ -105,6 +106,11 @@ DELETE /v1/sandboxes/{id}/files?path=
 POST   /v1/sandboxes/{id}/files/archive?path=
 GET    /v1/sandboxes/{id}/files/archive?path=
 
+POST   /v1/volumes
+GET    /v1/volumes
+GET    /v1/volumes/{id}
+DELETE /v1/volumes/{id}                   409 while a live sandbox mounts it
+
 GET    /v1/templates
 POST   /v1/templates                      admin
 DELETE /v1/templates/{name}               admin; built-ins return 403
@@ -114,7 +120,7 @@ GET    /v1/keys                           admin
 GET    /  /healthz  /metrics  /openapi.yaml
 ```
 
-Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), and `labels`. Unknown JSON fields are rejected. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
+Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
 

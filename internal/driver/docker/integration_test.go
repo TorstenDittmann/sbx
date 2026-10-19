@@ -485,6 +485,74 @@ func buildAgent(t *testing.T) string {
 	return out
 }
 
+func TestIntegrationVolume(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	d, err := New(Options{Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	wsName := "sbx-" + strings.TrimPrefix(id.Volume(), "vol_")
+	cacheName := "sbx-" + strings.TrimPrefix(id.Volume(), "vol_")
+	if err := d.CreateVolume(ctx, wsName); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CreateVolume(ctx, cacheName); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = d.DeleteVolume(context.Background(), wsName)
+		_ = d.DeleteVolume(context.Background(), cacheName)
+	})
+	mounts := []driver.Mount{
+		{Source: wsName, Target: "/workspace"},
+		{Source: cacheName, Target: "/cache"},
+	}
+	first, err := d.Create(ctx, driver.SandboxSpec{
+		ID: id.Sandbox(), Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+		Network: driver.NetNone, Mounts: mounts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := driver.ExecRequest{
+		Cmd:            []string{"sh", "-c", "echo persist > /workspace/keep && echo cached > /cache/keep && echo temp > /tmp/gone && id"},
+		TimeoutSeconds: 30,
+	}
+	res, err := d.Exec(ctx, first.ID, write)
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("write %+v %v", res, err)
+	}
+	if !strings.Contains(string(res.Stdout), "uid=1000") {
+		t.Fatalf("expected uid 1000, got %s", res.Stdout)
+	}
+	mountsOut, err := d.Exec(ctx, first.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "grep ' /workspace ' /proc/mounts"}, TimeoutSeconds: 20})
+	if err != nil || mountsOut.ExitCode != 0 || strings.Contains(string(mountsOut.Stdout), "tmpfs") {
+		t.Fatalf("workspace mount %+v %v", mountsOut, err)
+	}
+	if err := d.Delete(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := d.Create(ctx, driver.SandboxSpec{
+		ID: id.Sandbox(), Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+		Network: driver.NetNone, Mounts: mounts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), second.ID) })
+	got, err := d.Exec(ctx, second.ID, driver.ExecRequest{
+		Cmd:            []string{"sh", "-c", "cat /workspace/keep /cache/keep; test ! -e /tmp/gone"},
+		TimeoutSeconds: 20,
+	})
+	if err != nil || got.ExitCode != 0 || string(got.Stdout) != "persist\ncached\n" {
+		t.Fatalf("persist %+v %v", got, err)
+	}
+}
+
 func TestIntegrationGVisorUnavailable(t *testing.T) {
 	if os.Getenv("SBX_INTEGRATION") != "1" {
 		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
