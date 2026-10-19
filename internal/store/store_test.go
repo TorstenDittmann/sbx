@@ -267,6 +267,39 @@ func TestVolumesAndMountMigration(t *testing.T) {
 	}
 }
 
+func TestTemplateColumnMigration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE templates (
+		name TEXT PRIMARY KEY, image TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+		cpu REAL NOT NULL DEFAULT 0, memory_mb INTEGER NOT NULL DEFAULT 0,
+		disk_mb INTEGER NOT NULL DEFAULT 0, env_json TEXT NOT NULL DEFAULT '{}',
+		builtin INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	if err := st.CreateTemplate(context.Background(), Template{
+		Name: "agent", Image: "alpine:3.20", Network: "full", Warm: 2,
+		Setup: []string{"echo", "hi"}, CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetTemplate(context.Background(), "agent")
+	if err != nil || got.Warm != 2 || got.Network != "full" || len(got.Setup) != 2 {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
 func openTest(t *testing.T) *Store {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "sbx.db"))

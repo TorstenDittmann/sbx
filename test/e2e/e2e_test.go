@@ -122,6 +122,85 @@ func TestHTTPQuickstart(t *testing.T) {
 	}
 }
 
+func TestWarmTemplate(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.Limits.DefaultMemoryMB = 64
+	cfg.Limits.DefaultDiskMB = 32
+	cfg.Limits.DefaultCPU = 0.5
+	st, err := store.Open(filepath.Join(cfg.DataDir, "sbx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	plain := "sbx_e2ewarmpoolkey0000000000000000"
+	if err := st.CreateKey(context.Background(), store.APIKey{
+		ID: id.RecordID(), Name: "e2e", Hash: id.Hash(plain), Prefix: plain[:12],
+		Scopes: []string{"admin"}, CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dock, err := docker.New(docker.Options{Host: cfg.Docker.Host, Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: cfg.Limits.MaxOutputBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mgr := core.New(cfg, st, map[string]driver.Driver{"docker": dock}, log)
+	if err := mgr.Seed(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(api.New(mgr, log, apispec.OpenAPI).Handler())
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() {
+		ctx := context.Background()
+		for _, status := range []string{"warm", "creating", "running"} {
+			items, err := st.ListSandboxes(ctx, store.SandboxFilter{Status: status})
+			if err != nil {
+				return
+			}
+			for _, sb := range items {
+				if sb.ContainerID != "" {
+					_ = dock.Delete(ctx, sb.ContainerID)
+				}
+			}
+		}
+	})
+
+	body := []byte(`{"name":"warmed","image":"alpine:3.20","cpu":0.5,"memory_mb":64,"disk_mb":32,"warm":1,"setup":["sh","-c","echo warmed > /workspace/ready"]}`)
+	resp := call(t, ts, http.MethodPost, "/v1/templates", plain, "application/json", body)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("template %s %s", resp.Status, resp.body)
+	}
+	resp = call(t, ts, http.MethodPost, "/v1/sandboxes", plain, "application/json", []byte(`{"template":"warmed","ttl_seconds":180}`))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create %s %s", resp.Status, resp.body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	mustDecode(t, resp.body, &created)
+	resp = call(t, ts, http.MethodPost, "/v1/sandboxes/"+created.ID+"/exec", plain, "application/json", []byte(`{"cmd":["cat","/workspace/ready"],"timeout_seconds":20}`))
+	var result struct {
+		ExitCode int    `json:"exit_code"`
+		Stdout   string `json:"stdout"`
+	}
+	mustDecode(t, resp.body, &result)
+	if resp.StatusCode != 200 || result.ExitCode != 0 || result.Stdout != "warmed\n" {
+		t.Fatalf("ready %s %+v", resp.Status, result)
+	}
+	resp = call(t, ts, http.MethodDelete, "/v1/sandboxes/"+created.ID, plain, "", nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("delete sandbox %s %s", resp.Status, resp.body)
+	}
+	resp = call(t, ts, http.MethodDelete, "/v1/templates/warmed", plain, "", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete template %s %s", resp.Status, resp.body)
+	}
+}
+
 type httpResult struct {
 	StatusCode int
 	Status     string

@@ -76,6 +76,8 @@ node --experimental-strip-types examples/quickstart.ts
 
 Built-in templates are `base` (`alpine:3.20`, 0.5 CPU, 128 MiB), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`). Without a template, the server defaults are 1 CPU, 512 MiB, and a 1024 MiB workspace.
 
+A template can keep a warm pool. `warm` is how many sandboxes to start ahead of time (0 to 8). `setup` is a command that runs before a warm sandbox is offered, so the next create skips image pull and install. `network` on the template is the default when create omits it (`none` or `full`). A create that changes image, resources, network, or env does not take a pooled sandbox. Pooled sandboxes are hidden from the normal list; an admin can see them with `?status=warm`. Deleting the template deletes the pool.
+
 ### Compose
 
 ```bash

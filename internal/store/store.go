@@ -58,18 +58,25 @@ func (k APIKey) Admin() bool {
 
 // Template is a named image plus optional resource defaults.
 type Template struct {
-	Name        string
-	Image       string
-	Description string
-	CPU         float64
-	MemoryMB    int
-	DiskMB      int
-	Env         map[string]string
-	Builtin     bool
-	CreatedAt   time.Time
+	Name         string
+	Image        string
+	Description  string
+	CPU          float64
+	MemoryMB     int
+	DiskMB       int
+	Env          map[string]string
+	Network      string
+	Setup        []string
+	SetupTimeout int
+	Warm         int
+	Builtin      bool
+	CreatedAt    time.Time
 }
 
-// Sandbox is one sandbox row. Status is creating, running, paused, stopped, or error.
+// SystemOwner is the owner of warm-pool sandboxes. They do not count toward a key's quota.
+const SystemOwner = "sbx-system"
+
+// Sandbox is one sandbox row. Status is creating, running, paused, stopped, error, or warm.
 type Sandbox struct {
 	ID                 string
 	Template           string
@@ -166,6 +173,10 @@ func migrate(db *sql.DB) error {
 		{"sandboxes", "max_conns", `ALTER TABLE sandboxes ADD COLUMN max_conns INTEGER NOT NULL DEFAULT 0`},
 		{"sandboxes", "mounts_json", `ALTER TABLE sandboxes ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'`},
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
+		{"templates", "setup_json", `ALTER TABLE templates ADD COLUMN setup_json TEXT NOT NULL DEFAULT '[]'`},
+		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
+		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
+		{"templates", "setup_timeout_seconds", `ALTER TABLE templates ADD COLUMN setup_timeout_seconds INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, alt := range alters {
 		have, err := hasColumn(db, alt.table, alt.column)
@@ -223,7 +234,11 @@ CREATE TABLE IF NOT EXISTS templates (
     disk_mb INTEGER NOT NULL DEFAULT 0,
     env_json TEXT NOT NULL DEFAULT '{}',
     builtin INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    setup_json TEXT NOT NULL DEFAULT '[]',
+    warm INTEGER NOT NULL DEFAULT 0,
+    network TEXT NOT NULL DEFAULT 'none',
+    setup_timeout_seconds INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sandboxes (
@@ -335,8 +350,8 @@ func (s *Store) TouchKey(ctx context.Context, id string, at time.Time) error {
 func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
 	env := mustJSON(t.Env)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, '[]', 0, 'none', 0)
 		ON CONFLICT(name) DO UPDATE SET
 			image = excluded.image,
 			description = excluded.description,
@@ -352,9 +367,10 @@ func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
 // CreateTemplate inserts a user template. Names that already exist fail.
 func (s *Store) CreateTemplate(ctx context.Context, t Template) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), millis(t.CreatedAt))
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), millis(t.CreatedAt),
+		mustJSON(t.Setup), t.Warm, t.Network, t.SetupTimeout)
 	return err
 }
 
@@ -385,7 +401,8 @@ func (s *Store) DeleteTemplate(ctx context.Context, name string) error {
 // GetTemplate loads one template.
 func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at,
+		       setup_json, warm, network, setup_timeout_seconds
 		FROM templates WHERE name = ?`, name)
 	return scanTemplate(row)
 }
@@ -393,7 +410,8 @@ func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) 
 // ListTemplates returns every template, built-ins first.
 func (s *Store) ListTemplates(ctx context.Context) ([]Template, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at
+		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, builtin, created_at,
+		       setup_json, warm, network, setup_timeout_seconds
 		FROM templates ORDER BY builtin DESC, name ASC`)
 	if err != nil {
 		return nil, err
@@ -462,6 +480,8 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 	if f.Status != "" {
 		q += ` AND status = ?`
 		args = append(args, f.Status)
+	} else {
+		q += ` AND status != 'warm'`
 	}
 	if f.Backend != "" {
 		q += ` AND backend = ?`
@@ -607,10 +627,10 @@ func scanKey(row scanner) (APIKey, error) {
 
 func scanTemplate(row scanner) (Template, error) {
 	var t Template
-	var env string
-	var builtin int
+	var env, setup, network string
+	var builtin, warm, setupTimeout int
 	var created int64
-	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &builtin, &created)
+	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &builtin, &created, &setup, &warm, &network, &setupTimeout)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Template{}, ErrNotFound
 	}
@@ -625,7 +645,25 @@ func scanTemplate(row scanner) (Template, error) {
 	}
 	t.Builtin = builtin == 1
 	t.CreatedAt = fromMillis(created)
+	t.Setup = decodeStrings(setup)
+	t.Warm = warm
+	t.Network = network
+	if t.Network == "" {
+		t.Network = "none"
+	}
+	t.SetupTimeout = setupTimeout
 	return t, nil
+}
+
+func decodeStrings(s string) []string {
+	if s == "" || s == "[]" {
+		return nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 func scanSandbox(row scanner) (Sandbox, error) {

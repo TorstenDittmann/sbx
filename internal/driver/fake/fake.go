@@ -30,6 +30,8 @@ type Driver struct {
 	ListErr      error
 	Deleted      []string
 	TruncateExec bool
+	ExecCode     int
+	execs        [][]string
 	// NoGuest makes the optional agent surface report itself disabled.
 	NoGuest bool
 	// DialErr is returned by DialPort when set.
@@ -232,11 +234,28 @@ func (d *Driver) ExecStream(_ context.Context, id string, req driver.ExecRequest
 	return d.run(id, req, emit)
 }
 
+func (d *Driver) Execs() [][]string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([][]string, len(d.execs))
+	for i, cmd := range d.execs {
+		out[i] = append([]string(nil), cmd...)
+	}
+	return out
+}
+
 func (d *Driver) run(id string, req driver.ExecRequest, emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
 	d.mu.Lock()
 	b, ok := d.boxes[id]
 	truncate := d.TruncateExec
+	if ok {
+		d.execs = append(d.execs, append([]string(nil), req.Cmd...))
+	}
+	code := d.ExecCode
 	d.mu.Unlock()
+	if code != 0 {
+		return driver.ExecResult{ExitCode: code, Stderr: []byte("failed\n")}, nil
+	}
 	if !ok || b.state == driver.StateStopped {
 		return driver.ExecResult{}, driver.ErrNotFound
 	}

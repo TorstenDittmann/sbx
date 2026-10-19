@@ -14,7 +14,37 @@ export class SbxError extends Error {
   }
 }
 
-export type SandboxStatus = "creating" | "running" | "paused" | "stopped" | "error"
+export type SandboxStatus = "creating" | "running" | "paused" | "stopped" | "error" | "warm"
+
+export type TemplateInfo = {
+  name: string
+  image: string
+  description?: string
+  cpu: number
+  memoryMb: number
+  diskMb: number
+  env?: Record<string, string>
+  network: string
+  setup: string[]
+  setupTimeoutSeconds: number
+  warm: number
+  builtin: boolean
+  createdAt: string
+}
+
+export type CreateTemplateOptions = {
+  name: string
+  image: string
+  description?: string
+  cpu?: number
+  memoryMb?: number
+  diskMb?: number
+  env?: Record<string, string>
+  network?: "none" | "full"
+  setup?: string[]
+  setupTimeout?: number | string
+  warm?: number
+}
 
 export type SandboxInfo = {
   id: string
@@ -236,6 +266,40 @@ function mapVolume(raw: VolumeJSON): VolumeInfo {
   return { id: raw.id, name: raw.name, backend: raw.backend, createdAt: raw.created_at }
 }
 
+type TemplateJSON = {
+  name: string
+  image: string
+  description?: string
+  cpu: number
+  memory_mb: number
+  disk_mb: number
+  env?: Record<string, string>
+  network: string
+  setup?: string[]
+  setup_timeout_seconds?: number
+  warm: number
+  builtin: boolean
+  created_at: string
+}
+
+function mapTemplate(raw: TemplateJSON): TemplateInfo {
+  return {
+    name: raw.name,
+    image: raw.image,
+    description: raw.description,
+    cpu: raw.cpu,
+    memoryMb: raw.memory_mb,
+    diskMb: raw.disk_mb,
+    env: raw.env,
+    network: raw.network,
+    setup: raw.setup ?? [],
+    setupTimeoutSeconds: raw.setup_timeout_seconds ?? 0,
+    warm: raw.warm,
+    builtin: raw.builtin,
+    createdAt: raw.created_at,
+  }
+}
+
 function mapExec(raw: ExecJSON): ExecResult {
   return {
     exitCode: raw.exit_code,
@@ -349,6 +413,28 @@ export class SbxClient {
 
   deleteVolume(id: string): Promise<void> {
     return this.request("DELETE", `/v1/volumes/${encodeURIComponent(id)}`).then(() => undefined)
+  }
+
+  createTemplate(options: CreateTemplateOptions): Promise<TemplateInfo> {
+    const body: Record<string, unknown> = { name: options.name, image: options.image }
+    if (options.description) body.description = options.description
+    if (options.cpu != null) body.cpu = options.cpu
+    if (options.memoryMb != null) body.memory_mb = options.memoryMb
+    if (options.diskMb != null) body.disk_mb = options.diskMb
+    if (options.env) body.env = options.env
+    if (options.network) body.network = options.network
+    if (options.setup) body.setup = options.setup
+    if (options.setupTimeout != null) body.setup_timeout_seconds = parseDuration(options.setupTimeout)
+    if (options.warm != null) body.warm = options.warm
+    return this.requestJSON<TemplateJSON>("POST", "/v1/templates", body).then(mapTemplate)
+  }
+
+  listTemplates(): Promise<TemplateInfo[]> {
+    return this.requestJSON<{ templates: TemplateJSON[] }>("GET", "/v1/templates").then((body) => body.templates.map(mapTemplate))
+  }
+
+  deleteTemplate(name: string): Promise<void> {
+    return this.request("DELETE", `/v1/templates/${encodeURIComponent(name)}`).then(() => undefined)
   }
 
   createSandbox(options: CreateSandboxOptions = {}): Promise<SandboxInfo> {

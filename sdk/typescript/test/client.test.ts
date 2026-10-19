@@ -50,6 +50,29 @@ test("client maps create, exec, files, and errors", async () => {
         res.end(JSON.stringify(sandboxJSON()))
         return
       }
+      if (req.method === "POST" && req.url === "/v1/templates") {
+        res.writeHead(201, { "content-type": "application/json" })
+        res.end(JSON.stringify({
+          name: "agent", image: "node:22-bookworm-slim", cpu: 1, memory_mb: 512, disk_mb: 1024,
+          network: "full", setup: ["npm", "install"], setup_timeout_seconds: 120, warm: 2,
+          builtin: false, created_at: "2026-10-19T12:00:00Z",
+        }))
+        return
+      }
+      if (req.method === "GET" && req.url === "/v1/templates") {
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ templates: [{
+          name: "agent", image: "node:22-bookworm-slim", cpu: 1, memory_mb: 512, disk_mb: 1024,
+          network: "full", setup: ["npm", "install"], setup_timeout_seconds: 120, warm: 2,
+          builtin: false, created_at: "2026-10-19T12:00:00Z",
+        }] }))
+        return
+      }
+      if (req.method === "DELETE" && req.url === "/v1/templates/agent") {
+        res.writeHead(204)
+        res.end()
+        return
+      }
       if (req.method === "GET" && req.url === "/v1/sandboxes/missing") {
         res.writeHead(404, { "content-type": "application/json" })
         res.end(JSON.stringify({ error: { code: "not_found", message: "gone" } }))
@@ -155,6 +178,29 @@ test("client maps create, exec, files, and errors", async () => {
   await client.deleteVolume(volume.id)
   assert.equal(seen.method, "DELETE")
   assert.equal(seen.url, "/v1/volumes/vol_abc0123456789ab")
+
+  const template = await client.createTemplate({
+    name: "agent",
+    image: "node:22-bookworm-slim",
+    network: "full",
+    setup: ["npm", "install"],
+    setupTimeout: "2m",
+    warm: 2,
+  })
+  assert.equal(template.warm, 2)
+  assert.equal(template.network, "full")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}"), {
+    name: "agent",
+    image: "node:22-bookworm-slim",
+    network: "full",
+    setup: ["npm", "install"],
+    setup_timeout_seconds: 120,
+    warm: 2,
+  })
+  const templates = await client.listTemplates()
+  assert.equal(templates[0]?.setup[0], "npm")
+  await client.deleteTemplate("agent")
+  assert.equal(seen.method, "DELETE")
 
   await server.close()
 })
