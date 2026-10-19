@@ -116,8 +116,9 @@ The landing page is `website/`. Its image listens on port **80**, has no environ
 
 | Setting | Value |
 |---|---|
-| Build path | `website` |
-| Dockerfile path | `website/Dockerfile` |
+| Build path | `/website` |
+| Dockerfile | `Dockerfile` (`website/Dockerfile` from the repository root) |
+| Docker context | `.` |
 | Container port | `80` |
 | Environment | none |
 
