@@ -25,7 +25,7 @@ func TestReadyAndRateLimit(t *testing.T) {
 	resp := h.do(t, http.MethodGet, "/readyz", "", nil)
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "starting") {
+	if resp.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(body), "starting") || !strings.Contains(string(body), `"docker"`) {
 		t.Fatalf("before reconcile %s %s", resp.Status, body)
 	}
 	if err := h.mgr.Reconcile(context.Background()); err != nil {

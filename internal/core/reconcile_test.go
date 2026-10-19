@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,5 +70,25 @@ func TestReconcileAdoptsAndDrops(t *testing.T) {
 	}
 	if _, err := fd.Inspect(ctx, sb.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReconcileLeavesRowsWhenListFails(t *testing.T) {
+	st := openStore(t)
+	fd := fake.New("docker")
+	mgr := New(config.Default(), st, map[string]driver.Driver{"docker": fd}, discard())
+	ctx := context.Background()
+	actor := coreActor(t, st)
+	sb, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd.ListErr = errors.New("docker down")
+	if err := mgr.Reconcile(ctx); err == nil || !strings.Contains(err.Error(), "docker down") {
+		t.Fatal(err)
+	}
+	got, err := st.GetSandbox(ctx, sb.ID)
+	if err != nil || got.Status != "running" || got.Error != "" {
+		t.Fatalf("row changed %+v %v", got, err)
 	}
 }

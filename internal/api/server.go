@@ -147,6 +147,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 			"status":  "starting",
 			"version": version.Version,
 			"backend": s.mgr.Config().Backend,
+			"docker":  "starting",
 		})
 		return
 	}

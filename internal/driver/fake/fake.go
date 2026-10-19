@@ -26,6 +26,7 @@ type Driver struct {
 	seq          int
 	PingErr      error
 	CreateErr    error
+	ListErr      error
 	Deleted      []string
 	TruncateExec bool
 	// NoGuest makes the optional agent surface report itself disabled.
@@ -144,6 +145,9 @@ func (d *Driver) Inspect(_ context.Context, id string) (driver.Status, error) {
 func (d *Driver) List(context.Context) ([]driver.Status, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.ListErr != nil {
+		return nil, d.ListErr
+	}
 	out := make([]driver.Status, 0, len(d.boxes))
 	for id, b := range d.boxes {
 		out = append(out, d.status(id, b))
