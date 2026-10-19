@@ -42,7 +42,9 @@ func startPTY(cmd *exec.Cmd, cols, rows int) (*os.File, error) {
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Setsid: true, Setctty: true, Ctty: 0}
+	// setsid makes the child a session leader and a process-group leader.
+	// setpgid after that returns EPERM, which Go reports as fork/exec.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 0}
 	if err := cmd.Start(); err != nil {
 		slave.Close()
 		master.Close()
