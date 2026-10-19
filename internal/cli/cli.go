@@ -59,7 +59,7 @@ func Run(args []string) error {
 	case "keys":
 		return keys(args[1:])
 	case "version", "--version", "-v":
-		fmt.Printf("sbx %s\n", version.Version)
+		fmt.Fprint(os.Stdout, version.Format())
 		return nil
 	case "help", "-h", "--help":
 		fmt.Fprint(os.Stdout, usageText)
