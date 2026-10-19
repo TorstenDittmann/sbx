@@ -203,11 +203,15 @@ func (d *Driver) seedVolume(ctx context.Context, sum string) error {
 	body := createRequest{
 		Image:      agentHelper,
 		User:       "0",
-		Entrypoint: []string{"sleep", "30"},
+		Entrypoint: []string{"/bin/sleep", "30"},
+		Cmd:        &[]string{},
 		HostConfig: hostConfig{
 			NetworkMode: "none",
-			CapDrop:     []string{},
+			CapDrop:     []string{"ALL"},
 			CapAdd:      []string{},
+			SecurityOpt: []string{"no-new-privileges:true"},
+			LogConfig:   logConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "1"}},
+			IpcMode:     "private",
 			Binds:       []string{agentVolume + ":/opt/sbx"},
 		},
 	}

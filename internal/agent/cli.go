@@ -160,9 +160,14 @@ func serveTCP(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "sbx-agent listening on %s\n", ln.Addr())
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	return serveListener(ctx, ln, token)
+}
+
+func serveListener(ctx context.Context, ln net.Listener, token string) error {
+	fmt.Fprintf(os.Stderr, "sbx-agent listening on %s\n", ln.Addr())
+	defer ln.Close()
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()

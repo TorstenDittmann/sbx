@@ -13,11 +13,13 @@ import (
 // the spelling the daemon accepts.
 
 type createRequest struct {
-	Image      string            `json:"Image"`
-	User       string            `json:"User"`
-	Env        []string          `json:"Env,omitempty"`
-	Entrypoint []string          `json:"Entrypoint"`
-	Cmd        []string          `json:"Cmd,omitempty"`
+	Image      string   `json:"Image"`
+	User       string   `json:"User"`
+	Env        []string `json:"Env,omitempty"`
+	Entrypoint []string `json:"Entrypoint"`
+	// Cmd is a pointer so an empty slice is sent as [] and replaces the image
+	// command. A nil slice is omitted and the image command is kept.
+	Cmd        *[]string         `json:"Cmd,omitempty"`
 	WorkingDir string            `json:"WorkingDir"`
 	Labels     map[string]string `json:"Labels,omitempty"`
 	HostConfig hostConfig        `json:"HostConfig"`
@@ -80,11 +82,13 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 	}
 	entrypoint := []string{"sleep", "infinity"}
 	var binds []string
+	var cmd *[]string
 	if agentToken != "" {
 		entrypoint = []string{agentBinary, "init"}
 		binds = []string{agentVolume + ":/opt/sbx:ro"}
 		env[agentTokenEnv] = agentToken
 		env[agentSockEnv] = agentSocket
+		cmd = &[]string{}
 	}
 	labels := map[string]string{}
 	for k, v := range spec.Labels {
@@ -110,6 +114,7 @@ func buildCreate(spec driver.SandboxSpec, opt Options, imageEnv []string, agentT
 		User:       fmt.Sprintf("%d:%d", opt.UID, opt.GID),
 		Env:        envSlice(env),
 		Entrypoint: entrypoint,
+		Cmd:        cmd,
 		WorkingDir: workdir,
 		Labels:     labels,
 		HostConfig: hostConfig{

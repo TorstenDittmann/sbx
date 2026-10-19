@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -75,6 +77,13 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 	}
 	if len(body.Entrypoint) != 2 || body.Entrypoint[0] != agentBinary || body.Entrypoint[1] != "init" {
 		t.Fatalf("entrypoint %v", body.Entrypoint)
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"Cmd":[]`)) {
+		t.Fatalf("image cmd was not cleared: %s", raw)
 	}
 	if len(body.HostConfig.Binds) != 1 || body.HostConfig.Binds[0] != agentVolume+":/opt/sbx:ro" {
 		t.Fatal(body.HostConfig.Binds)

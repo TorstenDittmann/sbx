@@ -47,13 +47,24 @@ type subscriber struct {
 	done chan struct{}
 }
 
+func defaultWorkdir() string {
+	const sandbox = "/workspace"
+	if st, err := os.Stat(sandbox); err == nil && st.IsDir() {
+		return sandbox
+	}
+	if wd, err := os.Getwd(); err == nil {
+		return wd
+	}
+	return "/"
+}
+
 func (a *Agent) spawn(spec ExecSpec) (*proc, error) {
 	if len(spec.Cmd) == 0 || spec.Cmd[0] == "" {
 		return nil, errors.New("cmd is required")
 	}
 	cwd := spec.Cwd
 	if cwd == "" {
-		cwd = "/workspace"
+		cwd = defaultWorkdir()
 	}
 	if !strings.HasPrefix(cwd, "/") {
 		return nil, errors.New("cwd must be absolute")

@@ -127,7 +127,7 @@ func TestEnsureEgressAndHelper(t *testing.T) {
 	if !body.HostConfig.Privileged || body.HostConfig.NetworkMode != "host" || body.HostConfig.PidMode != "host" {
 		t.Fatalf("helper host config %+v", body.HostConfig)
 	}
-	if len(body.Cmd) != 1 || !strings.Contains(body.Cmd[0], "nsenter") {
+	if body.Cmd == nil || len(*body.Cmd) != 1 || !strings.Contains((*body.Cmd)[0], "nsenter") {
 		t.Fatalf("cmd %+v", body.Cmd)
 	}
 

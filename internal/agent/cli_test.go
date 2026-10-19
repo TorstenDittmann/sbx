@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -142,6 +141,10 @@ func TestInitRejectsAndDefaultSocket(t *testing.T) {
 
 func TestServeTCP(t *testing.T) {
 	t.Setenv(EnvToken, "serve-tok")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -150,8 +153,9 @@ func TestServeTCP(t *testing.T) {
 	os.Stderr = w
 	t.Cleanup(func() { os.Stderr = old })
 
+	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- Run([]string{"serve", "-listen", "127.0.0.1:0"}) }()
+	go func() { errc <- serveListener(ctx, ln, "serve-tok") }()
 
 	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil {
@@ -166,24 +170,21 @@ func TestServeTCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	c, err := Handshake(ctx, conn, "serve-tok")
+	clientCtx, clientCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer clientCancel()
+	c, err := Handshake(clientCtx, conn, "serve-tok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !c.Alive() {
 		t.Fatal("expected a live session")
 	}
-	out, err := c.Exec(ctx, ExecSpec{Cmd: []string{"echo", "served"}}, nil, nil)
+	out, err := c.Exec(clientCtx, ExecSpec{Cmd: []string{"echo", "served"}}, nil, nil)
 	if err != nil || out.ExitCode != 0 {
 		t.Fatalf("%+v %v", out, err)
 	}
 	c.Close()
-
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
+	cancel()
 	select {
 	case err := <-errc:
 		if err != nil {
