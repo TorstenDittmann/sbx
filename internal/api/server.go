@@ -490,7 +490,10 @@ func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
 		return
 	}
-	items, err := s.mgr.List(r.Context(), actor(r), r.URL.Query().Get("status"), r.URL.Query().Get("backend"), labels)
+	items, err := s.mgr.List(r.Context(), actor(r), core.ListInput{
+		Status: r.URL.Query().Get("status"), Backend: r.URL.Query().Get("backend"),
+		Template: r.URL.Query().Get("template"), Query: r.URL.Query().Get("q"), Labels: labels,
+	})
 	if err != nil {
 		writeManager(w, err)
 		return

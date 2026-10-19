@@ -46,15 +46,15 @@ func TestWarmPoolClaimAndSetup(t *testing.T) {
 	if len(fd.Execs()) == 0 || fd.Execs()[len(fd.Execs())-1].Cmd[0] != "echo" {
 		t.Fatal(fd.Execs())
 	}
-	listed, err := mgr.List(ctx, actor, "", "", nil)
+	listed, err := mgr.List(ctx, actor, ListInput{})
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("user list %+v %v", listed, err)
 	}
-	adminWarm, err := mgr.List(ctx, Actor{Admin: true}, "warm", "", nil)
+	adminWarm, err := mgr.List(ctx, Actor{Admin: true}, ListInput{Status: "warm"})
 	if err != nil || len(adminWarm) != 1 {
 		t.Fatalf("admin warm %+v %v", adminWarm, err)
 	}
-	if got, err := mgr.List(ctx, actor, "warm", "", nil); err != nil || len(got) != 0 {
+	if got, err := mgr.List(ctx, actor, ListInput{Status: "warm"}); err != nil || len(got) != 0 {
 		t.Fatal(got, err)
 	}
 

@@ -33,4 +33,6 @@ await box.kill()
 
 `secrets` on `Sandbox.create` are stored for that sandbox and injected into commands. The API returns `secretKeys` and does not return the values. `client.setSecrets(id, secrets)` replaces them.
 
+`client.listSandboxes({ template, q, labels })` filters the caller's sandboxes. `labels` is an exact match. `q` is a substring of the id, template, image, status, or label text.
+
 Releases are cut from git tags. The workflow sets this package's version from the tag (`v0.2.0` publishes `0.2.0`) and attaches npm provenance. A prerelease tag is published under the `next` dist-tag.

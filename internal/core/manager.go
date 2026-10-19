@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -335,12 +336,27 @@ func (m *Manager) Get(ctx context.Context, actor Actor, sandboxID string) (store
 	return sb, nil
 }
 
+// ListInput filters sandboxes. Label matches are exact. Query is a substring.
+type ListInput struct {
+	Status   string
+	Backend  string
+	Template string
+	Query    string
+	Labels   map[string]string
+}
+
 // List returns sandboxes visible to actor.
-func (m *Manager) List(ctx context.Context, actor Actor, status, backend string, labels map[string]string) ([]store.Sandbox, error) {
-	if status == "warm" && !actor.Admin {
+func (m *Manager) List(ctx context.Context, actor Actor, in ListInput) ([]store.Sandbox, error) {
+	if in.Status == "warm" && !actor.Admin {
 		return []store.Sandbox{}, nil
 	}
-	f := store.SandboxFilter{Status: status, Backend: backend, Labels: labels}
+	if len(in.Query) > 128 || strings.ContainsRune(in.Query, 0) {
+		return nil, invalid("q must be at most 128 characters")
+	}
+	f := store.SandboxFilter{
+		Status: in.Status, Backend: in.Backend, Template: in.Template,
+		Query: in.Query, Labels: in.Labels,
+	}
 	if !actor.Admin {
 		f.OwnerID = actor.KeyID
 	}
