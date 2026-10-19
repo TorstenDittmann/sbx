@@ -347,6 +347,7 @@ paths:
     get:
       operationId: downloadArchive
       summary: Download a directory as tar.gz
+      description: gzip-compressed tar. When sbx-agent is configured the archive is packed in the agent, so the image does not need tar.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"
@@ -359,6 +360,7 @@ paths:
     post:
       operationId: uploadArchive
       summary: Extract a tar or tar.gz into a directory
+      description: Accepts a tar or gzip-compressed tar. When sbx-agent is configured, extraction runs in the agent and does not call tar. Paths that leave the destination are kept inside it.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"

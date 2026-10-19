@@ -1,7 +1,9 @@
 package docker
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -250,6 +252,7 @@ func TestIntegrationAgent(t *testing.T) {
 		t.Fatal("watch timed out")
 	}
 	watchCancel()
+	assertNativeArchive(t, ctx, d, h.ID)
 
 	proc, err := d.StartProcess(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sleep", "30"}, TimeoutSeconds: 0}, false, 0, 0)
 	if err != nil {
@@ -389,6 +392,63 @@ func TestIntegrationKillDuringExec(t *testing.T) {
 		}
 	case <-time.After(20 * time.Second):
 		t.Fatal("exec did not return after the container was killed")
+	}
+}
+
+func assertNativeArchive(t *testing.T, ctx context.Context, d *Driver, id string) {
+	t.Helper()
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	body := []byte("native-archive")
+	hdr := &tar.Header{Name: "proj/hello.txt", Mode: 0o644, Size: int64(len(body)), ModTime: time.Unix(0, 0)}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "proj/empty/", Mode: 0o755, Typeflag: tar.TypeDir, ModTime: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.ExtractArchive(ctx, id, "/workspace/in", bytes.NewReader(raw.Bytes()), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.ReadFile(ctx, id, "/workspace/in/proj/hello.txt", 100)
+	if err != nil || string(got) != "native-archive" {
+		t.Fatalf("%q %v", got, err)
+	}
+	packed, err := d.PackArchive(ctx, id, "/workspace/in", 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(packed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	tr := tar.NewReader(zr)
+	found := false
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Name == "proj/hello.txt" {
+			b, err := io.ReadAll(tr)
+			if err != nil || string(b) != "native-archive" {
+				t.Fatalf("%q %v", b, err)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("packed archive is missing proj/hello.txt")
 	}
 }
 

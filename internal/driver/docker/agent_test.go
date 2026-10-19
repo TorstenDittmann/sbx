@@ -3,6 +3,7 @@ package docker
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"io"
 	"net"
@@ -65,6 +66,51 @@ func TestGuestHookSession(t *testing.T) {
 	target := filepath.Join(dir, "note.txt")
 	if err := d.WriteFile(ctx, h.ID, target, []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	var archived bytes.Buffer
+	tw := tar.NewWriter(&archived)
+	if err := tw.WriteHeader(&tar.Header{Name: "from.tar", Mode: 0o644, Size: 3, ModTime: time.Unix(0, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("tar")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	arcDir := filepath.Join(cwd, "arc")
+	if err := d.ExtractArchive(ctx, h.ID, arcDir, bytes.NewReader(archived.Bytes()), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	arcBody, err := os.ReadFile(filepath.Join(arcDir, "from.tar"))
+	if err != nil || string(arcBody) != "tar" {
+		t.Fatalf("%q %v", arcBody, err)
+	}
+	packed, err := d.PackArchive(ctx, h.ID, arcDir, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(packed))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer zr.Close()
+	foundArc := false
+	tr := tar.NewReader(zr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Name == "from.tar" {
+			foundArc = true
+		}
+	}
+	if !foundArc {
+		t.Fatal("driver archive round trip dropped from.tar")
 	}
 	st, err := d.StatFile(ctx, h.ID, target)
 	if err != nil || st.Type != driver.FileFile || st.Size != 3 {

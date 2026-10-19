@@ -146,7 +146,7 @@
 	<ul>
 		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and per-sandbox bandwidth. Metadata and private ranges stay blocked unless the operator opts out. Previews can be public or token-protected, including <code>{'{port}-sbx-{id}.example.com'}</code>.</li>
 		<li><code>disk_mb</code> is the size of the writable <code>/workspace</code> tmpfs. The root filesystem is read-only, memory has no swap, and a PID limit applies.</li>
-		<li>Archives call <code>tar</code> in the image. Pause, resume, templates, quotas, and <code>/metrics</code> are real. A multi-node scheduler is not.</li>
+		<li>The agent packs and extracts archives, so the image does not need <code>tar</code>. Without the agent, archives still call <code>tar</code>. Pause, resume, templates, quotas, and <code>/metrics</code> are real. A multi-node scheduler is not.</li>
 	</ul>
 </section>
 

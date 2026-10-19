@@ -383,6 +383,7 @@ export class SbxClient {
     await this.request("DELETE", `/v1/sandboxes/${encodeURIComponent(id)}/files?${q}`)
   }
 
+  /** Upload a tar or gzip tar. With sbx-agent, extraction does not use a tar binary. */
   async uploadArchive(id: string, path: string, content: Uint8Array): Promise<void> {
     const q = new URLSearchParams({ path })
     await this.request("POST", `/v1/sandboxes/${encodeURIComponent(id)}/files/archive?${q}`, content, "application/octet-stream")
@@ -498,6 +499,7 @@ export class SbxClient {
     })
   }
 
+  /** Download a directory as gzip tar. With sbx-agent, packing does not use a tar binary. */
   async downloadArchive(id: string, path: string): Promise<Uint8Array> {
     const q = new URLSearchParams({ path })
     const response = await this.request("GET", `/v1/sandboxes/${encodeURIComponent(id)}/files/archive?${q}`)

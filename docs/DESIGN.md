@@ -55,7 +55,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 - The command is `sbx serve`. `sbx server` is an alias. `controller` and `node` are not implemented.
 - The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. If that runtime is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is gVisor and `runsc` is absent.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
-- v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, and previews then go through one framed session. See [AGENT.md](AGENT.md). Archives still shell out to `tar`. With no binary configured, exec and files stay on the engine API and the new routes return `unsupported`.
+- v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, archives, and previews then go through one framed session. See [AGENT.md](AGENT.md). With no binary configured, exec and files stay on the engine API, archives still call `tar`, and the new routes return `unsupported`.
 - The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real.
 - `network: none` is the default. `full` and `allow` join a dedicated bridge. Metadata and private ranges stay blocked unless the operator opts out. Allow and deny lists, bandwidth, and connection limits are in [NETWORK.md](NETWORK.md).
 - State is SQLite at `$data_dir/sbx.db` (WAL, one connection). Postgres is a cluster concern.
@@ -185,7 +185,7 @@ The baseline is installed once per process, before the first networked container
 
 In rough order, none of these are stubbed in the tree:
 
-1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives still need `tar` in the image. Watches use inotify, with a poll fallback when inotify is unavailable.
+1. The in-guest agent shipped in v0.2 for Docker and gVisor. Still open: vsock, and dialers for Kata, Firecracker, and Kubernetes. Archives are packed in the agent when it is configured. Watches use inotify, with a poll fallback when inotify is unavailable.
 2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Metadata and private-range blocking stay on by default.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.

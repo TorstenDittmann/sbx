@@ -25,4 +25,6 @@ await box.kill()
 
 `box.files.watch` yields `{ type, path }` events (`create`, `write`, `remove`). The agent uses inotify and falls back to polling when inotify is unavailable.
 
+`uploadArchive` accepts a tar or gzip tar, and `downloadArchive` returns a gzip tar. When the server is running `sbx-agent`, those calls do not need a `tar` binary in the sandbox image.
+
 Releases are cut from git tags. The workflow sets this package's version from the tag (`v0.2.0` publishes `0.2.0`) and attaches npm provenance. A prerelease tag is published under the `next` dist-tag.

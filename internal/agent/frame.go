@@ -56,6 +56,8 @@ const (
 	MsgFileMkdir  uint8 = 35
 	MsgFileWatch  uint8 = 36
 	MsgFileEvent  uint8 = 37
+	MsgArchivePut uint8 = 38
+	MsgArchiveGet uint8 = 39
 
 	MsgDial uint8 = 40
 )
