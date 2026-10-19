@@ -42,6 +42,9 @@ func TestLoadFileAndEnv(t *testing.T) {
 	if cfg.Backend != "gvisor" {
 		t.Fatalf("backend %q", cfg.Backend)
 	}
+	if cfg.Kata.Runtime != "kata" || cfg.Kata.RuntimeType != "io.containerd.kata.v2" {
+		t.Fatalf("kata defaults %+v", cfg.Kata)
+	}
 	if cfg.Docker.Host != "/tmp/docker.sock" {
 		t.Fatalf("host %q", cfg.Docker.Host)
 	}

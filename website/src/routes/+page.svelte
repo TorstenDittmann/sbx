@@ -16,8 +16,8 @@
 		},
 		{
 			name: "kata",
-			isolation: "A lightweight VM. The OCI image stays the same.",
-			status: "Planned",
+			isolation: "The Kata runtime class. Same image and API as Docker. Needs /dev/kvm.",
+			status: "Ships, optional",
 		},
 		{
 			name: "firecracker",
@@ -78,7 +78,7 @@
 
 <section class="container compare" id="backends">
 	<h2>Easy now, stronger later</h2>
-	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata, Firecracker, and Kubernetes are planned. They keep this API.</p>
+	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata ships when the host has the runtime class. Firecracker and Kubernetes are planned. They keep this API.</p>
 	<div class="table">
 		<table>
 			<colgroup>

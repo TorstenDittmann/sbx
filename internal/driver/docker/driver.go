@@ -181,6 +181,12 @@ func (d *Driver) Report(ctx context.Context) driver.Info {
 
 func (d *Driver) Ping(ctx context.Context) error { return d.client.Ping(ctx) }
 
+// DaemonInfo returns the runtime table. Other backends use it to tell a
+// registered runtime from a Kata runtime class.
+func (d *Driver) DaemonInfo(ctx context.Context) (Info, error) {
+	return d.client.Info(ctx)
+}
+
 // Check pings the daemon and, for a gVisor driver, verifies the runtime exists.
 func (d *Driver) Check(ctx context.Context) error {
 	if err := d.Ping(ctx); err != nil {
@@ -219,7 +225,11 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 			return driver.Handle{}, err
 		}
 		if _, ok := info.Runtimes[d.runtime]; !ok {
-			return driver.Handle{}, fmt.Errorf("%w: Docker has no %q runtime (install runsc and register it; sbx doctor prints the steps)", driver.ErrRuntimeUnavailable, d.runtime)
+			hint := "sbx doctor prints the steps"
+			if d.name == "gvisor" {
+				hint = "install runsc and register it; sbx doctor prints the steps"
+			}
+			return driver.Handle{}, fmt.Errorf("%w: Docker has no %q runtime (%s)", driver.ErrRuntimeUnavailable, d.runtime, hint)
 		}
 	}
 	if spec.Network == driver.NetFull && !d.opt.NoEgressFilter {

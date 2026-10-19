@@ -86,7 +86,7 @@ docker compose up --build
 
 The server listens on container port 8080 (`SBX_ADDR=:8080`). `./data` on the host holds SQLite and the initial API key. The compose file mounts the Docker socket; that is the host socket, not something sandboxes can see.
 
-`sbx doctor` reports whether Docker answers, whether the `runsc` runtime is registered, whether `/dev/kvm` is writable, and whether Kata or Firecracker assets are present. Select gVisor per sandbox with `"backend": "gvisor"`, or set `SBX_BACKEND=gvisor` after `runsc` is installed. A missing runtime is an error. `sbx setup gvisor`, `sbx setup kata`, and `sbx setup firecracker` print the host steps; add `--apply` to download pinned binaries and register a Docker runtime. `GET /v1/backends` returns the same picture to API clients. A template's `backend` field is the default for sandboxes created from it.
+`sbx doctor` reports whether Docker answers, whether the `runsc` runtime is registered, whether `/dev/kvm` is writable, and whether the Kata runtime class and a Firecracker kernel are present. Select gVisor per sandbox with `"backend": "gvisor"`, or Kata with `"backend": "kata"`, after `sbx setup gvisor` or `sbx setup kata`. A missing runtime is an error, not a silent fallback to runc. `sbx setup gvisor`, `sbx setup kata`, and `sbx setup firecracker` print the host steps; add `--apply` to download pinned binaries and register a Docker runtime. `GET /v1/backends` returns the same picture to API clients. A template's `backend` field is the default for sandboxes created from it.
 
 Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment variables, which override the file.
 
@@ -106,7 +106,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 
 `network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
-When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md).
+When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md). Kata setup is [docs/kata.md](docs/kata.md).
 
 ## Deploying the website with Dokploy
 

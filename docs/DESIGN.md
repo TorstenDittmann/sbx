@@ -53,7 +53,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 ### v0.1 decisions
 
 - The command is `sbx serve`. `sbx server` is an alias. `controller` and `node` are not implemented.
-- The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. If that runtime is missing, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is gVisor and `runsc` is absent.
+- The default backend is `docker`. `gvisor` is the same driver with runtime `runsc`. `kata` is the same driver with the Kata runtime class (`kata` / `io.containerd.kata.v2` by default). If that runtime is missing, or `/dev/kvm` is not writable, create returns HTTP 400 `unsupported`. Startup fails only when the configured default backend is missing its runtime.
 - `api/openapi.yaml` is the contract. Handlers are written by hand to match it. Code generation is deferred.
 - v0.1 had no in-guest agent. v0.2 runs `sbx-agent` inside the sandbox when the binary is configured. Exec, files, processes, terminals, watches, archives, and previews then go through one framed session. See [AGENT.md](AGENT.md). With no binary configured, exec and files stay on the engine API, archives still call `tar`, and the new routes return `unsupported`.
 - The workspace disk limit is the size of a tmpfs on `/workspace` (uid/gid 1000, mode 755). `/tmp` is a smaller tmpfs. The root filesystem is read-only by default, so the limit is real. A named volume mounted at `/workspace` replaces that tmpfs. `disk_mb` then does not apply to the persisted workspace. Paths under `/workspace/` are rejected. Other absolute paths (for example `/cache`) are extra mounts. At most eight mounts. `/`, `/tmp`, `/opt`, `/opt/sbx`, `/proc`, `/sys`, `/dev`, and `/etc` are reserved.
@@ -72,7 +72,7 @@ Later backends (Kata, Firecracker, Kubernetes) and a controller/node split imple
 |---|---|---|---|
 | 0 | `docker` | Namespaces, cgroups, seccomp. Shared kernel | Yes. Default |
 | 1 | `gvisor` | runsc, no KVM | Yes, when `runsc` is registered |
-| 2 | `kata` | Lightweight VM, OCI image unchanged | No |
+| 2 | `kata` | Lightweight VM via Docker runtime class `io.containerd.kata.v2` | Yes, when the runtime is registered and `/dev/kvm` is writable |
 | 3 | `firecracker` | MicroVM | No |
 | — | `kubernetes` | Whatever RuntimeClass the cluster has | No |
 
@@ -121,11 +121,11 @@ GET    /v1/keys                           admin
 GET    /  /healthz  /metrics  /openapi.yaml
 ```
 
-Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker` or `gvisor`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. A template may pin `backend`. Create uses the request backend, then the template backend, then the server default. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
+Create accepts `template` or `image`, resource fields, `ttl_seconds`, `idle_timeout_seconds`, `env`, `secrets`, `network` (`none`, `full`, or `allow`, plus allow, deny, and limits), `backend` (`docker`, `gvisor`, or `kata`), `labels`, and `mounts` (`volume_id`, `path`). Unknown JSON fields are rejected. A volume's backend must match the sandbox. Volume responses do not include the Docker volume name. `secrets` are stored apart from `env`. Get and list return `secret_keys` and never the values. Exec and new processes merge those values into the command environment, with the request's `env` winning on a duplicate name. `PUT /v1/sandboxes/{id}/secrets` replaces the map. A template may pin `backend`. Create uses the request backend, then the template backend, then the server default. Built-in templates, replaced on every start, are `base` (`alpine:3.20`), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`).
 
 A user template may set `warm` (0–8), `setup` (an argv run once before the sandbox is offered), `setup_timeout_seconds`, and `network`. The reaper keeps that many sandboxes in status `warm`, owned by `sbx-system`, so they do not use a key's quota and they are not expired by TTL. Create claims the oldest match when the request does not override image, cpu, memory, disk, pids, backend, network, env, secrets, or mounts. Otherwise sbx starts a new sandbox and runs `setup` then. Startup and the reaper refill the pool. `GET /v1/sandboxes` hides `warm` unless the caller is an admin and asks for `status=warm`.
 
-`GET /v1/backends` lists the ladder (`docker`, `gvisor`, `kata`, `firecracker`) with `available` and the features that driver implements. Kata and Firecracker are reported as not enabled until those drivers are configured. `sbx doctor` checks KVM, the Kata shim, and a Firecracker kernel under the data directory. `sbx setup gvisor|kata|firecracker` prints the install plan; `--apply` downloads pinned assets and, for the container runtimes, merges a Docker `runtimes` entry without restarting the daemon.
+`GET /v1/backends` lists the ladder (`docker`, `gvisor`, `kata`, `firecracker`) with `available` and the features that driver implements. Kata is available when Docker has the runtime class and `/dev/kvm` is writable. Firecracker is reported as not enabled until that driver is configured. `sbx doctor` checks KVM, the Kata shim, and a Firecracker kernel under the data directory. `sbx setup gvisor|kata|firecracker` prints the install plan; `--apply` downloads pinned assets and, for the container runtimes, merges a Docker `runtimes` entry without restarting the daemon.
 
 Errors are `{"error":{"code","message"}}`. Create is 201. The sandbox `node` field is always `"local"`.
 
@@ -202,7 +202,7 @@ In rough order, none of these are stubbed in the tree:
 2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Metadata and private-range blocking stay on by default.
 3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
-5. Kata and Firecracker.
+5. Firecracker. Kata is the Docker runtime class described in [kata.md](kata.md).
 
 ## 11. Resolved questions
 

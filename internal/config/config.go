@@ -19,6 +19,7 @@ type Config struct {
 	Backend  string
 	LogLevel string
 	Docker   DockerConfig
+	Kata     KataConfig
 	Limits   Limits
 	Auth     AuthConfig
 	Network  NetworkConfig
@@ -37,6 +38,14 @@ type DockerConfig struct {
 	// SandboxRoot runs sandboxes as uid 0 so image package managers can write
 	// the rootfs. The default stays uid 1000.
 	SandboxRoot bool
+}
+
+// KataConfig selects the Docker runtime class used for Kata sandboxes.
+type KataConfig struct {
+	// Runtime is the name in daemon.json. Default "kata".
+	Runtime string
+	// RuntimeType is the containerd shim. Default "io.containerd.kata.v2".
+	RuntimeType string
 }
 
 // Limits are server-enforced ceilings. Zero values are replaced by Default.
@@ -104,6 +113,10 @@ func Default() Config {
 			SandboxUID:     1000,
 			SandboxGID:     1000,
 		},
+		Kata: KataConfig{
+			Runtime:     "kata",
+			RuntimeType: "io.containerd.kata.v2",
+		},
 		Limits: Limits{
 			DefaultTTLSeconds:      300,
 			MaxTTLSeconds:          86400,
@@ -154,6 +167,7 @@ type fileConfig struct {
 	Backend  *string      `yaml:"backend"`
 	LogLevel *string      `yaml:"log_level"`
 	Docker   *fileDocker  `yaml:"docker"`
+	Kata     *fileKata    `yaml:"kata"`
 	Limits   *fileLimits  `yaml:"limits"`
 	Auth     *fileAuth    `yaml:"auth"`
 	Network  *fileNetwork `yaml:"network"`
@@ -167,6 +181,11 @@ type fileDocker struct {
 	SandboxGID     *int    `yaml:"sandbox_gid"`
 	AgentBin       *string `yaml:"agent_bin"`
 	SandboxRoot    *bool   `yaml:"sandbox_root"`
+}
+
+type fileKata struct {
+	Runtime     *string `yaml:"runtime"`
+	RuntimeType *string `yaml:"runtime_type"`
 }
 
 type fileLimits struct {
@@ -249,6 +268,10 @@ func (f fileConfig) apply(cfg *Config) {
 		setString(&cfg.Docker.AgentBin, d.AgentBin)
 		setBool(&cfg.Docker.SandboxRoot, d.SandboxRoot)
 	}
+	if k := f.Kata; k != nil {
+		setString(&cfg.Kata.Runtime, k.Runtime)
+		setString(&cfg.Kata.RuntimeType, k.RuntimeType)
+	}
 	if l := f.Limits; l != nil {
 		setInt(&cfg.Limits.DefaultTTLSeconds, l.DefaultTTLSeconds)
 		setInt(&cfg.Limits.MaxTTLSeconds, l.MaxTTLSeconds)
@@ -312,6 +335,8 @@ func applyEnv(cfg *Config) {
 	envInt(&cfg.Docker.SandboxGID, "SBX_SANDBOX_GID")
 	envString(&cfg.Docker.AgentBin, "SBX_AGENT_BIN")
 	envBool(&cfg.Docker.SandboxRoot, "SBX_SANDBOX_ROOT")
+	envString(&cfg.Kata.Runtime, "SBX_KATA_RUNTIME")
+	envString(&cfg.Kata.RuntimeType, "SBX_KATA_RUNTIME_TYPE")
 	envString(&cfg.Auth.BootstrapKey, "SBX_BOOTSTRAP_KEY")
 	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
 	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")
@@ -339,9 +364,12 @@ func applyEnv(cfg *Config) {
 // Validate checks the resolved configuration.
 func (c Config) Validate() error {
 	switch c.Backend {
-	case "docker", "gvisor":
+	case "docker", "gvisor", "kata":
 	default:
-		return fmt.Errorf("backend must be docker or gvisor, got %q", c.Backend)
+		return fmt.Errorf("backend must be docker, gvisor, or kata, got %q", c.Backend)
+	}
+	if c.Kata.Runtime == "" || c.Kata.RuntimeType == "" {
+		return fmt.Errorf("kata runtime and runtime_type are required")
 	}
 	if c.Addr == "" {
 		return fmt.Errorf("addr is required")

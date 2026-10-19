@@ -23,6 +23,7 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/core"
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/driver/docker"
+	"github.com/TorstenDittmann/sbx/internal/driver/kata"
 	"github.com/TorstenDittmann/sbx/internal/id"
 	"github.com/TorstenDittmann/sbx/internal/probe"
 	"github.com/TorstenDittmann/sbx/internal/setup"
@@ -33,7 +34,7 @@ import (
 const usageText = `sbx is a single-node sandbox server.
 
 Usage:
-  sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor]
+  sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor|kata]
   sbx doctor [--config sbx.yaml]
   sbx setup gvisor|kata|firecracker [--apply] [--data-dir ./data]
   sbx keys create --name NAME [--admin] [--data-dir ./data]
@@ -201,6 +202,18 @@ func doctor(args []string) error {
 		report(true, "gvisor", "runsc is registered")
 	}
 	reportHost(report, cfg)
+	if k, ok := drivers["kata"].(*kata.Driver); ok {
+		if err := k.Check(ctx); err != nil {
+			detail := err.Error() + " (optional unless --backend kata)"
+			if cfg.Backend == "kata" {
+				report(false, "kata", detail)
+			} else {
+				fmt.Printf("%-6s %s — %s\n", "warn", "kata", detail)
+			}
+		} else {
+			report(true, "kata", "runtime class is registered")
+		}
+	}
 	report(true, "backend", cfg.Backend)
 	bin := agentBinary(cfg)
 	if bin == "" {
@@ -222,13 +235,6 @@ func reportHost(report func(bool, string, string), cfg config.Config) {
 		report(true, "kvm", detail)
 	} else {
 		fmt.Printf("%-6s %s — %s\n", "warn", "kvm", detail+" (required for kata and firecracker)")
-	}
-	if path, found := probe.Which("containerd-shim-kata-v2"); found {
-		report(true, "kata shim", path)
-	} else if path, found := probe.Which("kata-runtime"); found {
-		report(true, "kata runtime", path)
-	} else {
-		fmt.Printf("%-6s %s — %s\n", "warn", "kata", "shim not on PATH (sbx setup kata)")
 	}
 	manifest := filepath.Join(cfg.DataDir, "firecracker", "manifest.json")
 	kernel := filepath.Join(cfg.DataDir, "firecracker", "vmlinux")
@@ -388,7 +394,7 @@ func loadFlags(name string, args []string) (config.Config, error) {
 	configPath := fs.String("config", os.Getenv("SBX_CONFIG"), "config file")
 	addr := fs.String("addr", "", "listen address")
 	dataDir := fs.String("data-dir", "", "data directory")
-	backend := fs.String("backend", "", "docker or gvisor")
+	backend := fs.String("backend", "", "docker, gvisor, or kata")
 	dockerHost := fs.String("docker-host", "", "docker socket")
 	agentBin := fs.String("agent-bin", "", "path to the sbx-agent binary")
 	bootstrap := fs.String("bootstrap-key", "", "API key created on first boot")
@@ -476,7 +482,21 @@ func openDrivers(cfg config.Config) (map[string]driver.Driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]driver.Driver{"docker": dock, "gvisor": gvis}, nil
+	kOpt := kata.Options{
+		Host:           cfg.Docker.Host,
+		Runtime:        cfg.Kata.Runtime,
+		RuntimeType:    cfg.Kata.RuntimeType,
+		ReadOnlyRootfs: cfg.Docker.ReadOnlyRootfs,
+		UID:            cfg.Docker.SandboxUID,
+		GID:            cfg.Docker.SandboxGID,
+		MaxOutputBytes: cfg.Limits.MaxOutputBytes,
+		AgentBin:       agentBinary(cfg),
+	}
+	kataDrv, err := kata.New(kOpt)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]driver.Driver{"docker": dock, "gvisor": gvis, "kata": kataDrv}, nil
 }
 
 func checkDrivers(ctx context.Context, cfg config.Config, drivers map[string]driver.Driver, log *slog.Logger) error {
@@ -490,6 +510,14 @@ func checkDrivers(ctx context.Context, cfg config.Config, drivers map[string]dri
 			return err
 		}
 		log.Warn("gvisor runtime is not registered; backend=gvisor will fail until runsc is installed", "err", err)
+	}
+	if k, ok := drivers["kata"].(*kata.Driver); ok {
+		if err := k.Check(ctx); err != nil {
+			if cfg.Backend == "kata" {
+				return err
+			}
+			log.Warn("kata runtime is not registered; backend=kata will fail until the runtime class is installed", "err", err)
+		}
 	}
 	return nil
 }
