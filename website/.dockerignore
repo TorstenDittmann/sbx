@@ -1,3 +1,6 @@
 Dockerfile
 docker-compose.yml
 .dockerignore
+node_modules
+dist
+.svelte-kit
