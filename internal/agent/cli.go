@@ -30,7 +30,9 @@ const (
 // With no arguments, a guest.json (Firecracker init) serves on vsock.
 // Otherwise it listens on the unix socket used by Docker and Kata.
 func Run(args []string) error {
-	if len(args) == 0 || (len(args) > 0 && strings.Contains(args[0], "=")) {
+	// The kernel passes unrecognized boot args to init. A guest.json token
+	// means this process is the microVM init, whatever those args were.
+	if len(args) == 0 || !knownAgentCommand(args[0]) {
 		if cfg, err := loadGuest(); err == nil && cfg.Token != "" {
 			ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
@@ -57,6 +59,15 @@ func Run(args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func knownAgentCommand(s string) bool {
+	switch s {
+	case "init", "dial", "serve", "version", "--version", "-v", "help", "-h", "--help":
+		return true
+	default:
+		return false
 	}
 }
 

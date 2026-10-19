@@ -31,6 +31,9 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 		} else {
 			last = err
 		}
+		if vm.proc != nil && pidExited(vm.proc.PID()) {
+			return nil, fmt.Errorf("firecracker exited before the agent answered: %w", last)
+		}
 		if ctx.Err() != nil || time.Now().After(deadline) {
 			if last == nil {
 				last = ctx.Err()

@@ -23,7 +23,9 @@ func preparePID1() error {
 	if err := unix.Mount("proc", "/proc", "proc", 0, ""); err != nil {
 		return err
 	}
-	return unix.Mount("sysfs", "/sys", "sysfs", 0, "")
+	// sysfs is useful and not required for vsock.
+	_ = unix.Mount("sysfs", "/sys", "sysfs", 0, "")
+	return nil
 }
 
 func reapZombies() {

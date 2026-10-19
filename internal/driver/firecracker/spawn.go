@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -98,4 +99,23 @@ func pidAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil
+}
+
+// pidExited reports a zombie or a missing process. A child Firecracker that
+// the kernel killed stays a zombie until Wait, and Kill(pid, 0) still succeeds.
+func pidExited(pid int) bool {
+	if pid <= 1 {
+		return true
+	}
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return true
+	}
+	s := string(raw)
+	i := strings.LastIndex(s, ")")
+	if i < 0 || i+2 >= len(s) {
+		return false
+	}
+	state := s[i+2]
+	return state == 'Z' || state == 'X' || state == 'x'
 }

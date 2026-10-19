@@ -314,6 +314,9 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	vm := &vm{rec: rec, proc: proc}
 	client, err := d.dialAgent(ctx, vm)
 	if err != nil {
+		if raw, readErr := os.ReadFile(rec.Log); readErr == nil && len(raw) > 0 {
+			err = fmt.Errorf("%w\n%s", err, strings.TrimSpace(string(raw)))
+		}
 		return cleanup(err)
 	}
 	if err := d.save(rec); err != nil {

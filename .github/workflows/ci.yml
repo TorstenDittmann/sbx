@@ -106,6 +106,10 @@ jobs:
             echo "root or passwordless sudo is required to mount the ext4 rootfs; skipping"
             exit 0
           fi
+          sudo modprobe kvm 2>/dev/null || true
+          sudo modprobe kvm_intel 2>/dev/null || true
+          sudo modprobe kvm_amd 2>/dev/null || true
+          sudo modprobe vhost_vsock 2>/dev/null || true
           CGO_ENABLED=0 go build -o /tmp/sbx-agent ./cmd/sbx-agent
           chmod 755 /tmp/sbx-agent
           set +e

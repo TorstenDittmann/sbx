@@ -516,8 +516,14 @@ func TestSpawnAndReloadNet(t *testing.T) {
 	if err != nil || proc.PID() <= 1 {
 		t.Fatal(err, proc)
 	}
+	if pidExited(proc.PID()) || pidExited(0) == false {
+		t.Fatal("expected a live child and a missing pid to count as exited")
+	}
 	if err := proc.Stop(); err != nil {
 		t.Fatal(err)
+	}
+	if !pidExited(proc.PID()) {
+		t.Fatal("expected the stopped child to be gone")
 	}
 	if _, err := spawnFirecracker(SpawnSpec{}); err == nil {
 		t.Fatal("expected missing binary")

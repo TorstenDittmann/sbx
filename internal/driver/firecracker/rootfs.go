@@ -138,8 +138,12 @@ func makeExt4(ctx context.Context, path string, mb int) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "mkfs.ext4", "-F", "-L", "sbx", path)
-	out, err := cmd.CombinedOutput()
+	// Pin features the Firecracker 6.1 guest kernel mounts. Newer mkfs defaults
+	// (metadata_csum_seed, orphan_file) are not in every CI vmlinux.
+	out, err := exec.CommandContext(ctx, "mkfs.ext4", "-F", "-L", "sbx", "-O", "^metadata_csum_seed,^orphan_file", path).CombinedOutput()
+	if err != nil {
+		out, err = exec.CommandContext(ctx, "mkfs.ext4", "-F", "-L", "sbx", path).CombinedOutput()
+	}
 	if err != nil {
 		return fmt.Errorf("mkfs.ext4: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
