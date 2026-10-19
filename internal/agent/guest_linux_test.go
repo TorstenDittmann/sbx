@@ -48,3 +48,17 @@ func TestLinuxGuestNetAndVsock(t *testing.T) {
 	_ = ln.Close()
 	<-done
 }
+
+func TestMountfs(t *testing.T) {
+	dir := t.TempDir()
+	err := mountfs("tmpfs", dir, "tmpfs")
+	if os.Getuid() != 0 {
+		if err == nil {
+			t.Fatal("expected mount to fail")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}

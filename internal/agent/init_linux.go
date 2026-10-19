@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -14,18 +15,27 @@ func preparePID1() error {
 	if os.Getpid() != 1 {
 		return nil
 	}
-	_ = os.MkdirAll("/dev", 0o755)
-	_ = os.MkdirAll("/proc", 0o755)
-	_ = os.MkdirAll("/sys", 0o755)
-	if err := unix.Mount("devtmpfs", "/dev", "devtmpfs", 0, ""); err != nil {
+	// The Firecracker CI kernel mounts devtmpfs before init. Remounting it
+	// returns EBUSY, which must not kill PID 1.
+	if err := mountfs("devtmpfs", "/dev", "devtmpfs"); err != nil {
 		return err
 	}
-	if err := unix.Mount("proc", "/proc", "proc", 0, ""); err != nil {
+	if err := mountfs("proc", "/proc", "proc"); err != nil {
 		return err
 	}
-	// sysfs is useful and not required for vsock.
-	_ = unix.Mount("sysfs", "/sys", "sysfs", 0, "")
+	_ = mountfs("sysfs", "/sys", "sysfs")
 	return nil
+}
+
+func mountfs(source, target, fstype string) error {
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	err := unix.Mount(source, target, fstype, 0, "")
+	if err == nil || errors.Is(err, unix.EBUSY) {
+		return nil
+	}
+	return err
 }
 
 func reapZombies() {
