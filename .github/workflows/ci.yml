@@ -55,6 +55,25 @@ jobs:
         run: bun test --cwd sdk/typescript test
       - name: example parses
         run: node --experimental-strip-types --check examples/quickstart.ts
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - name: build sdk package
+        run: npm ci --prefix sdk/typescript
+      - name: sdk package contents
+        run: |
+          npm pack --dry-run --prefix sdk/typescript | tee /tmp/sbx-pack.txt
+          grep -q 'dist/index.js' /tmp/sbx-pack.txt
+          grep -q 'dist/index.d.ts' /tmp/sbx-pack.txt
+          if grep -R '\.ts"' sdk/typescript/dist; then
+            echo "published ESM still imports .ts files" >&2
+            exit 1
+          fi
+      - name: sdk package loads on node and bun
+        run: |
+          node --input-type=module -e 'import { parseDuration, Sandbox, SbxClient } from "./sdk/typescript/dist/index.js"; if (parseDuration("5m") !== 300) process.exit(1); if (typeof Sandbox.create !== "function" || typeof SbxClient !== "function") process.exit(1)'
+          bun -e 'import { parseDuration, Sandbox, SbxClient } from "./sdk/typescript/dist/index.js"; if (parseDuration("5m") !== 300) process.exit(1); if (typeof Sandbox.create !== "function" || typeof SbxClient !== "function") process.exit(1)'
+          bun test --cwd sdk/typescript test
 
   website:
     runs-on: ubuntu-latest
