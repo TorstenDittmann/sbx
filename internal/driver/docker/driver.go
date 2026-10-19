@@ -213,6 +213,9 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 		}
 		token = newAgentToken()
 	}
+	if err := d.prepareMounts(ctx, spec.Mounts); err != nil {
+		return driver.Handle{}, err
+	}
 	if err := d.EnsureImage(ctx, spec.Image); err != nil {
 		return driver.Handle{}, err
 	}

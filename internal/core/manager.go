@@ -46,6 +46,7 @@ type CreateInput struct {
 	MaxConns           *int
 	Backend            string
 	Labels             map[string]string
+	Mounts             []MountInput
 }
 
 // ExecInput runs a command. TimeoutSeconds 0 uses the server default.
@@ -198,6 +199,10 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	for k, v := range in.Env {
 		env[k] = v
 	}
+	mounts, err := m.resolveMounts(ctx, actor, backend, in.Mounts)
+	if err != nil {
+		return store.Sandbox{}, err
+	}
 
 	now := m.now()
 	sb := store.Sandbox{
@@ -205,7 +210,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: env, Network: mode,
 		Allow: policy.Allow, Deny: policy.Deny, EgressKbps: policy.EgressKbps, MaxConns: policy.MaxConns,
 		Labels: nonNil(in.Labels), OwnerKeyID: actor.KeyID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second),
-		IdleTimeoutSeconds: idle, LastActivityAt: now,
+		IdleTimeoutSeconds: idle, LastActivityAt: now, Mounts: mounts,
 	}
 
 	m.mu.Lock()
@@ -238,6 +243,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	handle, err := d.Create(ctx, driver.SandboxSpec{
 		ID: sb.ID, Image: image, CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids,
 		Env: env, Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
+		Mounts: driverMounts(mounts),
 	})
 	if err != nil {
 		sb.Status = "error"

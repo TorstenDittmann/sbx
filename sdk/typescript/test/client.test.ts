@@ -55,6 +55,26 @@ test("client maps create, exec, files, and errors", async () => {
         res.end(JSON.stringify({ error: { code: "not_found", message: "gone" } }))
         return
       }
+      if (req.method === "POST" && req.url === "/v1/volumes") {
+        res.writeHead(201, { "content-type": "application/json" })
+        res.end(JSON.stringify({ id: "vol_abc0123456789ab", name: "cache", backend: "docker", created_at: "2026-10-19T12:00:00Z" }))
+        return
+      }
+      if (req.method === "GET" && req.url === "/v1/volumes") {
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ volumes: [{ id: "vol_abc0123456789ab", name: "cache", backend: "docker", created_at: "2026-10-19T12:00:00Z" }] }))
+        return
+      }
+      if (req.method === "GET" && req.url === "/v1/volumes/vol_abc0123456789ab") {
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ id: "vol_abc0123456789ab", name: "cache", backend: "docker", created_at: "2026-10-19T12:00:00Z" }))
+        return
+      }
+      if (req.method === "DELETE" && req.url === "/v1/volumes/vol_abc0123456789ab") {
+        res.writeHead(204)
+        res.end()
+        return
+      }
       res.writeHead(500)
       res.end("no")
     })
@@ -119,6 +139,23 @@ test("client maps create, exec, files, and errors", async () => {
 
   const sandbox = await Sandbox.connect("sbx_test", { baseUrl, apiKey: "sbx_testkey" })
   assert.equal(sandbox.id, "sbx_test")
+
+  const mounted = await client.createSandbox({ mounts: [{ volumeId: "vol_abc0123456789ab", path: "/cache" }] })
+  assert.equal(mounted.id, "sbx_test")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}").mounts, [{ volume_id: "vol_abc0123456789ab", path: "/cache" }])
+
+  const volume = await client.createVolume("cache")
+  assert.equal(volume.id, "vol_abc0123456789ab")
+  assert.equal(volume.name, "cache")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}"), { name: "cache" })
+  const volumes = await client.listVolumes()
+  assert.equal(volumes.length, 1)
+  const one = await client.getVolume(volume.id)
+  assert.equal(one.backend, "docker")
+  await client.deleteVolume(volume.id)
+  assert.equal(seen.method, "DELETE")
+  assert.equal(seen.url, "/v1/volumes/vol_abc0123456789ab")
+
   await server.close()
 })
 

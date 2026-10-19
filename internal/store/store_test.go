@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -170,6 +171,99 @@ func TestParseLabelQuery(t *testing.T) {
 	}
 	if _, err := ParseLabelQuery([]string{"noseparator"}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestVolumesAndMountMigration(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	vol := Volume{
+		ID: "vol_0123456789abcdef", Name: "cache", OwnerKeyID: "key_a",
+		Backend: "docker", DockerName: "sbx-0123456789abcdef", CreatedAt: now,
+	}
+	if err := st.InsertVolume(ctx, vol); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.InsertVolume(ctx, vol); err == nil {
+		t.Fatal("expected duplicate volume")
+	}
+	got, err := st.GetVolume(ctx, vol.ID)
+	if err != nil || got.Name != "cache" || !got.CreatedAt.Equal(now) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := st.GetVolume(ctx, "vol_missing"); err != ErrNotFound {
+		t.Fatal(err)
+	}
+	listed, err := st.ListVolumes(ctx, "key_a")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("%+v %v", listed, err)
+	}
+	sb := Sandbox{
+		ID: "sbx_aaaaaaaaaaaaaaaa", Image: "alpine:3.20", Backend: "docker", Status: "creating",
+		CPU: 1, MemoryMB: 64, DiskMB: 64, PIDs: 32, Network: "none", OwnerKeyID: "key_a",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour), LastActivityAt: now,
+		Mounts: []Mount{{VolumeID: vol.ID, Path: "/cache", Source: vol.DockerName}},
+	}
+	if err := st.InsertSandbox(ctx, sb); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := st.GetSandbox(ctx, sb.ID)
+	if err != nil || len(loaded.Mounts) != 1 || loaded.Mounts[0].Source != vol.DockerName {
+		t.Fatalf("%+v %v", loaded.Mounts, err)
+	}
+	inUse, err := st.VolumeInUse(ctx, vol.ID)
+	if err != nil || !inUse {
+		t.Fatal(inUse, err)
+	}
+	loaded.Status = "stopped"
+	if err := st.UpdateSandbox(ctx, loaded); err != nil {
+		t.Fatal(err)
+	}
+	inUse, err = st.VolumeInUse(ctx, vol.ID)
+	if err != nil || inUse {
+		t.Fatal("stopped sandbox should not hold the volume", err)
+	}
+	if err := st.DeleteVolume(ctx, vol.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteVolume(ctx, vol.ID); err != ErrNotFound {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "old.db")
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE sandboxes (
+		id TEXT PRIMARY KEY, template TEXT NOT NULL DEFAULT '', image TEXT NOT NULL,
+		backend TEXT NOT NULL, status TEXT NOT NULL, cpu REAL NOT NULL,
+		memory_mb INTEGER NOT NULL, disk_mb INTEGER NOT NULL, pids INTEGER NOT NULL,
+		env_json TEXT NOT NULL, network TEXT NOT NULL, labels_json TEXT NOT NULL,
+		owner_key_id TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+		idle_timeout_seconds INTEGER NOT NULL DEFAULT 0, last_activity_at INTEGER NOT NULL,
+		finished_at INTEGER, container_id TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	migrated, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { migrated.Close() })
+	plain := Sandbox{
+		ID: "sbx_bbbbbbbbbbbbbbbb", Image: "alpine:3.20", Backend: "docker", Status: "running",
+		CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 32, Network: "none", OwnerKeyID: "key_a",
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour), LastActivityAt: now,
+	}
+	if err := migrated.InsertSandbox(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = migrated.GetSandbox(ctx, plain.ID)
+	if err != nil || loaded.Mounts != nil {
+		t.Fatalf("%+v %v", loaded.Mounts, err)
 	}
 }
 

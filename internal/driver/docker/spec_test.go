@@ -111,6 +111,28 @@ func TestBuildCreateGVisorAndFullNetwork(t *testing.T) {
 	}
 }
 
+func TestBuildCreateVolumeReplacesWorkspace(t *testing.T) {
+	body := buildCreate(driver.SandboxSpec{
+		ID: "sbx_vol", Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 32,
+		Mounts: []driver.Mount{
+			{Source: "sbx-ws", Target: "/workspace"},
+			{Source: "sbx-cache", Target: "/cache"},
+		},
+	}, Options{Name: "docker", UID: 1000, GID: 1000, ReadOnlyRootfs: true}, nil, "tok")
+	if _, ok := body.HostConfig.Tmpfs["/workspace"]; ok {
+		t.Fatal("workspace tmpfs should be replaced by the volume")
+	}
+	if !strings.Contains(body.HostConfig.Tmpfs["/tmp"], "size=") {
+		t.Fatal(body.HostConfig.Tmpfs)
+	}
+	if len(body.HostConfig.Binds) != 3 ||
+		body.HostConfig.Binds[0] != agentVolume+":/opt/sbx:ro" ||
+		body.HostConfig.Binds[1] != "sbx-ws:/workspace" ||
+		body.HostConfig.Binds[2] != "sbx-cache:/cache" {
+		t.Fatal(body.HostConfig.Binds)
+	}
+}
+
 func TestWithTimeoutAndSplitRef(t *testing.T) {
 	got := withTimeout([]string{"echo", "hi"}, 5)
 	joined := strings.Join(got, " ")

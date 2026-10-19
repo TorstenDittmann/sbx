@@ -95,6 +95,24 @@ type Sandbox struct {
 	FinishedAt         *time.Time
 	ContainerID        string
 	Error              string
+	Mounts             []Mount
+}
+
+// Mount records a volume attached to a sandbox.
+type Mount struct {
+	VolumeID string `json:"volume_id"`
+	Path     string `json:"path"`
+	Source   string `json:"source"`
+}
+
+// Volume is a named Docker volume that outlives any one sandbox.
+type Volume struct {
+	ID         string
+	Name       string
+	OwnerKeyID string
+	Backend    string
+	DockerName string
+	CreatedAt  time.Time
 }
 
 // SandboxFilter selects rows. Empty fields are ignored.
@@ -146,6 +164,7 @@ func migrate(db *sql.DB) error {
 		{"sandboxes", "deny_json", `ALTER TABLE sandboxes ADD COLUMN deny_json TEXT NOT NULL DEFAULT '[]'`},
 		{"sandboxes", "egress_kbps", `ALTER TABLE sandboxes ADD COLUMN egress_kbps INTEGER NOT NULL DEFAULT 0`},
 		{"sandboxes", "max_conns", `ALTER TABLE sandboxes ADD COLUMN max_conns INTEGER NOT NULL DEFAULT 0`},
+		{"sandboxes", "mounts_json", `ALTER TABLE sandboxes ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'`},
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
 	}
 	for _, alt := range alters {
@@ -227,7 +246,18 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     last_activity_at INTEGER NOT NULL,
     finished_at INTEGER,
     container_id TEXT NOT NULL DEFAULT '',
-    error TEXT NOT NULL DEFAULT ''
+    error TEXT NOT NULL DEFAULT '',
+    mounts_json TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE IF NOT EXISTS volumes (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    owner_key_id TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    docker_name TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    UNIQUE(owner_key_id, name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
@@ -387,12 +417,12 @@ func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
 			id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
 			env_json, network, allow_json, deny_json, egress_kbps, max_conns,
 			labels_json, owner_key_id, created_at, expires_at,
-			idle_timeout_seconds, last_activity_at, finished_at, container_id, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sb.ID, sb.Template, sb.Image, sb.Backend, sb.Status, sb.CPU, sb.MemoryMB, sb.DiskMB, sb.PIDs,
 		mustJSON(sb.Env), sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns,
 		mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
-		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error)
+		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mountsJSON(sb.Mounts))
 	return err
 }
 
@@ -540,7 +570,7 @@ const sandboxSelect = `
 SELECT id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
        env_json, network, allow_json, deny_json, egress_kbps, max_conns,
        labels_json, owner_key_id, created_at, expires_at,
-       idle_timeout_seconds, last_activity_at, finished_at, container_id, error
+       idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json
 FROM sandboxes`
 
 type scanner interface {
@@ -600,13 +630,13 @@ func scanTemplate(row scanner) (Template, error) {
 
 func scanSandbox(row scanner) (Sandbox, error) {
 	var sb Sandbox
-	var env, labels, allow, deny string
+	var env, labels, allow, deny, mounts string
 	var created, expires, activity int64
 	var finished sql.NullInt64
 	err := row.Scan(
 		&sb.ID, &sb.Template, &sb.Image, &sb.Backend, &sb.Status, &sb.CPU, &sb.MemoryMB, &sb.DiskMB, &sb.PIDs,
 		&env, &sb.Network, &allow, &deny, &sb.EgressKbps, &sb.MaxConns, &labels, &sb.OwnerKeyID, &created, &expires,
-		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error,
+		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error, &mounts,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Sandbox{}, ErrNotFound
@@ -618,6 +648,7 @@ func scanSandbox(row scanner) (Sandbox, error) {
 	sb.Labels = decodeMap(labels)
 	sb.Allow = decodeSlice(allow)
 	sb.Deny = decodeSlice(deny)
+	sb.Mounts = decodeMounts(mounts)
 	sb.CreatedAt = fromMillis(created)
 	sb.ExpiresAt = fromMillis(expires)
 	sb.LastActivityAt = fromMillis(activity)

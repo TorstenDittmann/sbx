@@ -99,6 +99,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
 - A node-wide sandbox cap (`max_sandboxes`, default 100) on top of the per-key quota, a per-key request rate limit, and a request body size limit.
 - Secure defaults: no network, all capabilities dropped, non-root, read-only rootfs, memory without swap, PID limit. `disk_mb` is the size of the writable `/workspace` tmpfs.
+- Named volumes (`POST /v1/volumes`) that outlive a sandbox. Mount one at `/workspace` to keep a project or package cache across sandboxes. `disk_mb` does not cap a volume mounted at `/workspace`. A sandbox key only sees its own volumes. Deleting a sandbox does not delete the volume; deleting a volume fails while a live sandbox mounts it.
 
 `network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 

@@ -23,6 +23,7 @@ type Driver struct {
 	dirs         map[string]map[string]struct{}
 	procs        map[string]map[string]*proc
 	watchers     map[string][]*watch
+	volumes      map[string]struct{}
 	seq          int
 	PingErr      error
 	CreateErr    error
@@ -76,6 +77,7 @@ func New(name string) *Driver {
 		dirs:     map[string]map[string]struct{}{},
 		procs:    map[string]map[string]*proc{},
 		watchers: map[string][]*watch{},
+		volumes:  map[string]struct{}{},
 	}
 }
 
@@ -118,6 +120,44 @@ func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Hand
 		d.files[spec.ID] = map[string][]byte{}
 	}
 	return driver.Handle{ID: spec.ID, RuntimeName: d.name}, nil
+}
+
+// CreateVolume records a named volume.
+func (d *Driver) CreateVolume(_ context.Context, name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.volumes[name]; ok {
+		return fmt.Errorf("volume %s already exists", name)
+	}
+	d.volumes[name] = struct{}{}
+	return nil
+}
+
+// DeleteVolume removes a recorded volume.
+func (d *Driver) DeleteVolume(_ context.Context, name string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.volumes, name)
+	return nil
+}
+
+// HasVolume reports whether CreateVolume recorded name.
+func (d *Driver) HasVolume(name string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.volumes[name]
+	return ok
+}
+
+// Spec returns the spec recorded for a created sandbox.
+func (d *Driver) Spec(id string) (driver.SandboxSpec, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.SandboxSpec{}, false
+	}
+	return b.spec, true
 }
 
 func (d *Driver) Delete(_ context.Context, id string) error {

@@ -27,4 +27,6 @@ await box.kill()
 
 `uploadArchive` accepts a tar or gzip tar, and `downloadArchive` returns a gzip tar. When the server is running `sbx-agent`, those calls do not need a `tar` binary in the sandbox image.
 
+`client.createVolume(name)` creates a volume that outlives sandboxes. Pass `mounts: [{ volumeId, path }]` to `Sandbox.create`. Mounting `/workspace` keeps that directory; `diskMb` does not cap it. `deleteVolume` fails while a live sandbox still mounts the volume.
+
 Releases are cut from git tags. The workflow sets this package's version from the tag (`v0.2.0` publishes `0.2.0`) and attaches npm provenance. A prerelease tag is published under the `next` dist-tag.
