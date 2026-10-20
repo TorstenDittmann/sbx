@@ -915,9 +915,19 @@ components:
         network: {$ref: "#/components/schemas/KeyNetwork"}
     KeyNetwork:
       type: object
-      description: Default network policy for sandboxes created with this key.
+      description: >
+        Network policy for sandboxes created with this key. mode and allow are
+        defaults a sandbox may override unless max_mode is set.
       properties:
         mode: {type: string, enum: [none, full, allow]}
+        max_mode:
+          type: string
+          enum: [none, allow, full]
+          description: >
+            Optional ceiling. A sandbox asking for a looser mode gets 403, a
+            looser server default is narrowed to it, and under allow every
+            sandbox allow entry must fall inside this key's allow list (which
+            is then required).
         allow:
           type: array
           items: {type: string}

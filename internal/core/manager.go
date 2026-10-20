@@ -313,7 +313,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 			return store.Sandbox{}, quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
 		}
 	}
-	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
+	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, mode, policy, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
 	if err != nil {
 		m.mu.Unlock()
 		return store.Sandbox{}, err

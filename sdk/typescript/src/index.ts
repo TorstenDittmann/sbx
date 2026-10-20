@@ -95,6 +95,11 @@ export type NetworkPolicy = {
   maxConnections?: number
 }
 
+/** A key's network policy. `maxMode` makes the key's mode and allow list a ceiling instead of a default. */
+export type KeyNetworkPolicy = NetworkPolicy & {
+  maxMode?: NetworkMode
+}
+
 export type BackendInfo = {
   name: string
   available: boolean
@@ -183,7 +188,7 @@ export type KeyInfo = {
   name: string
   prefix: string
   scopes: string[]
-  network: NetworkPolicy
+  network: KeyNetworkPolicy
   createdAt?: string
   lastUsedAt?: string
   expiresAt?: string
@@ -476,10 +481,14 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
   }
 
-  createKey(name: string, options: { scopes?: string[]; network?: NetworkPolicy; expiresAt?: Date | string } = {}): Promise<CreatedKey> {
+  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string } = {}): Promise<CreatedKey> {
     const body: Record<string, unknown> = { name }
     if (options.scopes) body.scopes = options.scopes
-    if (options.network) body.network = networkBody(options.network)
+    if (options.network) {
+      const network = networkBody(options.network)
+      if (options.network.maxMode) network.max_mode = options.network.maxMode
+      body.network = network
+    }
     if (options.expiresAt) body.expires_at = options.expiresAt instanceof Date ? options.expiresAt.toISOString() : options.expiresAt
     return this.requestJSON<KeyJSON & { key: string }>("POST", "/v1/keys", body).then((raw) => ({ ...mapKey(raw), key: raw.key }))
   }
@@ -787,6 +796,7 @@ type KeyJSON = {
   revoked_at?: string
   network?: {
     mode?: NetworkMode
+    max_mode?: NetworkMode
     allow?: string[]
     deny?: string[]
     egress_kbps?: number
@@ -807,6 +817,7 @@ function mapKey(raw: KeyJSON): KeyInfo {
     revokedAt: raw.revoked_at,
     network: {
       mode: network.mode,
+      maxMode: network.max_mode,
       allow: network.allow,
       deny: network.deny,
       egressKbps: network.egress_kbps,

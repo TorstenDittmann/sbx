@@ -266,6 +266,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt *time.Time `json:"expires_at"`
 		Network   *struct {
 			Mode       string    `json:"mode"`
+			MaxMode    string    `json:"max_mode"`
 			Allow      *[]string `json:"allow"`
 			Deny       *[]string `json:"deny"`
 			EgressKbps int       `json:"egress_kbps"`
@@ -292,12 +293,25 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var network store.KeyNetwork
 	if body.Network != nil {
 		network.Mode = body.Network.Mode
+		network.MaxMode = body.Network.MaxMode
 		network.Allow = body.Network.Allow
 		network.Deny = body.Network.Deny
 		network.EgressKbps = body.Network.EgressKbps
 		network.MaxConns = body.Network.MaxConns
 		if network.Mode != "" && network.Mode != "none" && network.Mode != "full" && network.Mode != "allow" {
 			writeErr(w, http.StatusBadRequest, "invalid", "network.mode must be none, full, or allow")
+			return
+		}
+		if !core.ValidMaxMode(network.MaxMode) {
+			writeErr(w, http.StatusBadRequest, "invalid", "network.max_mode must be none, allow, or full")
+			return
+		}
+		if network.MaxMode != "" && !core.ModeWithin(network.Mode, network.MaxMode) {
+			writeErr(w, http.StatusBadRequest, "invalid", "network.mode cannot be looser than network.max_mode")
+			return
+		}
+		if network.MaxMode == "allow" && (network.Allow == nil || len(*network.Allow) == 0) {
+			writeErr(w, http.StatusBadRequest, "invalid", "network.max_mode allow requires an allow list")
 			return
 		}
 		if network.EgressKbps < 0 || network.MaxConns < 0 {
@@ -337,6 +351,7 @@ func keyJSON(key store.APIKey, secret string) map[string]any {
 		"created_at": key.CreatedAt,
 		"network": map[string]any{
 			"mode":            key.Network.Mode,
+			"max_mode":        key.Network.MaxMode,
 			"allow":           stringSlice(key.Network.Allow),
 			"deny":            stringSlice(key.Network.Deny),
 			"egress_kbps":     key.Network.EgressKbps,

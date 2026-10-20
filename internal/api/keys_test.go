@@ -64,3 +64,30 @@ func TestKeyRevokeAndExpiry(t *testing.T) {
 		t.Fatalf("expired key still works: %s", resp.Status)
 	}
 }
+
+func TestKeyMaxModeValidation(t *testing.T) {
+	h := newHarness(t)
+	for _, tc := range []struct {
+		network map[string]any
+		want    int
+	}{
+		{map[string]any{"max_mode": "open"}, http.StatusBadRequest},
+		{map[string]any{"mode": "full", "max_mode": "none"}, http.StatusBadRequest},
+		{map[string]any{"max_mode": "allow"}, http.StatusBadRequest},
+		{map[string]any{"max_mode": "allow", "allow": []string{"example.com"}}, http.StatusCreated},
+		{map[string]any{"mode": "none", "max_mode": "full"}, http.StatusCreated},
+	} {
+		resp := h.do(t, http.MethodPost, "/v1/keys", h.key, map[string]any{"name": "n", "network": tc.network})
+		if resp.StatusCode != tc.want {
+			t.Fatalf("%v = %s, want %d", tc.network, resp.Status, tc.want)
+		}
+	}
+	var created struct {
+		Key string `json:"key"`
+	}
+	decode(t, h.do(t, http.MethodPost, "/v1/keys", h.key, map[string]any{"name": "offline", "network": map[string]any{"max_mode": "none"}}), &created)
+	resp := h.do(t, http.MethodPost, "/v1/sandboxes", created.Key, map[string]any{"image": "alpine:3.20", "network": map[string]any{"mode": "full"}})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("max_mode none created a full sandbox: %s", resp.Status)
+	}
+}

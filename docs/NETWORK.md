@@ -1,6 +1,6 @@
 # Sandbox network
 
-sbx sandboxes start with no network. An operator who wants outbound internet, for example an AI coding agent, sets the server default to `full`. Each API key and each sandbox can still narrow that.
+sbx sandboxes start with no network. An operator who wants outbound internet, for example an AI coding agent, sets the server default to `full`. Each API key and each sandbox can still narrow that, and a key with `max_mode` sets a ceiling its sandboxes cannot raise.
 
 ## Modes
 
@@ -13,6 +13,7 @@ sbx sandboxes start with no network. An operator who wants outbound internet, fo
 Inheritance, most specific first:
 
 - Mode: sandbox, else the API key, else `network.default_mode`.
+- Ceiling: a key's `mode` and `allow` are only defaults. To make them binding, create the key with `network.max_mode` (`none`, `allow`, or `full`). A sandbox that asks for a looser mode gets 403, a looser server default is narrowed to `max_mode`, and with `max_mode: allow` every sandbox allow entry must be one of the key's hostnames or fall inside one of its CIDRs. A warm pooled sandbox is only handed to a key whose effective network matches the pool's exactly.
 - Allow list: sandbox if it sent `allow` (an empty array clears it), else the key, else `network.egress_allow`.
 - Deny list: the union of server, key, and sandbox. A sandbox cannot remove a deny.
 - `egress_kbps` and `max_connections`: the tightest positive value. `0` means inherit, and all zeros means unlimited.

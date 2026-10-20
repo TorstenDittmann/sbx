@@ -22,7 +22,11 @@ var ErrNotFound = errors.New("not found")
 // KeyNetwork is the default egress policy for sandboxes created with a key.
 // Nil slices inherit the server policy. An empty non-nil slice clears it.
 type KeyNetwork struct {
-	Mode       string    `json:"mode,omitempty"`
+	Mode string `json:"mode,omitempty"`
+	// MaxMode, when set, is a ceiling: sandboxes created with the key cannot
+	// ask for a looser mode, and under "allow" cannot list destinations
+	// outside Allow. Without it the key network is only a default.
+	MaxMode    string    `json:"max_mode,omitempty"`
 	Allow      *[]string `json:"allow,omitempty"`
 	Deny       *[]string `json:"deny,omitempty"`
 	EgressKbps int       `json:"egress_kbps,omitempty"`
