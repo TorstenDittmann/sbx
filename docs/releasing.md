@@ -25,10 +25,11 @@ Do not add an npm token or a personal access token for GHCR.
 
 ## First release
 
-`cmd/sbx-agent` is already on `main`. The package does not exist on npm until the first publish, and npm cannot register a trusted publisher before that. Publish the first version once from your machine, at the tagged commit:
+`cmd/sbx-agent` is already on `main`. The package does not exist on npm until the first publish, and npm cannot register a trusted publisher before that. Publish the first version once from your machine, from `main` (the checked-in `sdk/typescript` version is what gets published):
 
 ```bash
-git checkout v0.2.0
+git checkout main
+git pull
 cd sdk/typescript
 npm ci
 npm publish --access public --provenance=false
