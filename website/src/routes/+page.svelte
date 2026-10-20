@@ -302,7 +302,7 @@
 	}
 
 	col.needs {
-		width: 34%;
+		width: 32%;
 	}
 
 	th,
@@ -335,23 +335,24 @@
 		font-size: 13px;
 	}
 
-	.compare thead th:first-child,
-	.compare tbody th {
-		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-		padding-left: 16px;
+	td {
+		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
 	}
 
-	.compare thead th:first-child {
+	.compare td:last-child,
+	.compare thead th:last-child {
+		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+		color: var(--fg);
+		font-weight: 500;
+	}
+
+	.compare thead th:last-child {
 		color: var(--accent);
 		border-radius: 8px 8px 0 0;
 	}
 
-	.compare tbody tr:last-child th {
+	.compare tbody tr:last-child td:last-child {
 		border-radius: 0 0 8px 8px;
-	}
-
-	td {
-		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
 	}
 
 	tbody tr:last-child > * {
@@ -483,15 +484,19 @@
 			border-bottom: 1px solid var(--line);
 		}
 
-		.compare thead th:first-child,
-		.compare tbody th,
-		.compare tbody tr:last-child th {
-			border-radius: 0;
-		}
-
 		.compare tbody th {
 			padding-block: 12px;
 			font-size: 16px;
+		}
+
+		.compare td:last-child,
+		.compare thead th:last-child,
+		.compare tbody tr:last-child td:last-child {
+			border-radius: 0;
+		}
+
+		.compare td:last-child::before {
+			color: var(--accent);
 		}
 
 		.compare td::before {
