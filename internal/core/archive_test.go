@@ -66,7 +66,7 @@ func TestNativeArchiveSkipsTar(t *testing.T) {
 	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace/in", gz.Bytes()); err != nil {
 		t.Fatal(err)
 	}
-	if rec.dest != "/workspace/in" || string(rec.body) != string(raw) || rec.max != int64(cfg.Limits.MaxUploadBytes) {
+	if rec.dest != "/workspace/in" || string(rec.body) != string(raw) || rec.max != int64(cfg.Limits.MaxArchiveBytes) {
 		t.Fatalf("extract dest %s max %d body %q", rec.dest, rec.max, rec.body)
 	}
 	packed, err := mgr.ReadArchive(ctx, actor, sb.ID, "/workspace/in")

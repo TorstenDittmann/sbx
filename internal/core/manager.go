@@ -682,8 +682,9 @@ func (m *Manager) RemoveFile(ctx context.Context, actor Actor, sandboxID, p stri
 
 // WriteArchive extracts a tar or gzip-compressed tar into dest.
 func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest string, body []byte) error {
-	if len(body) > m.cfg.Limits.MaxUploadBytes {
-		return invalid("archive exceeds the size limit")
+	limit := m.cfg.Limits.MaxArchiveBytes
+	if len(body) > limit {
+		return tooLarge("archive is larger than the " + FormatBytes(limit) + " limit (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
 	}
 	sb, d, dest, err := m.fileReady(ctx, actor, sandboxID, dest)
 	if err != nil {
@@ -697,16 +698,16 @@ func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest
 			return invalid("invalid gzip archive")
 		}
 		defer r.Close()
-		raw, err = io.ReadAll(io.LimitReader(r, int64(m.cfg.Limits.MaxUploadBytes)+1))
+		raw, err = io.ReadAll(io.LimitReader(r, int64(limit)+1))
 		if err != nil {
 			return invalid("invalid gzip archive")
 		}
-		if len(raw) > m.cfg.Limits.MaxUploadBytes {
-			return invalid("uncompressed archive exceeds the size limit")
+		if len(raw) > limit {
+			return tooLarge("archive is larger than the " + FormatBytes(limit) + " limit after gunzip (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
 		}
 	}
 	if arc, ok := d.(driver.Archiver); ok && arc.NativeArchive() {
-		if err := arc.ExtractArchive(ctx, sb.ContainerID, dest, bytes.NewReader(raw), int64(m.cfg.Limits.MaxUploadBytes)); err != nil {
+		if err := arc.ExtractArchive(ctx, sb.ContainerID, dest, bytes.NewReader(raw), int64(limit)); err != nil {
 			return m.asDriver(err)
 		}
 		m.touch(ctx, sb)

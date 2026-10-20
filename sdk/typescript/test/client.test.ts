@@ -188,6 +188,8 @@ test("client maps create, exec, files, and errors", async () => {
   assert.equal(volume.id, "vol_abc0123456789ab")
   assert.equal(volume.name, "cache")
   assert.deepEqual(JSON.parse(seen.body ?? "{}"), { name: "cache" })
+  await client.ensureVolume("cache")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}"), { name: "cache", if_exists: "reuse" })
   const volumes = await client.listVolumes()
   assert.equal(volumes.length, 1)
   const one = await client.getVolume(volume.id)
