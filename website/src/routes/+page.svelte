@@ -6,28 +6,28 @@
 	const backends = [
 		{
 			name: "docker",
-			isolation: "Namespaces and cgroups. The default, on a machine that already has Docker.",
-			status: "Ships",
+			isolation: "Namespaces and cgroups.",
+			host: "Docker. The default when a sandbox omits backend.",
 		},
 		{
 			name: "gvisor",
-			isolation: "The same Docker driver with the runsc runtime. No KVM. A missing runtime is an error.",
-			status: "Ships, optional",
+			isolation: "The Docker driver with runsc. A user-space kernel, no KVM.",
+			host: "Docker with runsc registered.",
 		},
 		{
 			name: "kata",
-			isolation: "Docker with the Kata runtime class. Same image and network policy. Needs /dev/kvm.",
-			status: "Ships, optional",
+			isolation: "The Docker driver with the Kata runtime class. Same image and network policy.",
+			host: "The Kata runtime and /dev/kvm.",
 		},
 		{
 			name: "firecracker",
-			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock. No snapshot or restore, and no bandwidth limit.",
-			status: "Ships, optional",
+			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock.",
+			host: "/dev/kvm, the Firecracker binary, a kernel, and sbx-agent.",
 		},
 		{
 			name: "kubernetes",
-			isolation: "No driver in this tree.",
-			status: "Not built",
+			isolation: "No driver.",
+			host: "—",
 		},
 	];
 
@@ -42,7 +42,7 @@
 		{ method: "GET", path: "/v1/sandboxes/{id}/files/archive", detail: "download a gzip tar" },
 		{ method: "PUT", path: "/v1/sandboxes/{id}/secrets", detail: "replace secrets; values stay off the response" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/previews", detail: "a port on the sandbox loopback" },
-		{ method: "POST", path: "/v1/volumes", detail: "a Docker volume; not on Firecracker" },
+		{ method: "POST", path: "/v1/volumes", detail: "a Docker volume on Docker, gVisor, or Kata" },
 		{ method: "GET", path: "/v1/backends", detail: "which backends this host can run" },
 		{ method: "GET", path: "/readyz", detail: "503 until startup reconcile finishes" },
 		{ method: "GET", path: "/healthz", detail: "liveness; pings the configured backend" },
@@ -55,7 +55,7 @@
 <section class="container hero">
 	<div class="intro">
 		<h1>Run untrusted code on your own machine.</h1>
-		<p>One Go binary and Docker. Create a sandbox, run a command, and keep the same API when you need a stronger backend.</p>
+		<p>One Go binary. Create a sandbox, run a command, and use the same API on Docker, gVisor, Kata, or Firecracker.</p>
 		<div class="actions">
 			<a class="button" href="#quickstart">Quickstart</a>
 			<a class="quiet" href={data.site.repo}>GitHub</a>
@@ -94,8 +94,8 @@
 </section>
 
 <section class="container compare" id="backends">
-	<h2>Easy now, stronger later</h2>
-	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata is the same driver with the Kata runtime class. Firecracker is a microVM on the same API: ext4 rootfs, <code>sbx-agent</code> as init, vsock. It does not snapshot or restore, and it rejects a bandwidth limit. Kubernetes is not built. <code>GET /v1/backends</code> and <code>sbx doctor</code> report what this host can run. A missing runtime is an error, not a fallback. <code>snapshot</code> is false on every backend.</p>
+	<h2>Choose a backend</h2>
+	<p class="sub">Set it for the server, or pass <code>backend</code> on a template or a sandbox. Docker, gVisor, Kata, and Firecracker share the calls. <code>GET /v1/backends</code> and <code>sbx doctor</code> report which of them this host can run. A missing runtime is an error. There is no Kubernetes driver.</p>
 	<div class="table">
 		<table>
 			<colgroup>
@@ -107,7 +107,7 @@
 				<tr>
 					<th scope="col">Backend</th>
 					<th scope="col">Isolation</th>
-					<th scope="col">Status</th>
+					<th scope="col">Host</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -115,7 +115,7 @@
 					<tr>
 						<th scope="row">{row.name}</th>
 						<td data-label="Isolation">{row.isolation}</td>
-						<td data-label="Status">{row.status}</td>
+						<td data-label="Host">{row.host}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -136,7 +136,7 @@
 	<div class="intro">
 		<h2>Install a release</h2>
 		<p>A version tag publishes the binary, <code>ghcr.io/torstendittmann/sbx</code>, and <code>@sbx.torsten.work/sbx</code>. The npm name <code>sbx</code> is a different project.</p>
-		<p class="note">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs a darwin server and a linux agent, because the agent runs in the container. The image ships both and sets <code>SBX_AGENT_BIN</code>.</p>
+		<p class="note">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs a darwin server and a linux agent, because the agent runs in the container. The image includes both and sets <code>SBX_AGENT_BIN</code>.</p>
 	</div>
 	<div class="code">{@html data.install}</div>
 </section>
@@ -144,7 +144,7 @@
 <section class="container setup" id="sdk">
 	<div class="intro">
 		<h2>The same client</h2>
-		<p><code>SbxClient</code> and <code>Sandbox.create</code> read <code>SBX_URL</code> (default <code>http://127.0.0.1:8080</code>) and <code>SBX_API_KEY</code>. <code>listBackends</code> is the capability check. <code>createVolume</code> takes <code>docker</code>, <code>gvisor</code>, or <code>kata</code>. Firecracker has no volume API.</p>
+		<p><code>SbxClient</code> and <code>Sandbox.create</code> read <code>SBX_URL</code> (default <code>http://127.0.0.1:8080</code>) and <code>SBX_API_KEY</code>. <code>listBackends</code> reports the host. <code>createVolume</code> takes <code>docker</code>, <code>gvisor</code>, or <code>kata</code>.</p>
 		<p class="note"><code>box.secretKeys</code> lists names only. <code>client.setSecrets</code> replaces the map. <code>client.listSandboxes</code> takes <code>template</code>, <code>q</code>, and exact <code>labels</code>. <code>client.uploadArchive</code> accepts a tar or gzip tar, and <code>client.downloadArchive</code> returns a gzip tar. <code>box.files.watch</code> yields <code>create</code>, <code>write</code>, and <code>remove</code>. <code>box.createPreview</code> returns <code>url</code>, <code>publicUrl</code>, and a token shown once. <code>client.createTemplate</code> takes <code>warm</code> and <code>setup</code>. Its <code>network</code> is <code>none</code> or <code>full</code>.</p>
 	</div>
 	<div class="code">{@html data.client}</div>
@@ -173,7 +173,7 @@
 	<ul>
 		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and a connection limit. Docker, gVisor, and Kata also enforce per-sandbox bandwidth. Firecracker does not: a positive <code>egress_kbps</code> is rejected, and the guest NIC is IPv4. Metadata and private ranges stay blocked unless the operator opts out. Previews work with <code>network: none</code>. They can be public or token-protected, on <code>{'/p/{id}/{port}/'}</code> and, with <code>preview_domain</code>, on <code>{'{port}-sbx-{id}.{domain}'}</code>.</li>
 		<li>On Docker, gVisor, and Kata, <code>disk_mb</code> is the writable <code>/workspace</code> tmpfs. A volume at <code>/workspace</code> replaces that tmpfs, and <code>disk_mb</code> does not cap the volume. Firecracker sizes an ext4 rootfs to <code>disk_mb</code> and does not attach volumes. The container root filesystem is read-only, memory has no swap, and a PID limit applies. Firecracker does not set a guest PID rlimit.</li>
-		<li>On startup the server adopts sandboxes that are still running and marks missing ones stopped. <code>/readyz</code> stays 503 until that reconcile finishes. <code>/healthz</code> is liveness and pings the configured backend. <code>max_sandboxes</code> defaults to 100, on top of 20 sandboxes per key. The agent packs and extracts archives, and rejects a path that leaves the destination or passes through a symlink. Pause, resume, templates, quotas, and <code>/metrics</code> are real. Snapshot, restore, and a multi-node scheduler are not.</li>
+		<li>On startup the server adopts sandboxes that are still running and marks missing ones stopped. <code>/readyz</code> stays 503 until that reconcile finishes. <code>/healthz</code> is liveness and pings the configured backend. <code>max_sandboxes</code> defaults to 100, on top of 20 sandboxes per key. The agent packs and extracts archives, and rejects a path that leaves the destination or passes through a symlink. The server pauses and resumes, keeps templates and quotas, and serves <code>/metrics</code>. It does not snapshot, restore, or schedule across nodes.</li>
 	</ul>
 </section>
 

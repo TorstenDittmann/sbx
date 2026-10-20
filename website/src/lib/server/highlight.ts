@@ -3,7 +3,7 @@ import { createCssVariablesTheme, createHighlighter } from "shiki";
 export const site = {
 	title: "sbx",
 	description:
-		"Self-host sandboxes. One Go binary in front of Docker, and the same API when you need a stronger backend.",
+		"Self-host sandboxes. One Go binary, and the same API on Docker, gVisor, Kata, or Firecracker.",
 	url: "https://sbx.torsten.work",
 	repo: "https://github.com/TorstenDittmann/sbx",
 };
