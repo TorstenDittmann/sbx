@@ -33,6 +33,7 @@
 		<a class="logo" href="/">sbx</a>
 		<a href="/#quickstart">Quickstart</a>
 		<a href="/#backends">Backends</a>
+		<a href="/#sdk">SDK</a>
 		<a href="/#api">API</a>
 		<a class="strong" href={data.site.repo}>GitHub</a>
 	</nav>

@@ -37,10 +37,32 @@ docker run --rm -p 8080:8080 \\
 npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx`;
 
+const client = `import { Sandbox, SbxClient } from "@sbx.torsten.work/sbx"
+
+const client = new SbxClient()
+const backends = await client.listBackends()
+
+const volume = await client.createVolume("project", "docker")
+const box = await Sandbox.create({
+  template: "python",
+  ttl: "5m",
+  network: { mode: "allow", allow: ["pypi.org"] },
+  secrets: { TOKEN: "kept-off-the-response" },
+  mounts: [{ volumeId: volume.id, path: "/workspace" }],
+})
+
+console.log(box.secretKeys, backends.map((item) => item.name))
+const found = await client.listSandboxes({ template: "python", q: box.id })
+await box.files.write("/workspace/main.py", "print(2 + 2)\\n")
+const result = await box.exec(["python", "main.py"])
+console.log(result.stdout, found.length)
+await box.kill()`;
+
 export function load() {
 	return {
 		sdk: highlight(sdk, "typescript"),
 		quickstart: highlight(quickstart, "shellscript"),
 		install: highlight(install, "shellscript"),
+		client: highlight(client, "typescript"),
 	};
 }
