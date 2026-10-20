@@ -299,6 +299,24 @@ func TestPTY(t *testing.T) {
 	}
 }
 
+func TestExecWithoutProcessPATH(t *testing.T) {
+	t.Setenv("PATH", "")
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var stdout bytes.Buffer
+	out, err := c.Exec(ctx, ExecSpec{Cmd: []string{"echo", "hi"}}, nil, func(kind uint8, data []byte) error {
+		if kind == MsgStdout {
+			stdout.Write(data)
+		}
+		return nil
+	})
+	if err != nil || out.ExitCode != 0 || stdout.String() != "hi\n" {
+		t.Fatalf("%q %+v %v", stdout.String(), out, err)
+	}
+}
+
 func TestChildEnvStripsAgentToken(t *testing.T) {
 	t.Setenv(EnvToken, "sekret")
 	c, cleanup := startAgent(t, "tok")
