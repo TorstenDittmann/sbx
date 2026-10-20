@@ -265,7 +265,8 @@ paths:
       description: >
         Creates a Docker volume for the caller's backend. The name is unique
         per API key. The volume is not deleted when a sandbox that mounts it
-        is deleted.
+        is deleted. A name the key already uses fails with 409 unless
+        if_exists is reuse, which returns the existing volume with 200.
       requestBody:
         required: true
         content:
@@ -274,6 +275,11 @@ paths:
       responses:
         "201":
           description: Created volume
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Volume"}
+        "200":
+          description: Existing volume, returned when if_exists is reuse
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Volume"}
@@ -537,7 +543,7 @@ paths:
     post:
       operationId: uploadArchive
       summary: Extract a tar or tar.gz into a directory
-      description: Accepts a tar or gzip-compressed tar. When sbx-agent is configured, extraction runs in the agent and does not call tar. Paths that leave the destination are kept inside it.
+      description: Accepts a tar or gzip-compressed tar. When sbx-agent is configured, extraction runs in the agent and does not call tar. Paths that leave the destination are kept inside it. The archive may be up to max_archive_bytes (256 MiB by default) both as sent and after gunzip; a larger one gets 413 payload_too_large.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"
@@ -1187,6 +1193,14 @@ components:
           maxLength: 64
           description: Unique per API key. Starts with a letter or digit.
         backend: {type: string, enum: [docker, gvisor, kata]}
+        if_exists:
+          type: string
+          enum: [error, reuse]
+          default: error
+          description: >
+            What to do when the key already has a volume with this name.
+            error returns 409. reuse returns that volume, or 409 if it is on
+            another backend.
     Volume:
       type: object
       required: [id, name, backend, created_at]

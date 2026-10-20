@@ -118,7 +118,7 @@ For long-running processes, interactive shells, and file watches, see [sbx-agent
 | Upload a tar or tar.gz | `POST /v1/sandboxes/{id}/files/archive?path=…` |
 | Download a tar.gz | `GET /v1/sandboxes/{id}/files/archive?path=…` |
 
-Paths are absolute. Uploads are capped at 32 MiB (`max_upload_bytes`).
+Paths are absolute. File uploads are capped at 32 MiB (`max_upload_bytes`). Archive uploads are capped at 256 MiB, before and after gunzip (`max_archive_bytes`). A body over the cap gets `413 payload_too_large` with the limit and the setting that raises it in the message.
 
 ## Labels and search
 

@@ -41,6 +41,8 @@ Anything the sandbox writes under `/workspace` is there again for the next sandb
 curl -s -X DELETE $SBX_URL/v1/volumes/$VOLUME_ID -H "Authorization: Bearer $SBX_API_KEY"
 ```
 
+Names are unique per API key, so creating a name twice fails with `409 conflict`. Pass `"if_exists": "reuse"` to get the existing volume back instead (`200`, or `201` when it was just created). A job that retries can use that to pick up the volume from its earlier attempt. Reuse fails with `409` if the existing volume is on a different backend.
+
 Deleting a sandbox never deletes its volumes. Deleting a volume fails with `409 conflict` while a creating, running, or paused sandbox mounts it. A stopped sandbox does not hold on to it.
 
 ## In the SDK
@@ -55,4 +57,4 @@ const box = await Sandbox.create({
 })
 ```
 
-`client.listVolumes()`, `client.getVolume(id)`, and `client.deleteVolume(id)` cover the rest.
+`client.ensureVolume(name)` returns the existing volume when the key already has one with that name, and creates it otherwise. `client.listVolumes()`, `client.getVolume(id)`, and `client.deleteVolume(id)` cover the rest.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -121,5 +122,44 @@ func TestVolumeJSONHasNoDockerName(t *testing.T) {
 	}
 	if _, ok := body["docker_name"]; ok {
 		t.Fatal(string(raw))
+	}
+}
+
+func TestVolumeIfExistsReuse(t *testing.T) {
+	h := newHarness(t)
+	resp := h.do(t, http.MethodPost, "/v1/volumes", h.key, map[string]string{"name": "job-1", "if_exists": "reuse"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatal(resp.Status, readBody(t, resp))
+	}
+	var first struct {
+		ID string `json:"id"`
+	}
+	decode(t, resp, &first)
+
+	resp = h.do(t, http.MethodPost, "/v1/volumes", h.key, map[string]string{"name": "job-1"})
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, first.ID) || !strings.Contains(body, "if_exists") {
+		t.Fatal(resp.Status, body)
+	}
+
+	resp = h.do(t, http.MethodPost, "/v1/volumes", h.key, map[string]string{"name": "job-1", "if_exists": "reuse"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatal(resp.Status, readBody(t, resp))
+	}
+	var again struct {
+		ID string `json:"id"`
+	}
+	decode(t, resp, &again)
+	if again.ID != first.ID {
+		t.Fatalf("reuse returned %s, want %s", again.ID, first.ID)
+	}
+
+	resp = h.do(t, http.MethodPost, "/v1/volumes", h.key, map[string]string{"name": "job-1", "if_exists": "reuse", "backend": "gvisor"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatal(resp.Status, readBody(t, resp))
+	}
+	resp = h.do(t, http.MethodPost, "/v1/volumes", h.key, map[string]string{"name": "job-2", "if_exists": "replace"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatal(resp.Status, readBody(t, resp))
 	}
 }

@@ -80,11 +80,15 @@ type Limits struct {
 	// MaxSandboxes is the node-wide cap across every API key. 0 means no cap.
 	MaxSandboxes int
 	// RequestsPerMinute is the per-key request budget. 0 disables the limiter.
-	RequestsPerMinute      int
-	DefaultExecSeconds     int
-	MaxExecSeconds         int
-	MaxOutputBytes         int
-	MaxUploadBytes         int
+	RequestsPerMinute  int
+	DefaultExecSeconds int
+	MaxExecSeconds     int
+	MaxOutputBytes     int
+	MaxUploadBytes     int
+	// MaxArchiveBytes caps an archive upload, both the request body and the
+	// tar after gunzip. Archives carry whole trees, so this sits above
+	// MaxUploadBytes.
+	MaxArchiveBytes        int
 	ReaperIntervalSeconds  int
 	RetainStoppedSeconds   int
 	CreatingTimeoutSeconds int
@@ -166,6 +170,7 @@ func Default() Config {
 			MaxExecSeconds:         3600,
 			MaxOutputBytes:         8 << 20,
 			MaxUploadBytes:         32 << 20,
+			MaxArchiveBytes:        256 << 20,
 			ReaperIntervalSeconds:  5,
 			RetainStoppedSeconds:   86400,
 			CreatingTimeoutSeconds: 900,
@@ -255,6 +260,7 @@ type fileLimits struct {
 	MaxExecSeconds         *int     `yaml:"max_exec_seconds"`
 	MaxOutputBytes         *int     `yaml:"max_output_bytes"`
 	MaxUploadBytes         *int     `yaml:"max_upload_bytes"`
+	MaxArchiveBytes        *int     `yaml:"max_archive_bytes"`
 	ReaperIntervalSeconds  *int     `yaml:"reaper_interval_seconds"`
 	RetainStoppedSeconds   *int     `yaml:"retain_stopped_seconds"`
 	CreatingTimeoutSeconds *int     `yaml:"creating_timeout_seconds"`
@@ -349,6 +355,7 @@ func (f fileConfig) apply(cfg *Config) {
 		setInt(&cfg.Limits.MaxExecSeconds, l.MaxExecSeconds)
 		setInt(&cfg.Limits.MaxOutputBytes, l.MaxOutputBytes)
 		setInt(&cfg.Limits.MaxUploadBytes, l.MaxUploadBytes)
+		setInt(&cfg.Limits.MaxArchiveBytes, l.MaxArchiveBytes)
 		setInt(&cfg.Limits.ReaperIntervalSeconds, l.ReaperIntervalSeconds)
 		setInt(&cfg.Limits.RetainStoppedSeconds, l.RetainStoppedSeconds)
 		setInt(&cfg.Limits.CreatingTimeoutSeconds, l.CreatingTimeoutSeconds)
@@ -405,6 +412,7 @@ var legacyEnv = map[string]string{
 	"SBX_REQUESTS_PER_MINUTE":     "SBX_LIMITS_REQUESTS_PER_MINUTE",
 	"SBX_DEFAULT_MEMORY_MB":       "SBX_LIMITS_DEFAULT_MEMORY_MB",
 	"SBX_MAX_UPLOAD_BYTES":        "SBX_LIMITS_MAX_UPLOAD_BYTES",
+	"SBX_MAX_ARCHIVE_BYTES":       "SBX_LIMITS_MAX_ARCHIVE_BYTES",
 	"SBX_NETWORK_MODE":            "SBX_NETWORK_DEFAULT_MODE",
 	"SBX_BLOCK_PRIVATE":           "SBX_NETWORK_BLOCK_PRIVATE",
 	"SBX_BLOCK_METADATA":          "SBX_NETWORK_BLOCK_METADATA",
@@ -588,8 +596,8 @@ func (c Config) Validate() error {
 	if c.Limits.DefaultExecSeconds < 1 || c.Limits.DefaultExecSeconds > c.Limits.MaxExecSeconds {
 		return fmt.Errorf("default_exec_seconds out of range")
 	}
-	if c.Limits.MaxOutputBytes < 1024 || c.Limits.MaxUploadBytes < 1024 {
-		return fmt.Errorf("output and upload limits must be at least 1024 bytes")
+	if c.Limits.MaxOutputBytes < 1024 || c.Limits.MaxUploadBytes < 1024 || c.Limits.MaxArchiveBytes < 1024 {
+		return fmt.Errorf("output, upload, and archive limits must be at least 1024 bytes")
 	}
 	if c.Limits.ReaperIntervalSeconds < 1 {
 		return fmt.Errorf("reaper_interval_seconds must be >= 1")

@@ -539,19 +539,35 @@ func (s *Server) createBuild(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name    string `json:"name"`
-		Backend string `json:"backend"`
+		Name     string `json:"name"`
+		Backend  string `json:"backend"`
+		IfExists string `json:"if_exists"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
 		return
 	}
-	vol, err := s.mgr.CreateVolume(r.Context(), actor(r), body.Name, body.Backend)
+	var vol store.Volume
+	var err error
+	created := true
+	switch body.IfExists {
+	case "", "error":
+		vol, err = s.mgr.CreateVolume(r.Context(), actor(r), body.Name, body.Backend)
+	case "reuse":
+		vol, created, err = s.mgr.EnsureVolume(r.Context(), actor(r), body.Name, body.Backend)
+	default:
+		writeErr(w, http.StatusBadRequest, "invalid", "if_exists must be error or reuse")
+		return
+	}
 	if err != nil {
 		writeManager(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, volumeJSON(vol))
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, volumeJSON(vol))
 }
 
 func (s *Server) listVolumes(w http.ResponseWriter, r *http.Request) {
@@ -818,9 +834,8 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
 		return
 	}
-	body, err := readBody(w, r, int64(s.mgr.Config().Limits.MaxUploadBytes))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+	body, ok := readRequestBody(w, r, s.uploadLimit())
+	if !ok {
 		return
 	}
 	if err := s.mgr.WriteFile(r.Context(), actor(r), r.PathValue("id"), p, body, mode); err != nil {
@@ -839,9 +854,8 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadArchive(w http.ResponseWriter, r *http.Request) {
-	body, err := readBody(w, r, int64(s.mgr.Config().Limits.MaxUploadBytes))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+	body, ok := readRequestBody(w, r, s.archiveLimit())
+	if !ok {
 		return
 	}
 	if err := s.mgr.WriteArchive(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), body); err != nil {
@@ -1083,15 +1097,20 @@ func decodeJSON(r *http.Request, max int64, dst any) error {
 	return nil
 }
 
-func readBody(w http.ResponseWriter, r *http.Request, max int64) ([]byte, error) {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, max+1))
+// readRequestBody reads the whole body. On failure it writes the error response and
+// returns false: 413 naming the limit when the body is too large.
+func readRequestBody(w http.ResponseWriter, r *http.Request, l bodyLimit) ([]byte, bool) {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, l.max))
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		writeErr(w, http.StatusRequestEntityTooLarge, "payload_too_large", l.message())
+		return nil, false
+	}
 	if err != nil {
-		return nil, errors.New("body exceeds the size limit")
+		writeErr(w, http.StatusBadRequest, "invalid", "could not read request body")
+		return nil, false
 	}
-	if int64(len(b)) > max {
-		return nil, errors.New("body exceeds the size limit")
-	}
-	return b, nil
+	return b, true
 }
 
 func parseMode(s string) (uint32, error) {

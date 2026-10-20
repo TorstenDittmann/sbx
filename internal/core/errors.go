@@ -1,6 +1,9 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // OpError is a client-visible failure with an HTTP status and stable code.
 type OpError struct {
@@ -21,6 +24,23 @@ func notFound(msg string) error {
 
 func conflict(msg string) error {
 	return &OpError{Status: 409, Code: "conflict", Msg: msg}
+}
+
+func tooLarge(msg string) error {
+	return &OpError{Status: 413, Code: "payload_too_large", Msg: msg}
+}
+
+// FormatBytes renders a byte limit for error messages, e.g. "32 MiB".
+func FormatBytes(n int) string {
+	switch {
+	case n >= 1<<30 && n%(1<<30) == 0:
+		return strconv.Itoa(n>>30) + " GiB"
+	case n >= 1<<20 && n%(1<<20) == 0:
+		return strconv.Itoa(n>>20) + " MiB"
+	case n >= 1<<10 && n%(1<<10) == 0:
+		return strconv.Itoa(n>>10) + " KiB"
+	}
+	return strconv.Itoa(n) + " bytes"
 }
 
 func unsupported(msg string) error {

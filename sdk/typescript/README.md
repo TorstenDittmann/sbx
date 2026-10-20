@@ -27,7 +27,7 @@ await box.kill()
 
 `uploadArchive` accepts a tar or gzip tar, and `downloadArchive` returns a gzip tar. When the server is running `sbx-agent`, those calls do not need a `tar` binary in the sandbox image.
 
-`client.createVolume(name)` creates a volume that outlives sandboxes. Pass `mounts: [{ volumeId, path }]` to `Sandbox.create`. Mounting `/workspace` keeps that directory; `diskMb` does not cap it. `deleteVolume` fails while a live sandbox still mounts the volume.
+`client.createVolume(name)` creates a volume that outlives sandboxes. A name the key already uses fails with 409; `client.ensureVolume(name)` returns the existing volume instead, so a retried job gets the same one back. Pass `mounts: [{ volumeId, path }]` to `Sandbox.create`. Mounting `/workspace` keeps that directory; `diskMb` does not cap it. `deleteVolume` fails while a live sandbox still mounts the volume.
 
 `client.createTemplate({ name, image, warm, setup, network })` keeps ready sandboxes for that template. `Sandbox.create({ template })` claims one when the request does not override the template.
 
