@@ -39,6 +39,19 @@ type APIKey struct {
 	Network    KeyNetwork
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
+	// ExpiresAt, when set, is when the key stops authenticating.
+	ExpiresAt *time.Time
+	// RevokedAt is set once the key has been revoked. A revoked key never
+	// authenticates again.
+	RevokedAt *time.Time
+}
+
+// Usable reports whether the key may still authenticate at now.
+func (k APIKey) Usable(now time.Time) bool {
+	if k.RevokedAt != nil {
+		return false
+	}
+	return k.ExpiresAt == nil || now.Before(*k.ExpiresAt)
 }
 
 // HasScope reports whether the key may perform an action. admin implies every scope.
@@ -179,6 +192,8 @@ func migrate(db *sql.DB) error {
 		{"sandboxes", "mounts_json", `ALTER TABLE sandboxes ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'`},
 		{"sandboxes", "secrets_json", `ALTER TABLE sandboxes ADD COLUMN secrets_json TEXT NOT NULL DEFAULT '{}'`},
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
+		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at INTEGER`},
+		{"api_keys", "revoked_at", `ALTER TABLE api_keys ADD COLUMN revoked_at INTEGER`},
 		{"templates", "setup_json", `ALTER TABLE templates ADD COLUMN setup_json TEXT NOT NULL DEFAULT '[]'`},
 		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
@@ -300,9 +315,9 @@ func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), millis(k.CreatedAt))
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), millis(k.CreatedAt), nullMillis(k.ExpiresAt))
 	return err
 }
 
@@ -316,7 +331,7 @@ func (s *Store) CountKeys(ctx context.Context) (int, error) {
 // KeyByHash looks up a key by the digest of its secret.
 func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys WHERE key_hash = ?`, hash)
 	return scanKey(row)
 }
@@ -324,7 +339,7 @@ func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 // KeyByID loads one key. The secret is not included.
 func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys WHERE id = ?`, id)
 	return scanKey(row)
 }
@@ -332,7 +347,7 @@ func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 // ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
 func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -347,6 +362,22 @@ func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 		out = append(out, k)
 	}
 	return out, rows.Err()
+}
+
+// RevokeKey marks a key revoked. Revoking a revoked key keeps the first time.
+func (s *Store) RevokeKey(ctx context.Context, id string, at time.Time) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?`, millis(at), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // TouchKey records that a key was just used.
@@ -654,8 +685,8 @@ func scanKey(row scanner) (APIKey, error) {
 	var k APIKey
 	var scopes, network string
 	var created int64
-	var last sql.NullInt64
-	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &created, &last)
+	var last, expires, revoked sql.NullInt64
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &created, &last, &expires, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
 	}
@@ -674,6 +705,14 @@ func scanKey(row scanner) (APIKey, error) {
 	if last.Valid {
 		t := fromMillis(last.Int64)
 		k.LastUsedAt = &t
+	}
+	if expires.Valid {
+		t := fromMillis(expires.Int64)
+		k.ExpiresAt = &t
+	}
+	if revoked.Valid {
+		t := fromMillis(revoked.Int64)
+		k.RevokedAt = &t
 	}
 	return k, nil
 }

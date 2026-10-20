@@ -59,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("POST /v1/keys", s.auth("admin", s.createKey))
 	mux.HandleFunc("GET /v1/keys", s.auth("admin", s.listKeys))
+	mux.HandleFunc("GET /v1/keys/{id}", s.auth("admin", s.getKey))
+	mux.HandleFunc("DELETE /v1/keys/{id}", s.auth("admin", s.revokeKey))
 
 	mux.HandleFunc("GET /v1/backends", s.auth("sandbox", s.listBackends))
 	mux.HandleFunc("GET /v1/templates", s.auth("sandbox", s.listTemplates))
@@ -214,7 +216,11 @@ func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
 			writeErr(w, http.StatusTooManyRequests, "rate_limited", "too many requests")
 			return
 		}
-		_ = s.mgr.Store().TouchKey(r.Context(), key.ID, time.Now().UTC())
+		// last_used_at is coarse on purpose: a write per request would
+		// serialize every call on the single SQLite connection.
+		if now := time.Now().UTC(); key.LastUsedAt == nil || now.Sub(*key.LastUsedAt) >= time.Minute {
+			_ = s.mgr.Store().TouchKey(r.Context(), key.ID, now)
+		}
 		p := principal{actor: core.Actor{KeyID: key.ID, Admin: key.Admin()}, key: key}
 		next(w, r.WithContext(context.WithValue(r.Context(), actorKey, p)))
 	}
@@ -242,6 +248,9 @@ func (s *Server) authenticate(r *http.Request) (store.APIKey, error) {
 	if err != nil {
 		return store.APIKey{}, errors.New("invalid API key")
 	}
+	if !key.Usable(time.Now()) {
+		return store.APIKey{}, errors.New("API key is revoked or expired")
+	}
 	return key, nil
 }
 
@@ -252,9 +261,10 @@ func actor(r *http.Request) core.Actor {
 
 func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name    string   `json:"name"`
-		Scopes  []string `json:"scopes"`
-		Network *struct {
+		Name      string     `json:"name"`
+		Scopes    []string   `json:"scopes"`
+		ExpiresAt *time.Time `json:"expires_at"`
+		Network   *struct {
 			Mode       string    `json:"mode"`
 			Allow      *[]string `json:"allow"`
 			Deny       *[]string `json:"deny"`
@@ -295,10 +305,20 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	now := time.Now().UTC()
+	var expires *time.Time
+	if body.ExpiresAt != nil {
+		if !body.ExpiresAt.After(now) {
+			writeErr(w, http.StatusBadRequest, "invalid", "expires_at must be in the future")
+			return
+		}
+		t := body.ExpiresAt.UTC()
+		expires = &t
+	}
 	plain, hash, prefix := id.Key()
 	key := store.APIKey{
 		ID: id.RecordID(), Name: body.Name, Hash: hash, Prefix: prefix,
-		Scopes: body.Scopes, Network: network, CreatedAt: time.Now().UTC(),
+		Scopes: body.Scopes, Network: network, CreatedAt: now, ExpiresAt: expires,
 	}
 	if err := s.mgr.Store().CreateKey(r.Context(), key); err != nil {
 		s.log.Error("create key", "err", err)
@@ -329,7 +349,66 @@ func keyJSON(key store.APIKey, secret string) map[string]any {
 	if key.LastUsedAt != nil {
 		body["last_used_at"] = key.LastUsedAt
 	}
+	if key.ExpiresAt != nil {
+		body["expires_at"] = key.ExpiresAt
+	}
+	if key.RevokedAt != nil {
+		body["revoked_at"] = key.RevokedAt
+	}
 	return body
+}
+
+func (s *Server) getKey(w http.ResponseWriter, r *http.Request) {
+	key, err := s.mgr.Store().KeyByID(r.Context(), r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not load key")
+		return
+	}
+	writeJSON(w, http.StatusOK, keyJSON(key, ""))
+}
+
+// revokeKey revokes a key. Sandboxes and volumes it owns are left in place
+// for an admin to inspect or delete. The last usable admin key cannot be
+// revoked, so the server never locks its operator out.
+func (s *Server) revokeKey(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	st := s.mgr.Store()
+	key, err := st.KeyByID(ctx, r.PathValue("id"))
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not load key")
+		return
+	}
+	now := time.Now().UTC()
+	if key.Admin() && key.Usable(now) {
+		keys, err := st.ListKeys(ctx)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "could not list keys")
+			return
+		}
+		admins := 0
+		for _, k := range keys {
+			if k.Admin() && k.Usable(now) {
+				admins++
+			}
+		}
+		if admins <= 1 {
+			writeErr(w, http.StatusConflict, "conflict", "cannot revoke the last admin key")
+			return
+		}
+	}
+	if err := st.RevokeKey(ctx, key.ID, now); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not revoke key")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func stringSlice(v *[]string) []string {

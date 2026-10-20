@@ -277,3 +277,42 @@ function sandboxJSON() {
     node: "local",
   }
 }
+
+test("client lists, gets, and revokes keys", async () => {
+  const calls: string[] = []
+  const key = { id: "key_1", name: "ci", prefix: "sbx_ab", scopes: ["sandbox"], created_at: "2026-10-20T00:00:00Z", expires_at: "2027-01-01T00:00:00Z" }
+  const server = createServer((req, res) => {
+    calls.push(`${req.method} ${req.url}`)
+    if (req.method === "GET" && req.url === "/v1/keys") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ keys: [key] }))
+      return
+    }
+    if (req.method === "GET" && req.url === "/v1/keys/key_1") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ ...key, revoked_at: "2026-10-21T00:00:00Z" }))
+      return
+    }
+    if (req.method === "DELETE" && req.url === "/v1/keys/key_1") {
+      res.writeHead(204)
+      res.end()
+      return
+    }
+    res.writeHead(404, { "content-type": "application/json" })
+    res.end(JSON.stringify({ error: { code: "not_found", message: "nope" } }))
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as { port: number }
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "sbx_test" })
+    const keys = await client.listKeys()
+    assert.equal(keys[0].expiresAt, "2027-01-01T00:00:00Z")
+    await client.revokeKey("key_1")
+    const got = await client.getKey("key_1")
+    assert.equal(got.revokedAt, "2026-10-21T00:00:00Z")
+    assert.deepEqual(calls, ["GET /v1/keys", "DELETE /v1/keys/key_1", "GET /v1/keys/key_1"])
+  } finally {
+    server.close()
+  }
+})

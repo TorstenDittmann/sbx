@@ -38,7 +38,9 @@ Usage:
   sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor|kata]
   sbx doctor [--config sbx.yaml]
   sbx setup gvisor|kata|firecracker [--apply] [--data-dir ./data]
-  sbx keys create --name NAME [--admin] [--data-dir ./data]
+  sbx keys create --name NAME [--admin] [--expires 720h] [--data-dir ./data]
+  sbx keys list [--data-dir ./data]
+  sbx keys revoke --id ID [--data-dir ./data]
   sbx healthcheck
   sbx version
 
@@ -339,21 +341,35 @@ func healthURL(addr string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/healthz"
 }
 
+const keysUsage = "usage: sbx keys create --name NAME [--admin] [--expires 720h] | sbx keys list | sbx keys revoke --id ID"
+
 func keys(args []string) error {
-	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: sbx keys create --name NAME [--admin]")
+	if len(args) == 0 {
+		return errors.New(keysUsage)
 	}
-	fs := flag.NewFlagSet("keys create", flag.ContinueOnError)
+	switch args[0] {
+	case "create", "list", "revoke":
+	default:
+		return errors.New(keysUsage)
+	}
+	fs := flag.NewFlagSet("keys "+args[0], flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	name := fs.String("name", "", "key name")
 	admin := fs.Bool("admin", false, "grant the admin scope")
+	expires := fs.Duration("expires", 0, "lifetime of the key, for example 720h (0 means no expiry)")
+	keyID := fs.String("id", "", "key id")
 	dataDir := fs.String("data-dir", "", "data directory")
 	configPath := fs.String("config", os.Getenv("SBX_CONFIG"), "config file")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if *name == "" {
+	switch {
+	case args[0] == "create" && *name == "":
 		return errors.New("--name is required")
+	case args[0] == "revoke" && *keyID == "":
+		return errors.New("--id is required")
+	case *expires < 0:
+		return errors.New("--expires must be positive")
 	}
 	cfg, err := load(*configPath)
 	if err != nil {
@@ -370,15 +386,49 @@ func keys(args []string) error {
 		return err
 	}
 	defer st.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	switch args[0] {
+	case "list":
+		list, err := st.ListKeys(ctx)
+		if err != nil {
+			return err
+		}
+		for _, k := range list {
+			state := "active"
+			switch {
+			case k.RevokedAt != nil:
+				state = "revoked"
+			case !k.Usable(now):
+				state = "expired"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", k.ID, k.Prefix, k.Name, strings.Join(k.Scopes, ","), state)
+		}
+		return nil
+	case "revoke":
+		// The CLI is the operator's recovery path, so unlike the API it
+		// may revoke the last admin key; "keys create --admin" makes another.
+		if err := st.RevokeKey(ctx, *keyID, now); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return fmt.Errorf("key %s not found", *keyID)
+			}
+			return err
+		}
+		return nil
+	}
 	scopes := []string{"sandbox"}
 	if *admin {
 		scopes = []string{"admin"}
 	}
 	plain, hash, prefix := id.Key()
 	key := store.APIKey{
-		ID: id.RecordID(), Name: *name, Hash: hash, Prefix: prefix, Scopes: scopes, CreatedAt: time.Now().UTC(),
+		ID: id.RecordID(), Name: *name, Hash: hash, Prefix: prefix, Scopes: scopes, CreatedAt: now,
 	}
-	if err := st.CreateKey(context.Background(), key); err != nil {
+	if *expires > 0 {
+		t := now.Add(*expires)
+		key.ExpiresAt = &t
+	}
+	if err := st.CreateKey(ctx, key); err != nil {
 		return err
 	}
 	fmt.Println(plain)

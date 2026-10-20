@@ -96,7 +96,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - Exec that waits, and exec as server-sent events with `?stream=1`. Optional `stdin` or `stdin_base64`.
 - Background processes, interactive terminals over WebSocket, inotify file watches, and preview URLs for a service on the sandbox loopback. These need `sbx-agent` (see [docs/AGENT.md](docs/AGENT.md)).
 - File list, upload, download, delete, and tar archives.
-- API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes.
+- API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes. A key can carry `expires_at`, and `DELETE /v1/keys/{id}` (or `sbx keys revoke --id`) revokes it at once. The API refuses to revoke the last admin key.
 - `secrets` on create, and `PUT /v1/sandboxes/{id}/secrets`. Names come back as `secret_keys`. Values are not returned by get or list. They are injected into the sandbox and into later commands. A secret name cannot also be set in `env`.
 - A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
