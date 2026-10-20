@@ -335,6 +335,21 @@
 		font-size: 13px;
 	}
 
+	.compare thead th:first-child,
+	.compare tbody th {
+		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+		padding-left: 16px;
+	}
+
+	.compare thead th:first-child {
+		color: var(--accent);
+		border-radius: 8px 8px 0 0;
+	}
+
+	.compare tbody tr:last-child th {
+		border-radius: 0 0 8px 8px;
+	}
+
 	td {
 		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
 	}
@@ -466,6 +481,12 @@
 		.compare th:first-child {
 			padding: 10px 16px;
 			border-bottom: 1px solid var(--line);
+		}
+
+		.compare thead th:first-child,
+		.compare tbody th,
+		.compare tbody tr:last-child th {
+			border-radius: 0;
 		}
 
 		.compare tbody th {
