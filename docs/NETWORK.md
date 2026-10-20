@@ -63,6 +63,8 @@ Creating a preview returns:
 - `token`, shown once (`pvt_` plus 24 random bytes)
 - `host`, when `preview_domain` is set
 
+Previews are stored in SQLite (the token only as a hash), so URLs and tokens keep working across a server restart for sandboxes that were adopted. A preview is removed with its sandbox.
+
 A preview is reachable when it is `public` (and `allow_public_previews` is still true), or the caller sends the token (`?token=` or `X-Sbx-Preview-Token`), or the caller sends an API key that owns the sandbox. The token and `access_token` query parameters are stripped before the request is forwarded. Hop headers are stripped except on a WebSocket upgrade, which is spliced.
 
 The server does not speak HTTP/2 to the sandbox. Terminate TLS and HTTP/2 at the proxy and use HTTP/1.1 upstream so `Upgrade: websocket` still works. The proxy must pass `Host` and `Upgrade`.

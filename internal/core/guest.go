@@ -284,6 +284,12 @@ func (m *Manager) CreatePreview(ctx context.Context, actor Actor, sandboxID stri
 		Token: token, TokenHash: hash, BytesPerSec: bytesPerSec, MaxStreams: maxStreams,
 		CreatedAt: m.now(),
 	}
+	if err := m.store.InsertPreview(ctx, store.Preview{
+		ID: pv.ID, SandboxID: pv.SandboxID, Port: pv.Port, Public: pv.Public, TokenHash: pv.TokenHash,
+		BytesPerSec: pv.BytesPerSec, MaxStreams: pv.MaxStreams, CreatedAt: pv.CreatedAt,
+	}); err != nil {
+		return Preview{}, err
+	}
 	m.previews[pv.ID] = pv
 	m.touch(ctx, sb)
 	return pv, nil
@@ -452,6 +458,9 @@ func (m *Manager) DeletePreview(ctx context.Context, actor Actor, sandboxID, pre
 	if !ok || pv.SandboxID != sb.ID {
 		return notFound("preview not found")
 	}
+	if err := m.store.DeletePreview(ctx, previewID); err != nil {
+		return err
+	}
 	delete(m.previews, previewID)
 	return nil
 }
@@ -509,10 +518,32 @@ func (m *Manager) dialPreview(ctx context.Context, sb store.Sandbox, g driver.Gu
 }
 
 // dropPreviews removes previews for a sandbox. The caller holds m.mu.
-func (m *Manager) dropPreviews(sandboxID string) {
+func (m *Manager) dropPreviews(ctx context.Context, sandboxID string) {
 	for id, pv := range m.previews {
 		if pv.SandboxID == sandboxID {
 			delete(m.previews, id)
 		}
 	}
+	if err := m.store.DeleteSandboxPreviews(ctx, sandboxID); err != nil {
+		m.log.Warn("preview cleanup failed", "id", sandboxID, "err", err)
+	}
+}
+
+// LoadPreviews restores previews of sandboxes that survived a restart and
+// drops the rows of sandboxes that did not. Tokens keep working because only
+// their hash was ever stored.
+func (m *Manager) LoadPreviews(ctx context.Context) error {
+	rows, err := m.store.LivePreviews(ctx)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range rows {
+		m.previews[p.ID] = Preview{
+			ID: p.ID, SandboxID: p.SandboxID, Port: p.Port, Public: p.Public, TokenHash: p.TokenHash,
+			BytesPerSec: p.BytesPerSec, MaxStreams: p.MaxStreams, CreatedAt: p.CreatedAt,
+		}
+	}
+	return nil
 }

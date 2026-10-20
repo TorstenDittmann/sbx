@@ -303,6 +303,18 @@ CREATE TABLE IF NOT EXISTS volumes (
     UNIQUE(owner_key_id, name)
 );
 
+CREATE TABLE IF NOT EXISTS previews (
+    id TEXT PRIMARY KEY,
+    sandbox_id TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    public INTEGER NOT NULL DEFAULT 0,
+    token_hash TEXT NOT NULL,
+    bytes_per_sec INTEGER NOT NULL DEFAULT 0,
+    max_streams INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(sandbox_id, port)
+);
+
 CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_status ON sandboxes(status);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_expires ON sandboxes(expires_at);

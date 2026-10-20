@@ -978,7 +978,7 @@ func (m *Manager) destroy(ctx context.Context, sb store.Sandbox, reason string) 
 	}
 	containerID := cur.ContainerID
 	backend := cur.Backend
-	m.dropPreviews(cur.ID)
+	m.dropPreviews(ctx, cur.ID)
 	m.mu.Unlock()
 
 	if containerID != "" {
