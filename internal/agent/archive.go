@@ -15,6 +15,11 @@ import (
 
 const maxArchiveEntries = 100000
 
+// maxArchiveTrailer bounds how much data after the end-of-archive marker is
+// read and discarded. Writers pad to a record (10240 bytes by default, more
+// with a larger blocking factor), so this leaves plenty of room.
+const maxArchiveTrailer = 1 << 20
+
 // extractTar unpacks a tar stream into dest. Paths that leave dest, or that
 // pass through a symlink, are rejected.
 func extractTar(dest string, r io.Reader, max int64) error {
@@ -37,10 +42,16 @@ func extractTar(dest string, r io.Reader, max int64) error {
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			return drainTrailer(r)
 		}
 		if err != nil {
 			return err
+		}
+		// git archive stores the commit id in a global header; there is
+		// nothing to extract and archive/tar already applies per-file pax
+		// records.
+		if hdr.Typeflag == tar.TypeXGlobalHeader {
+			continue
 		}
 		entries++
 		if entries > maxArchiveEntries {
@@ -104,6 +115,20 @@ func extractTar(dest string, r io.Reader, max int64) error {
 			return fmt.Errorf("unsupported tar entry %q", hdr.Name)
 		}
 	}
+}
+
+// drainTrailer consumes the record padding after the end-of-archive marker so
+// the sender can finish writing. More than maxArchiveTrailer bytes is
+// treated as an error rather than read forever.
+func drainTrailer(r io.Reader) error {
+	n, err := io.Copy(io.Discard, io.LimitReader(r, maxArchiveTrailer+1))
+	if err != nil {
+		return err
+	}
+	if n > maxArchiveTrailer {
+		return errors.New("archive has too much trailing data")
+	}
+	return nil
 }
 
 func archivePath(dest, name string) (string, error) {
