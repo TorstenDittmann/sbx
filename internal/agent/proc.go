@@ -90,6 +90,9 @@ func (a *Agent) spawn(spec ExecSpec) (*proc, error) {
 	command := exec.Command(spec.Cmd[0], spec.Cmd[1:]...)
 	command.Dir = cwd
 	command.Env = childEnv(spec.Env, spec.TTY)
+	// exec.Command looks up a bare name with this process's PATH. The guest
+	// init process has none, so search the PATH the child will actually get.
+	useChildPath(command, spec.Cmd[0])
 	prepareCmd(command)
 
 	var stdout, stderr io.ReadCloser
@@ -381,6 +384,43 @@ func (a *Agent) list() []ProcessInfo {
 	return out
 }
 
+func useChildPath(command *exec.Cmd, name string) {
+	if command.Err == nil || strings.Contains(name, "/") {
+		return
+	}
+	lp, err := findInPath(name, command.Env)
+	if err != nil {
+		return
+	}
+	command.Path = lp
+	command.Err = nil
+}
+
+func findInPath(name string, env []string) (string, error) {
+	path := ""
+	for _, item := range env {
+		key, val, ok := strings.Cut(item, "=")
+		if ok && key == "PATH" {
+			path = val
+		}
+	}
+	if path == "" {
+		return "", exec.ErrNotFound
+	}
+	for _, dir := range strings.Split(path, ":") {
+		if dir == "" {
+			continue
+		}
+		candidate := dir + "/" + name
+		info, err := os.Stat(candidate)
+		if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+			continue
+		}
+		return candidate, nil
+	}
+	return "", exec.ErrNotFound
+}
+
 func childEnv(extra map[string]string, tty bool) []string {
 	var out []string
 	for _, item := range os.Environ() {
@@ -390,7 +430,15 @@ func childEnv(extra map[string]string, tty bool) []string {
 		}
 		out = append(out, item)
 	}
-	if !envHas(out, "PATH") {
+	pathVal, hasPath := "", false
+	for _, item := range out {
+		key, val, ok := strings.Cut(item, "=")
+		if ok && key == "PATH" {
+			hasPath = true
+			pathVal = val
+		}
+	}
+	if !hasPath || pathVal == "" {
 		out = append(out, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	}
 	if !envHas(out, "HOME") {

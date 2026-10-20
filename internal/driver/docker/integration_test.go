@@ -519,7 +519,7 @@ func TestIntegrationVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	write := driver.ExecRequest{
-		Cmd:            []string{"sh", "-c", "echo persist > /workspace/keep && echo cached > /cache/keep && echo temp > /tmp/gone && id"},
+		Cmd:            []string{"sh", "-c", "ls -ld /workspace /cache >&2; echo persist > /workspace/keep && echo cached > /cache/keep && echo temp > /tmp/gone && id"},
 		TimeoutSeconds: 30,
 	}
 	res, err := d.Exec(ctx, first.ID, write)

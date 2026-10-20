@@ -47,6 +47,13 @@ func (d *Driver) prepareMounts(ctx context.Context, mounts []driver.Mount) error
 
 // chownMount makes the volume root writable by the sandbox uid. It does not
 // walk the tree, so files already in the volume keep their owners.
+//
+// The prep container bind-mounts the volume's host mountpoint. A named-volume
+// bind is the fallback. Dropped capabilities made chown a no-op on some
+// daemons while the container still exited 0, so this process keeps root's
+// default capability set. An empty volume also receives .sbx-owned; without a
+// child entry the daemon treats the volume as empty and can reset the root
+// owner when the sandbox mounts it.
 func (d *Driver) chownMount(ctx context.Context, source string) error {
 	uid, gid := d.opt.UID, d.opt.GID
 	if uid == 0 {
@@ -55,24 +62,44 @@ func (d *Driver) chownMount(ctx context.Context, source string) error {
 	if gid == 0 {
 		gid = uid
 	}
-	cmd := []string{fmt.Sprintf("%d:%d", uid, gid), "/mnt"}
+	targets := []string{source}
+	if mp, err := d.client.VolumeMountpoint(ctx, source); err == nil && mp != "" {
+		targets = []string{mp, source}
+	}
+	var last error
+	for _, target := range targets {
+		last = d.chownPath(ctx, target, uid, gid)
+		if last == nil {
+			return nil
+		}
+	}
+	return last
+}
+
+func (d *Driver) chownPath(ctx context.Context, source string, uid, gid int) error {
+	script := fmt.Sprintf(`set -eu
+chown %d:%d /mnt
+if [ -z "$(ls -A /mnt)" ]; then
+  chmod 755 /mnt
+  touch /mnt/.sbx-owned
+  chown %d:%d /mnt/.sbx-owned
+fi
+`, uid, gid, uid, gid)
+	cmd := []string{script}
 	var nonce [4]byte
 	_, _ = rand.Read(nonce[:])
 	body := createRequest{
 		Image:      "alpine:3.20",
 		User:       "0:0",
-		Entrypoint: []string{"/bin/chown"},
+		Entrypoint: []string{"/bin/sh", "-c"},
 		Cmd:        &cmd,
 		HostConfig: hostConfig{
 			NetworkMode:    "none",
-			CapDrop:        []string{"ALL"},
-			CapAdd:         []string{"CHOWN", "DAC_OVERRIDE", "FOWNER"},
-			SecurityOpt:    []string{"no-new-privileges:true"},
 			ReadonlyRootfs: false,
-			Memory:         32 * 1024 * 1024,
-			MemorySwap:     32 * 1024 * 1024,
+			Memory:         64 * 1024 * 1024,
+			MemorySwap:     64 * 1024 * 1024,
 			NanoCpus:       500_000_000,
-			PidsLimit:      32,
+			PidsLimit:      64,
 			Binds:          []string{source + ":/mnt"},
 		},
 	}

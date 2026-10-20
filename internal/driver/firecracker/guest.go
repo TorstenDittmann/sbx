@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,17 +19,48 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 	if dl, ok := ctx.Deadline(); ok && dl.Before(deadline) {
 		deadline = dl
 	}
+	// Guest-initiated connections land on <uds>_<port>. The guest dials CID 2
+	// because a host CONNECT is reset on some guest kernels after listen.
+	guestPath := vm.rec.Vsock + "_" + strconv.Itoa(agent.DefaultVsockPort)
+	_ = os.Remove(guestPath)
+	var guestLn net.Listener
+	if ln, err := net.Listen("unix", guestPath); err == nil {
+		// The jailer runs Firecracker as an unprivileged uid. It connect(2)s
+		// to this socket from inside the chroot, which requires write permission.
+		if err := prepareGuestSocket(guestPath, d.opt.UID, d.opt.GID, d.opt.Jailer != ""); err != nil {
+			_ = ln.Close()
+			_ = os.Remove(guestPath)
+			return nil, err
+		}
+		guestLn = ln
+		defer func() {
+			_ = ln.Close()
+			_ = os.Remove(guestPath)
+		}()
+	}
 	var last error
 	for {
+		if guestLn != nil {
+			if ul, ok := guestLn.(*net.UnixListener); ok {
+				_ = ul.SetDeadline(time.Now().Add(40 * time.Millisecond))
+			}
+			conn, err := guestLn.Accept()
+			if err == nil {
+				client, herr := handshakeAgent(ctx, conn, vm.rec.Token)
+				if herr == nil {
+					return client, nil
+				}
+				last = herr
+			} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+				last = err
+			}
+		}
 		conn, err := DialVsock(vm.rec.Vsock, uint32(agent.DefaultVsockPort))
 		if err == nil {
-			hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			client, herr := agent.Handshake(hctx, conn, vm.rec.Token)
-			cancel()
+			client, herr := handshakeAgent(ctx, conn, vm.rec.Token)
 			if herr == nil {
 				return client, nil
 			}
-			_ = conn.Close()
 			last = herr
 		} else {
 			last = err
@@ -40,6 +74,9 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 			}
 			return nil, fmt.Errorf("sbx-agent: %w", last)
 		}
+		if guestLn != nil {
+			continue
+		}
 		timer := time.NewTimer(30 * time.Millisecond)
 		select {
 		case <-ctx.Done():
@@ -48,6 +85,29 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 		case <-timer.C:
 		}
 	}
+}
+
+// prepareGuestSocket lets the jailer uid connect to the guest-initiated socket.
+// Without a jailer, Firecracker is this process, so a failed chown is harmless.
+func prepareGuestSocket(path string, uid, gid int, jail bool) error {
+	if err := os.Chmod(path, 0o660); err != nil {
+		return fmt.Errorf("guest vsock socket mode: %w", err)
+	}
+	if err := os.Chown(path, uid, gid); err != nil && jail {
+		return fmt.Errorf("guest vsock socket owner: %w", err)
+	}
+	return nil
+}
+
+func handshakeAgent(ctx context.Context, conn net.Conn, token string) (*agent.Client, error) {
+	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	client, err := agent.Handshake(hctx, conn, token)
+	cancel()
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return client, nil
 }
 
 func (d *Driver) lock(id string) *sync.Mutex {

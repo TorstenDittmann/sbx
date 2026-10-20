@@ -672,6 +672,17 @@ func (c *Client) networkInspect(ctx context.Context, name string) (networkInfo, 
 	return info, nil
 }
 
+// VolumeMountpoint is the host path of a named volume's data directory.
+func (c *Client) VolumeMountpoint(ctx context.Context, name string) (string, error) {
+	var raw struct {
+		Mountpoint string `json:"Mountpoint"`
+	}
+	if err := c.DoJSON(ctx, http.MethodGet, "/volumes/"+url.PathEscape(name), nil, &raw); err != nil {
+		return "", err
+	}
+	return raw.Mountpoint, nil
+}
+
 // VolumeInspect reads a named volume.
 func (c *Client) VolumeInspect(ctx context.Context, name string) (map[string]string, error) {
 	var raw struct {

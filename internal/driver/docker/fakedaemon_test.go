@@ -22,6 +22,7 @@ type fakeDaemon struct {
 	execs      map[string]string
 	runtimes   map[string]bool
 	created    createRequest
+	creates    []createRequest
 	pulls      []string
 	network    bool
 	netStatus  int
@@ -166,6 +167,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id := "cid-" + r.URL.Query().Get("name")
 		f.mu.Lock()
 		f.created = body
+		f.creates = append(f.creates, body)
 		f.containers[id] = &fakeContainer{id: id, status: "created", body: body}
 		f.mu.Unlock()
 		writeJSON(w, http.StatusCreated, map[string]string{"Id": id})
@@ -288,7 +290,10 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "no such volume"})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"Name": name, "Labels": labels})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"Name": name, "Labels": labels,
+			"Mountpoint": "/var/lib/docker/volumes/" + name + "/_data",
+		})
 	case r.Method == http.MethodPut && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/archive"):
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
