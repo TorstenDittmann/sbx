@@ -84,9 +84,13 @@ func (m *Manager) createWarm(ctx context.Context, tpl store.Template, backend st
 	if err := m.checkResources(cpu, mem, disk, pids, ttl, 0); err != nil {
 		return err
 	}
+	image, _, err := m.buildImage(ctx, backend, tpl.Image, tpl.Steps)
+	if err != nil {
+		return err
+	}
 	now := m.now()
 	sb := store.Sandbox{
-		ID: id.Sandbox(), Template: tpl.Name, Image: tpl.Image, Backend: backend, Status: "creating",
+		ID: id.Sandbox(), Template: tpl.Name, Image: image, Backend: backend, Status: "creating",
 		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: nonNil(tpl.Env), Network: mode,
 		Allow: policy.Allow, Deny: policy.Deny, EgressKbps: policy.EgressKbps, MaxConns: policy.MaxConns,
 		Labels: map[string]string{}, OwnerKeyID: store.SystemOwner, CreatedAt: now,
@@ -192,7 +196,7 @@ func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl
 }
 
 func warmCompatible(in CreateInput, tpl store.Template, backend string, baseCPU float64, baseMem, baseDisk, basePIDs int) bool {
-	if in.Image != "" && in.Image != tpl.Image {
+	if (in.Image != "" && in.Image != tpl.Image) || len(in.Steps) > 0 {
 		return false
 	}
 	if in.CPU != nil && *in.CPU != baseCPU {

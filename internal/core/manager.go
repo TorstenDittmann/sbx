@@ -50,6 +50,9 @@ type CreateInput struct {
 	Labels             map[string]string
 	Mounts             []MountInput
 	Secrets            map[string]string
+	// Steps are build steps run after the template's own steps. They need
+	// an admin key unless builds.allow_sandbox_keys is set.
+	Steps []store.BuildStep
 }
 
 // ExecInput runs a command. TimeoutSeconds 0 uses the server default.
@@ -77,6 +80,7 @@ type TemplateInput struct {
 	Setup        []string
 	SetupTimeout int
 	Warm         int
+	Steps        []store.BuildStep
 }
 
 // Counters are process-local totals for /metrics.
@@ -87,6 +91,7 @@ type Counters struct {
 	ExecErrors atomic.Int64
 	FileOps    atomic.Int64
 	Reaped     atomic.Int64
+	Builds     atomic.Int64
 }
 
 // Manager is safe for concurrent use.
@@ -103,6 +108,8 @@ type Manager struct {
 	budgets  map[string]*byteBudget
 	ready    atomic.Bool
 	Counts   Counters
+	// buildLocks holds one mutex per build tag so concurrent creates build once.
+	buildLocks sync.Map
 }
 
 // New builds a manager. drivers is keyed by backend name ("docker", "gvisor").
@@ -214,14 +221,17 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	var tpl store.Template
 	var err error
 	if in.Template != "" {
-		if err := validTemplateName(in.Template); err != nil {
+		if tpl, err = m.template(ctx, in.Template); err != nil {
 			return store.Sandbox{}, err
 		}
-		tpl, err = m.store.GetTemplate(ctx, in.Template)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return store.Sandbox{}, notFound("template not found")
-			}
+	}
+	// Template steps on a caller-chosen base are a new build too.
+	newBase := len(tpl.Steps) > 0 && in.Image != "" && in.Image != tpl.Image
+	if len(in.Steps) > 0 || newBase {
+		if err := m.canBuild(actor); err != nil {
+			return store.Sandbox{}, err
+		}
+		if err := validSteps(joinSteps(tpl.Steps, in.Steps)); err != nil {
 			return store.Sandbox{}, err
 		}
 	}
@@ -261,6 +271,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		idle = *in.IdleTimeoutSeconds
 	}
 	if err := m.checkResources(cpu, mem, disk, pids, ttl, idle); err != nil {
+		return store.Sandbox{}, err
+	}
+	if image, _, err = m.buildImage(ctx, backend, image, joinSteps(tpl.Steps, in.Steps)); err != nil {
 		return store.Sandbox{}, err
 	}
 	env := map[string]string{}
@@ -777,6 +790,9 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 	if in.SetupTimeout < 0 || in.SetupTimeout > m.cfg.Limits.MaxExecSeconds {
 		return store.Template{}, invalid("setup_timeout_seconds is out of range")
 	}
+	if err := validSteps(in.Steps); err != nil {
+		return store.Template{}, err
+	}
 	network := in.Network
 	if network == "" {
 		network = "none"
@@ -800,11 +816,19 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 	if setup == nil {
 		setup = []string{}
 	}
+	backend := in.Backend
+	if backend == "" {
+		backend = m.cfg.Backend
+	}
+	// Build now so a broken step fails the template, not the first create.
+	if _, _, err := m.buildImage(ctx, backend, in.Image, in.Steps); err != nil {
+		return store.Template{}, err
+	}
 	t := store.Template{
 		Name: in.Name, Image: in.Image, Description: in.Description,
 		CPU: in.CPU, MemoryMB: in.MemoryMB, DiskMB: in.DiskMB, Env: nonNil(in.Env),
 		Backend: in.Backend, Network: network, Setup: setup, SetupTimeout: in.SetupTimeout, Warm: in.Warm,
-		CreatedAt: m.now(),
+		Steps: in.Steps, CreatedAt: m.now(),
 	}
 	if err := m.store.CreateTemplate(ctx, t); err != nil {
 		return store.Template{}, err

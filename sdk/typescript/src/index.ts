@@ -16,6 +16,28 @@ export class SbxError extends Error {
 
 export type SandboxStatus = "creating" | "running" | "paused" | "stopped" | "error" | "warm"
 
+// BuildStep is one template build step. See Template for the builder.
+export type BuildStep =
+  | { run: string }
+  | { packages: string[] }
+  | { env: Record<string, string> }
+  | { workdir: string }
+
+export type BuildInfo = {
+  // id is the content hash of the base image and steps. It is empty when no
+  // step runs a command, and image is then the base itself.
+  id: string
+  image: string
+  base: string
+  steps: BuildStep[]
+  cached: boolean
+  durationMs: number
+}
+
+export type BuildOptions = {
+  backend?: "docker" | "gvisor" | "kata" | "firecracker"
+}
+
 export type TemplateInfo = {
   name: string
   image: string
@@ -29,6 +51,7 @@ export type TemplateInfo = {
   setup: string[]
   setupTimeoutSeconds: number
   warm: number
+  steps: BuildStep[]
   builtin: boolean
   createdAt: string
 }
@@ -46,6 +69,7 @@ export type CreateTemplateOptions = {
   setup?: string[]
   setupTimeout?: number | string
   warm?: number
+  steps?: BuildStep[]
 }
 
 export type SandboxInfo = {
@@ -117,7 +141,9 @@ export type BackendInfo = {
 }
 
 export type CreateSandboxOptions = {
-  template?: string
+  // A Template builds its steps (once, then from cache) before the create.
+  template?: string | Template
+  steps?: BuildStep[]
   image?: string
   cpu?: number
   memoryMb?: number
@@ -315,8 +341,29 @@ type TemplateJSON = {
   setup?: string[]
   setup_timeout_seconds?: number
   warm: number
+  steps?: BuildStep[]
   builtin: boolean
   created_at: string
+}
+
+type BuildJSON = {
+  id: string
+  image: string
+  base: string
+  steps?: BuildStep[]
+  cached: boolean
+  duration_ms: number
+}
+
+function mapBuild(raw: BuildJSON): BuildInfo {
+  return {
+    id: raw.id,
+    image: raw.image,
+    base: raw.base,
+    steps: raw.steps ?? [],
+    cached: raw.cached,
+    durationMs: raw.duration_ms,
+  }
 }
 
 function mapTemplate(raw: TemplateJSON): TemplateInfo {
@@ -333,6 +380,7 @@ function mapTemplate(raw: TemplateJSON): TemplateInfo {
     setup: raw.setup ?? [],
     setupTimeoutSeconds: raw.setup_timeout_seconds ?? 0,
     warm: raw.warm,
+    steps: raw.steps ?? [],
     builtin: raw.builtin,
     createdAt: raw.created_at,
   }
@@ -366,8 +414,17 @@ function commandArgs(cmd: string | string[]): string[] {
 
 function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   const body: Record<string, unknown> = {}
-  if (options.template) body.template = options.template
+  const steps: BuildStep[] = []
+  if (options.template instanceof Template) {
+    if (options.template.template) body.template = options.template.template
+    if (options.template.image) body.image = options.template.image
+    steps.push(...options.template.steps)
+  } else if (options.template) {
+    body.template = options.template
+  }
   if (options.image) body.image = options.image
+  if (options.steps) steps.push(...options.steps)
+  if (steps.length > 0) body.steps = steps
   if (options.cpu != null) body.cpu = options.cpu
   if (options.memoryMb != null) body.memory_mb = options.memoryMb
   if (options.diskMb != null) body.disk_mb = options.diskMb
@@ -466,7 +523,18 @@ export class SbxClient {
     if (options.setup) body.setup = options.setup
     if (options.setupTimeout != null) body.setup_timeout_seconds = parseDuration(options.setupTimeout)
     if (options.warm != null) body.warm = options.warm
+    if (options.steps) body.steps = options.steps
     return this.requestJSON<TemplateJSON>("POST", "/v1/templates", body).then(mapTemplate)
+  }
+
+  // build builds and caches an image from a base and steps. A create with
+  // the same base and steps then starts from the cached image.
+  build(options: { image?: string; template?: string; steps: BuildStep[]; backend?: string }): Promise<BuildInfo> {
+    const body: Record<string, unknown> = { steps: options.steps }
+    if (options.image) body.image = options.image
+    if (options.template) body.template = options.template
+    if (options.backend) body.backend = options.backend
+    return this.requestJSON<BuildJSON>("POST", "/v1/builds", body).then(mapBuild)
   }
 
   listTemplates(): Promise<TemplateInfo[]> {
@@ -989,9 +1057,23 @@ export class Sandbox {
     this.files = new SandboxFiles(client, info.id)
   }
 
-  static async create(options: CreateSandboxOptions & ConnectionOptions = {}): Promise<Sandbox> {
+  static async create(options?: CreateSandboxOptions & ConnectionOptions): Promise<Sandbox>
+  static async create(template: Template, options?: Omit<CreateSandboxOptions, "template"> & ConnectionOptions): Promise<Sandbox>
+  static async create(
+    first: Template | (CreateSandboxOptions & ConnectionOptions) = {},
+    rest: Omit<CreateSandboxOptions, "template"> & ConnectionOptions = {},
+  ): Promise<Sandbox> {
+    const options = first instanceof Template ? { ...rest, template: first } : first
     const client = clientFrom(options)
     return new Sandbox(client, await client.createSandbox(options))
+  }
+
+  // template starts an image builder. A string is a base image. Without an
+  // argument the builder starts from the built-in "base" template.
+  static template(base?: string | { image?: string; template?: string }): Template {
+    if (typeof base === "string") return new Template({ image: base })
+    if (base?.image || base?.template) return new Template(base)
+    return new Template({ template: "base" })
   }
 
   static async connect(id: string, options: ConnectionOptions = {}): Promise<Sandbox> {
@@ -1085,6 +1167,59 @@ export class Sandbox {
     this.status = info.status
     this.expiresAt = info.expiresAt
     this.backend = info.backend
+  }
+}
+
+// Template is an immutable list of build steps on a base image or template.
+// Every method returns a new Template, so one base can branch into variants.
+// sbx builds the steps once, caches the image by content hash, and starts
+// later sandboxes from that image. env and workdir apply to later steps only;
+// they are not set in sandboxes. /workspace is mounted over at runtime, so
+// build into another directory such as /app.
+export class Template {
+  readonly image?: string
+  readonly template?: string
+  readonly steps: readonly BuildStep[]
+
+  constructor(base: { image?: string; template?: string }, steps: readonly BuildStep[] = []) {
+    this.image = base.image
+    this.template = base.template
+    this.steps = Object.freeze([...steps])
+  }
+
+  // run adds a shell command, run with /bin/sh -c as root.
+  run(command: string): Template {
+    if (!command) throw new Error("command must not be empty")
+    return this.#with({ run: command })
+  }
+
+  // withPackages installs system packages with apt-get, apk, dnf, or yum,
+  // whichever the base image has.
+  withPackages(...names: string[]): Template {
+    if (names.length === 0) throw new Error("withPackages needs at least one package")
+    return this.#with({ packages: names })
+  }
+
+  // withEnv sets build-time variables for later steps. They are part of the
+  // content hash, so a change rebuilds. Pass runtime variables to create.
+  withEnv(vars: Record<string, string>): Template {
+    if (Object.keys(vars).length === 0) throw new Error("withEnv needs at least one variable")
+    return this.#with({ env: { ...vars } })
+  }
+
+  // workdir sets the working directory for later steps.
+  workdir(dir: string): Template {
+    return this.#with({ workdir: dir })
+  }
+
+  // build builds and caches the image ahead of time. Sandbox.create builds
+  // on its own, so this only warms the cache.
+  build(options: BuildOptions & ConnectionOptions = {}): Promise<BuildInfo> {
+    return clientFrom(options).build({ image: this.image, template: this.template, steps: [...this.steps], backend: options.backend })
+  }
+
+  #with(step: BuildStep): Template {
+    return new Template({ image: this.image, template: this.template }, [...this.steps, step])
   }
 }
 

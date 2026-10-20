@@ -71,3 +71,10 @@ network:
   # Route preview hosts by X-Forwarded-Host. Only behind a proxy that sets it.
   trust_forwarded_host: false
   preview_max_streams: 64
+
+# Template builds run their steps as root in Docker's builder, with the
+# daemon's default network. Only admin keys can request one unless
+# allow_sandbox_keys is true. Built images are cached by content hash.
+builds:
+  allow_sandbox_keys: false
+  timeout_seconds: 1200

@@ -38,6 +38,10 @@ type Driver struct {
 	DialErr error
 	// DropDial accepts a preview connection and closes it without a response.
 	DropDial bool
+	// BuildErr fails BuildImage when set.
+	BuildErr error
+	builds   []driver.BuildSpec
+	images   map[string]struct{}
 }
 
 type proc struct {
@@ -85,6 +89,7 @@ func New(name string) *Driver {
 		procs:    map[string]map[string]*proc{},
 		watchers: map[string][]*watch{},
 		volumes:  map[string]struct{}{},
+		images:   map[string]struct{}{},
 	}
 }
 
@@ -125,6 +130,35 @@ func (d *Driver) Report(ctx context.Context) driver.Info {
 func (d *Driver) Ping(context.Context) error { return d.PingErr }
 
 func (d *Driver) EnsureImage(context.Context, string) error { return nil }
+
+var _ driver.Builder = (*Driver)(nil)
+
+// HasImage reports whether BuildImage produced ref.
+func (d *Driver) HasImage(_ context.Context, ref string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.images[ref]
+	return ok, nil
+}
+
+// BuildImage records spec and marks its tag as present.
+func (d *Driver) BuildImage(_ context.Context, spec driver.BuildSpec) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.builds = append(d.builds, spec)
+	if d.BuildErr != nil {
+		return d.BuildErr
+	}
+	d.images[spec.Tag] = struct{}{}
+	return nil
+}
+
+// Builds returns every BuildImage call so far.
+func (d *Driver) Builds() []driver.BuildSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]driver.BuildSpec(nil), d.builds...)
+}
 
 func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Handle, error) {
 	d.mu.Lock()

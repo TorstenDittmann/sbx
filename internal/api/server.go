@@ -66,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/templates", s.auth("sandbox", s.listTemplates))
 	mux.HandleFunc("POST /v1/templates", s.auth("admin", s.createTemplate))
 	mux.HandleFunc("DELETE /v1/templates/{name}", s.auth("admin", s.deleteTemplate))
+	mux.HandleFunc("POST /v1/builds", s.auth("sandbox", s.createBuild))
 
 	mux.HandleFunc("POST /v1/volumes", s.auth("sandbox", s.createVolume))
 	mux.HandleFunc("GET /v1/volumes", s.auth("sandbox", s.listVolumes))
@@ -190,6 +191,8 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_exec_errors_total %d\n", c.ExecErrors.Load())
 	b.WriteString("# HELP sbx_file_ops_total File operations.\n# TYPE sbx_file_ops_total counter\n")
 	fmt.Fprintf(&b, "sbx_file_ops_total %d\n", c.FileOps.Load())
+	b.WriteString("# HELP sbx_image_builds_total Template images built (cache misses).\n# TYPE sbx_image_builds_total counter\n")
+	fmt.Fprintf(&b, "sbx_image_builds_total %d\n", c.Builds.Load())
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, b.String())
@@ -487,6 +490,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		Setup        []string          `json:"setup"`
 		SetupTimeout int               `json:"setup_timeout_seconds"`
 		Warm         int               `json:"warm"`
+		Steps        []store.BuildStep `json:"steps"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
@@ -496,12 +500,41 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		Name: body.Name, Image: body.Image, Description: body.Description,
 		CPU: body.CPU, MemoryMB: body.MemoryMB, DiskMB: body.DiskMB, Env: body.Env,
 		Backend: body.Backend, Network: body.Network, Setup: body.Setup, SetupTimeout: body.SetupTimeout, Warm: body.Warm,
+		Steps: body.Steps,
 	})
 	if err != nil {
 		writeManager(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, templateJSON(t))
+}
+
+func (s *Server) createBuild(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Template string            `json:"template"`
+		Image    string            `json:"image"`
+		Steps    []store.BuildStep `json:"steps"`
+		Backend  string            `json:"backend"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	res, err := s.mgr.Build(r.Context(), actor(r), core.BuildInput{
+		Template: body.Template, Image: body.Image, Steps: body.Steps, Backend: body.Backend,
+	})
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if res.Cached {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, map[string]any{
+		"id": res.ID, "image": res.Image, "base": res.Base, "steps": stepsJSON(res.Steps),
+		"cached": res.Cached, "duration_ms": res.Duration.Milliseconds(),
+	})
 }
 
 func (s *Server) createVolume(w http.ResponseWriter, r *http.Request) {
@@ -569,6 +602,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		Template: body.Template, Image: body.Image, CPU: body.CPU, MemoryMB: body.MemoryMB,
 		DiskMB: body.DiskMB, PIDs: body.PIDs, TTLSeconds: body.TTLSeconds,
 		IdleTimeoutSeconds: body.IdleTimeoutSeconds, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
+		Steps: body.Steps,
 	}
 	if body.Network != nil {
 		in.Network = body.Network.Mode
@@ -900,6 +934,7 @@ type createRequest struct {
 		Path     string `json:"path"`
 	} `json:"mounts"`
 	Secrets map[string]string `json:"secrets"`
+	Steps   []store.BuildStep `json:"steps"`
 }
 
 type execRequest struct {
@@ -992,9 +1027,16 @@ func templateJSON(t store.Template) map[string]any {
 		"name": t.Name, "image": t.Image, "description": t.Description,
 		"cpu": t.CPU, "memory_mb": t.MemoryMB, "disk_mb": t.DiskMB,
 		"env": t.Env, "backend": t.Backend, "network": network, "setup": setup,
-		"setup_timeout_seconds": t.SetupTimeout, "warm": t.Warm,
+		"setup_timeout_seconds": t.SetupTimeout, "warm": t.Warm, "steps": stepsJSON(t.Steps),
 		"builtin": t.Builtin, "created_at": t.CreatedAt,
 	}
+}
+
+func stepsJSON(steps []store.BuildStep) []store.BuildStep {
+	if steps == nil {
+		return []store.BuildStep{}
+	}
+	return steps
 }
 
 func execJSON(res driver.ExecResult) map[string]any {
