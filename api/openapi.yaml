@@ -167,6 +167,43 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Template"}
+  /v1/builds:
+    post:
+      operationId: createBuild
+      summary: Build and cache an image from steps
+      description: >
+        Runs the steps on the base image and tags the result by a hash of the
+        base and the steps. A second call with the same input returns the
+        cached image with 200. A sandbox create with the same image (or
+        template) and steps starts from that image. Steps run as root in
+        Docker's builder with the daemon's default network. An admin key is
+        required unless the server sets builds.allow_sandbox_keys.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                image: {type: string, description: Base image. Defaults to the template's image.}
+                template: {type: string, description: Template whose image and steps come first.}
+                steps:
+                  type: array
+                  items: {$ref: "#/components/schemas/BuildStep"}
+                backend: {type: string, description: Backend whose daemon builds the image.}
+      responses:
+        "200":
+          description: Already cached
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Build"}
+        "201":
+          description: Built
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Build"}
+        "403":
+          description: Builds need an admin key
   /v1/templates/{name}:
     delete:
       operationId: deleteTemplate
@@ -926,6 +963,10 @@ components:
           minimum: 0
           maximum: 8
           description: How many ready sandboxes to keep for this template.
+        steps:
+          type: array
+          items: {$ref: "#/components/schemas/BuildStep"}
+          description: Build steps applied to image. Sandboxes start from the built image.
         builtin: {type: boolean}
         created_at: {type: string, format: date-time}
     Backend:
@@ -967,6 +1008,42 @@ components:
         setup: {type: array, items: {type: string}}
         setup_timeout_seconds: {type: integer}
         warm: {type: integer, minimum: 0, maximum: 8}
+        steps:
+          type: array
+          maxItems: 64
+          items: {$ref: "#/components/schemas/BuildStep"}
+          description: Built when the template is created, so a failing step fails the request.
+    BuildStep:
+      type: object
+      description: >
+        Exactly one field is set. run is a /bin/sh -c script run as root.
+        packages installs with apt-get, apk, dnf, or yum, whichever the base
+        has. env sets build-time variables for later steps; they are not set
+        in sandboxes. workdir sets the directory later steps run in; it
+        cannot be under /workspace, which is mounted over at runtime.
+      properties:
+        run: {type: string, maxLength: 65536}
+        packages:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items: {type: string}
+        env: {type: object, additionalProperties: {type: string}}
+        workdir: {type: string}
+    Build:
+      type: object
+      required: [id, image, base, steps, cached, duration_ms]
+      properties:
+        id:
+          type: string
+          description: Content hash of the base and the rendered steps. Empty when no step runs a command.
+        image: {type: string, description: Image sandboxes start from, sbx-template:<id>.}
+        base: {type: string}
+        steps:
+          type: array
+          items: {$ref: "#/components/schemas/BuildStep"}
+        cached: {type: boolean}
+        duration_ms: {type: integer}
     Network:
       type: object
       properties:
@@ -1034,6 +1111,15 @@ components:
             Environment variables stored for the sandbox but never returned by
             get or list. Names appear in secret_keys. They are injected into
             the container and into later execs. A name cannot also be set in env.
+        steps:
+          type: array
+          items: {$ref: "#/components/schemas/BuildStep"}
+          description: >
+            Build steps run after the template's own steps, on image (or the
+            template's image). The result is cached by content hash, so only
+            the first create with a given base and steps builds. Needs an
+            admin key unless builds.allow_sandbox_keys is set. A create with
+            steps does not take a warm sandbox.
     Mount:
       type: object
       required: [volume_id, path]

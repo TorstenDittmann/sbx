@@ -78,6 +78,15 @@ Built-in templates are `base` (`alpine:3.20`, 0.5 CPU, 128 MiB), `python` (`pyth
 
 A template can keep a warm pool. `warm` is how many sandboxes to start ahead of time (0 to 8). `setup` is a command that runs before a warm sandbox is offered, so the next create skips image pull and install. `network` on the template is the default when create omits it (`none` or `full`). A create that changes image, resources, network, or env does not take a pooled sandbox. Pooled sandboxes are hidden from the normal list; an admin can see them with `?status=warm`. Deleting the template deletes the pool.
 
+A template can also carry build `steps`, like [Railway's sandbox templates](https://docs.railway.com/sandboxes#templates). Each step is one of `{"run": "npm install"}`, `{"packages": ["ffmpeg", "git"]}`, `{"env": {"NODE_ENV": "production"}}`, or `{"workdir": "/app"}`. sbx builds the steps on the image once, caches the result as `sbx-template:<hash>` keyed by the base and the steps, and starts every later sandbox from it. `env` and `workdir` only apply to later steps; pass runtime variables in create's `env`. Build outside `/workspace`, which is mounted over at runtime. `POST /v1/sandboxes` takes `steps` too (after the template's own), and `POST /v1/builds` builds ahead of time. Builds run as root in Docker's builder with network, so they need an admin key unless `builds.allow_sandbox_keys` is set.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/sandboxes \
+  -H "Authorization: Bearer $SBX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"image":"node:22-bookworm-slim","steps":[{"packages":["ffmpeg"]},{"workdir":"/app"},{"run":"npm init -y"}]}'
+```
+
 ### Compose
 
 ```bash

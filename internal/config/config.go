@@ -24,6 +24,7 @@ type Config struct {
 	Limits      Limits
 	Auth        AuthConfig
 	Network     NetworkConfig
+	Builds      BuildConfig
 }
 
 // DockerConfig controls the engine socket and sandbox hardening.
@@ -85,6 +86,14 @@ type Limits struct {
 	ReaperIntervalSeconds  int
 	RetainStoppedSeconds   int
 	CreatingTimeoutSeconds int
+}
+
+// BuildConfig controls template image builds. A build runs its steps as root
+// in Docker's builder, with the daemon's default network, so only admin keys
+// may request one unless AllowSandboxKeys is set.
+type BuildConfig struct {
+	AllowSandboxKeys bool
+	TimeoutSeconds   int
 }
 
 // AuthConfig optionally pins the first API key.
@@ -165,6 +174,9 @@ func Default() Config {
 			AllowPublicPreviews: true,
 			PreviewMaxStreams:   64,
 		},
+		Builds: BuildConfig{
+			TimeoutSeconds: 1200,
+		},
 	}
 }
 
@@ -189,6 +201,12 @@ type fileConfig struct {
 	Limits      *fileLimits      `yaml:"limits"`
 	Auth        *fileAuth        `yaml:"auth"`
 	Network     *fileNetwork     `yaml:"network"`
+	Builds      *fileBuilds      `yaml:"builds"`
+}
+
+type fileBuilds struct {
+	AllowSandboxKeys *bool `yaml:"allow_sandbox_keys"`
+	TimeoutSeconds   *int  `yaml:"timeout_seconds"`
 }
 
 type fileDocker struct {
@@ -327,6 +345,10 @@ func (f fileConfig) apply(cfg *Config) {
 		setInt(&cfg.Limits.RetainStoppedSeconds, l.RetainStoppedSeconds)
 		setInt(&cfg.Limits.CreatingTimeoutSeconds, l.CreatingTimeoutSeconds)
 	}
+	if b := f.Builds; b != nil {
+		setBool(&cfg.Builds.AllowSandboxKeys, b.AllowSandboxKeys)
+		setInt(&cfg.Builds.TimeoutSeconds, b.TimeoutSeconds)
+	}
 	if a := f.Auth; a != nil {
 		setString(&cfg.Auth.BootstrapKey, a.BootstrapKey)
 	}
@@ -397,6 +419,8 @@ func applyEnv(cfg *Config) {
 	envString(&cfg.Network.PublicURL, "SBX_PUBLIC_URL")
 	envBool(&cfg.Network.AllowPublicPreviews, "SBX_ALLOW_PUBLIC_PREVIEWS")
 	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
+	envBool(&cfg.Builds.AllowSandboxKeys, "SBX_BUILDS_ALLOW_SANDBOX_KEYS")
+	envInt(&cfg.Builds.TimeoutSeconds, "SBX_BUILD_TIMEOUT_SECONDS")
 }
 
 // Validate checks the resolved configuration.
@@ -474,6 +498,9 @@ func (c Config) Validate() error {
 	}
 	if c.Network.DefaultEgressKbps < 0 || c.Network.DefaultMaxConns < 0 {
 		return fmt.Errorf("network limits must be >= 0")
+	}
+	if c.Builds.TimeoutSeconds < 1 {
+		return fmt.Errorf("builds.timeout_seconds must be >= 1")
 	}
 	if c.Network.PreviewMaxStreams < 1 {
 		return fmt.Errorf("preview_max_streams must be >= 1")

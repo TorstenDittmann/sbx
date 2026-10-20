@@ -71,8 +71,17 @@ type Template struct {
 	Setup        []string
 	SetupTimeout int
 	Warm         int
+	Steps        []BuildStep
 	Builtin      bool
 	CreatedAt    time.Time
+}
+
+// BuildStep is one template build step. Exactly one field is set.
+type BuildStep struct {
+	Run      string            `json:"run,omitempty"`
+	Packages []string          `json:"packages,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Workdir  string            `json:"workdir,omitempty"`
 }
 
 // SystemOwner is the owner of warm-pool sandboxes. They do not count toward a key's quota.
@@ -184,6 +193,7 @@ func migrate(db *sql.DB) error {
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
 		{"templates", "setup_timeout_seconds", `ALTER TABLE templates ADD COLUMN setup_timeout_seconds INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "backend", `ALTER TABLE templates ADD COLUMN backend TEXT NOT NULL DEFAULT ''`},
+		{"templates", "steps_json", `ALTER TABLE templates ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]'`},
 	}
 	for _, alt := range alters {
 		have, err := hasColumn(db, alt.table, alt.column)
@@ -246,7 +256,8 @@ CREATE TABLE IF NOT EXISTS templates (
     setup_json TEXT NOT NULL DEFAULT '[]',
     warm INTEGER NOT NULL DEFAULT 0,
     network TEXT NOT NULL DEFAULT 'none',
-    setup_timeout_seconds INTEGER NOT NULL DEFAULT 0
+    setup_timeout_seconds INTEGER NOT NULL DEFAULT 0,
+    steps_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS sandboxes (
@@ -376,10 +387,10 @@ func (s *Store) UpsertBuiltin(ctx context.Context, t Template) error {
 // CreateTemplate inserts a user template. Names that already exist fail.
 func (s *Store) CreateTemplate(ctx context.Context, t Template) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at, setup_json, warm, network, setup_timeout_seconds)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+		INSERT INTO templates (name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at, setup_json, warm, network, setup_timeout_seconds, steps_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
 		t.Name, t.Image, t.Description, t.CPU, t.MemoryMB, t.DiskMB, mustJSON(t.Env), t.Backend, millis(t.CreatedAt),
-		mustJSON(t.Setup), t.Warm, t.Network, t.SetupTimeout)
+		mustJSON(t.Setup), t.Warm, t.Network, t.SetupTimeout, mustJSON(stepsOrEmpty(t.Steps)))
 	return err
 }
 
@@ -411,7 +422,7 @@ func (s *Store) DeleteTemplate(ctx context.Context, name string) error {
 func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at,
-		       setup_json, warm, network, setup_timeout_seconds
+		       setup_json, warm, network, setup_timeout_seconds, steps_json
 		FROM templates WHERE name = ?`, name)
 	return scanTemplate(row)
 }
@@ -420,7 +431,7 @@ func (s *Store) GetTemplate(ctx context.Context, name string) (Template, error) 
 func (s *Store) ListTemplates(ctx context.Context) ([]Template, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT name, image, description, cpu, memory_mb, disk_mb, env_json, backend, builtin, created_at,
-		       setup_json, warm, network, setup_timeout_seconds
+		       setup_json, warm, network, setup_timeout_seconds, steps_json
 		FROM templates ORDER BY builtin DESC, name ASC`)
 	if err != nil {
 		return nil, err
@@ -656,10 +667,10 @@ func scanKey(row scanner) (APIKey, error) {
 
 func scanTemplate(row scanner) (Template, error) {
 	var t Template
-	var env, setup, network string
+	var env, setup, network, steps string
 	var builtin, warm, setupTimeout int
 	var created int64
-	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &t.Backend, &builtin, &created, &setup, &warm, &network, &setupTimeout)
+	err := row.Scan(&t.Name, &t.Image, &t.Description, &t.CPU, &t.MemoryMB, &t.DiskMB, &env, &t.Backend, &builtin, &created, &setup, &warm, &network, &setupTimeout, &steps)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Template{}, ErrNotFound
 	}
@@ -681,7 +692,19 @@ func scanTemplate(row scanner) (Template, error) {
 		t.Network = "none"
 	}
 	t.SetupTimeout = setupTimeout
+	if steps != "" && steps != "[]" {
+		if err := json.Unmarshal([]byte(steps), &t.Steps); err != nil {
+			return Template{}, err
+		}
+	}
 	return t, nil
+}
+
+func stepsOrEmpty(steps []BuildStep) []BuildStep {
+	if steps == nil {
+		return []BuildStep{}
+	}
+	return steps
 }
 
 func decodeStrings(s string) []string {

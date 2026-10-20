@@ -31,6 +31,22 @@ await box.kill()
 
 `client.createTemplate({ name, image, warm, setup, network })` keeps ready sandboxes for that template. `Sandbox.create({ template })` claims one when the request does not override the template.
 
+`Sandbox.template(image)` builds a reusable image. Each method returns a new template, so one base can branch into variants. sbx builds the steps once, caches them by content hash, and later creates start from the cached image. `.build()` only warms the cache.
+
+```ts
+const base = Sandbox.template("node:22-bookworm-slim")
+  .withPackages("ffmpeg", "git")
+  .withEnv({ NODE_ENV: "production" }) // build time only
+  .workdir("/app")
+  .run("npm init -y")
+
+await base.build() // optional
+const box = await Sandbox.create(base, { ttl: "5m" })
+await box.exec("ffmpeg -version")
+```
+
+`Sandbox.template()` with no argument starts from the `base` template, and `Sandbox.template({ template: "python" })` from another one. Builds need an admin key unless the server sets `builds.allow_sandbox_keys`. `client.createTemplate({ name, image, steps, warm })` keeps a named template with steps and a warm pool.
+
 `secrets` on `Sandbox.create` are stored for that sandbox and injected into commands. The API returns `secretKeys` and does not return the values. `client.setSecrets(id, secrets)` replaces them.
 
 `client.listSandboxes({ template, q, labels })` filters the caller's sandboxes. `labels` is an exact match. `q` is a substring of the id, template, image, status, or label text.

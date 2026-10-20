@@ -241,3 +241,19 @@ type Driver interface {
 	WriteFile(ctx context.Context, id, path string, content []byte, mode uint32) error
 	RemoveFile(ctx context.Context, id, path string) error
 }
+
+// BuildSpec is an image build. Base is the image to start from. Each Run
+// entry is a shell script executed with /bin/sh -c as root, in order. Tag is
+// the reference the result is stored under.
+type BuildSpec struct {
+	Tag            string
+	Base           string
+	Run            []string
+	TimeoutSeconds int
+}
+
+// Builder is implemented by drivers that can build and cache images.
+type Builder interface {
+	HasImage(ctx context.Context, ref string) (bool, error)
+	BuildImage(ctx context.Context, spec BuildSpec) error
+}
