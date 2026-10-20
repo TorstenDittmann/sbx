@@ -302,7 +302,7 @@
 	}
 
 	col.needs {
-		width: 32%;
+		width: 34%;
 	}
 
 	th,
@@ -335,24 +335,27 @@
 		font-size: 13px;
 	}
 
-	td {
-		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
+	.compare .table {
+		overflow: visible;
 	}
 
-	.compare td:last-child,
-	.compare thead th:last-child {
+	.compare thead th:first-child,
+	.compare tbody th:first-child {
 		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-		color: var(--fg);
-		font-weight: 500;
+		padding-left: 20px;
 	}
 
-	.compare thead th:last-child {
+	.compare thead th:first-child {
 		color: var(--accent);
 		border-radius: 8px 8px 0 0;
 	}
 
-	.compare tbody tr:last-child td:last-child {
+	.compare tbody tr:last-child th {
 		border-radius: 0 0 8px 8px;
+	}
+
+	td {
+		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
 	}
 
 	tbody tr:last-child > * {
@@ -392,6 +395,11 @@
 	@media (min-width: 761px) {
 		.features div:nth-child(n + 4) {
 			border-top: 1px solid var(--line);
+		}
+
+		.compare .table {
+			margin-left: -20px;
+			width: calc(100% + 20px);
 		}
 	}
 
@@ -484,19 +492,15 @@
 			border-bottom: 1px solid var(--line);
 		}
 
-		.compare tbody th {
-			padding-block: 12px;
-			font-size: 16px;
-		}
-
-		.compare td:last-child,
-		.compare thead th:last-child,
-		.compare tbody tr:last-child td:last-child {
+		.compare thead th:first-child,
+		.compare tbody th,
+		.compare tbody tr:last-child th {
 			border-radius: 0;
 		}
 
-		.compare td:last-child::before {
-			color: var(--accent);
+		.compare tbody th {
+			padding-block: 12px;
+			font-size: 16px;
 		}
 
 		.compare td::before {
