@@ -493,10 +493,24 @@ export class SbxClient {
     this.fetchImpl = options.fetch ?? globalThis.fetch
   }
 
-  createVolume(name: string, backend?: "docker" | "gvisor" | "kata"): Promise<VolumeInfo> {
-    const body: { name: string; backend?: string } = { name }
+  /**
+   * Create a named volume. A name the key already uses fails with 409, unless
+   * ifExists is "reuse", which returns the existing volume instead.
+   */
+  createVolume(
+    name: string,
+    backend?: "docker" | "gvisor" | "kata",
+    options: { ifExists?: "error" | "reuse" } = {},
+  ): Promise<VolumeInfo> {
+    const body: { name: string; backend?: string; if_exists?: string } = { name }
     if (backend) body.backend = backend
+    if (options.ifExists) body.if_exists = options.ifExists
     return this.requestJSON<VolumeJSON>("POST", "/v1/volumes", body).then(mapVolume)
+  }
+
+  /** Get the volume with this name, creating it if needed. Safe to call again on retry. */
+  ensureVolume(name: string, backend?: "docker" | "gvisor" | "kata"): Promise<VolumeInfo> {
+    return this.createVolume(name, backend, { ifExists: "reuse" })
   }
 
   listVolumes(): Promise<VolumeInfo[]> {

@@ -150,9 +150,8 @@ func (s *Server) signalProcess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) processStdin(w http.ResponseWriter, r *http.Request) {
-	body, err := readBody(w, r, int64(s.mgr.Config().Limits.MaxUploadBytes))
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+	body, ok := readRequestBody(w, r, s.uploadLimit())
+	if !ok {
 		return
 	}
 	if err := s.mgr.WriteProcessStdin(r.Context(), actor(r), r.PathValue("id"), r.PathValue("procId"), body); err != nil {

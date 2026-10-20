@@ -32,6 +32,20 @@ func TestVolumesPersistAcrossSandboxes(t *testing.T) {
 	if _, err := mgr.CreateVolume(ctx, owner, "project", "docker"); err == nil {
 		t.Fatal("expected duplicate name")
 	}
+	again, created, err := mgr.EnsureVolume(ctx, owner, "project", "")
+	if err != nil || created || again.ID != vol.ID {
+		t.Fatalf("ensure existing %+v %v %v", again, created, err)
+	}
+	if _, _, err := mgr.EnsureVolume(ctx, owner, "project", "gvisor"); err == nil {
+		t.Fatal("expected backend mismatch")
+	}
+	fresh, created, err := mgr.EnsureVolume(ctx, owner, "scratch", "")
+	if err != nil || !created || !docker.HasVolume(fresh.DockerName) {
+		t.Fatalf("ensure new %+v %v %v", fresh, created, err)
+	}
+	if err := mgr.DeleteVolume(ctx, owner, fresh.ID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := mgr.CreateVolume(ctx, owner, "-bad", ""); err == nil {
 		t.Fatal("expected bad name")
 	}

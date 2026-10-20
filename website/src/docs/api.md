@@ -245,7 +245,7 @@ Build permission means an admin key, or any key when `builds.allow_sandbox_keys`
 
 | Route | Body | Returns |
 |---|---|---|
-| `POST /v1/volumes` | `{"name", "backend"}` | `201` Volume |
+| `POST /v1/volumes` | `{"name", "backend", "if_exists"}` | `201` Volume, or `200` when `if_exists` is `reuse` and the volume exists |
 | `GET /v1/volumes` | | `{"volumes": [Volume]}` |
 | `GET /v1/volumes/{id}` | | Volume |
 | `DELETE /v1/volumes/{id}` | | `204`, or `409` while a live sandbox mounts it |

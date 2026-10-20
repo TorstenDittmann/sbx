@@ -180,7 +180,7 @@ Inside that container the listen address has to be `:8080`. Binding only `127.0.
 
 Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_KATA_RUNTIME`, `SBX_FIRECRACKER_BIN`, `SBX_FIRECRACKER_KERNEL`, `SBX_FIRECRACKER_JAILER`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
 
-Startup lists containers, adopts ones that still match a sandbox row, marks missing ones stopped with error `lost`, and deletes containers that have no live row. `/readyz` is 503 until that pass finishes. `/healthz` only checks that the process and Docker answer. `max_sandboxes` caps the node. `requests_per_minute` caps each API key. Request bodies larger than `max_upload_bytes` are rejected.
+Startup lists containers, adopts ones that still match a sandbox row, marks missing ones stopped with error `lost`, and deletes containers that have no live row. `/readyz` is 503 until that pass finishes. `/healthz` only checks that the process and Docker answer. `max_sandboxes` caps the node. `requests_per_minute` caps each API key. Request bodies larger than `max_upload_bytes` are rejected, except archive uploads, which use `max_archive_bytes`. The 413 names the limit and the setting.
 
 The website is separate. [Deploying the website with Dokploy](website.md#deploying-the-website-with-dokploy) covers its build path, Dockerfile, and port.
 

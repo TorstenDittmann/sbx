@@ -92,7 +92,8 @@ builds:
 | `limits.default_exec_seconds` | | `60` | Exec timeout when the request omits it. |
 | `limits.max_exec_seconds` | | `3600` | |
 | `limits.max_output_bytes` | | `8388608` | Exec output kept before `truncated` is set (8 MiB). |
-| `limits.max_upload_bytes` | `SBX_MAX_UPLOAD_BYTES` | `33554432` | Largest file or archive upload (32 MiB). |
+| `limits.max_upload_bytes` | `SBX_MAX_UPLOAD_BYTES` | `33554432` | Largest request body, such as a file upload or process stdin (32 MiB). |
+| `limits.max_archive_bytes` | `SBX_MAX_ARCHIVE_BYTES` | `268435456` | Largest archive upload, checked on the request body and again after gunzip (256 MiB). The server holds the archive in memory while it extracts it. |
 | `limits.reaper_interval_seconds` | | `5` | How often the reaper runs. |
 | `limits.retain_stopped_seconds` | | `86400` | How long stopped sandbox rows are kept. |
 | `limits.creating_timeout_seconds` | | `900` | A sandbox stuck in `creating` longer than this is reaped. |

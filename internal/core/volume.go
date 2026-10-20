@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path"
 	"strings"
 
@@ -19,19 +20,34 @@ type MountInput struct {
 
 // CreateVolume creates a named volume for the caller's backend.
 func (m *Manager) CreateVolume(ctx context.Context, actor Actor, name, backend string) (store.Volume, error) {
+	vol, _, err := m.createVolume(ctx, actor, name, backend, false)
+	return vol, err
+}
+
+// EnsureVolume returns the caller's volume with this name, creating it when it
+// does not exist. A retried job can call it again and get the same volume.
+// created reports whether this call made the volume.
+func (m *Manager) EnsureVolume(ctx context.Context, actor Actor, name, backend string) (vol store.Volume, created bool, err error) {
+	return m.createVolume(ctx, actor, name, backend, true)
+}
+
+func (m *Manager) createVolume(ctx context.Context, actor Actor, name, backend string, reuse bool) (store.Volume, bool, error) {
 	if err := validVolumeName(name); err != nil {
-		return store.Volume{}, err
+		return store.Volume{}, false, err
 	}
 	if backend == "" {
 		backend = m.cfg.Backend
 	}
 	d, ok := m.drivers[backend]
 	if !ok {
-		return store.Volume{}, invalid("unknown backend " + backend)
+		return store.Volume{}, false, invalid("unknown backend " + backend)
 	}
 	ops, ok := d.(driver.VolumeOps)
 	if !ok {
-		return store.Volume{}, unsupported("backend does not support volumes")
+		return store.Volume{}, false, unsupported("backend does not support volumes")
+	}
+	if vol, err := m.existingVolume(ctx, actor, name, backend, reuse); err != nil || vol.ID != "" {
+		return vol, false, err
 	}
 	volID := id.Volume()
 	vol := store.Volume{
@@ -40,14 +56,38 @@ func (m *Manager) CreateVolume(ctx context.Context, actor Actor, name, backend s
 		CreatedAt:  m.now(),
 	}
 	if err := ops.CreateVolume(ctx, vol.DockerName); err != nil {
-		return store.Volume{}, m.asDriver(err)
+		return store.Volume{}, false, m.asDriver(err)
 	}
 	if err := m.store.InsertVolume(ctx, vol); err != nil {
 		_ = ops.DeleteVolume(context.Background(), vol.DockerName)
 		if strings.Contains(err.Error(), "UNIQUE") {
-			return store.Volume{}, conflict("volume name already exists")
+			// A concurrent create won the name between the lookup and the insert.
+			if prev, err := m.existingVolume(ctx, actor, name, backend, reuse); err != nil || prev.ID != "" {
+				return prev, false, err
+			}
+			return store.Volume{}, false, conflict(fmt.Sprintf("volume %q already exists", name))
 		}
+		return store.Volume{}, false, err
+	}
+	return vol, true, nil
+}
+
+// existingVolume looks up the caller's volume by name. It returns an empty
+// volume when there is none, the volume when reuse is set, and a conflict
+// that names the existing id otherwise.
+func (m *Manager) existingVolume(ctx context.Context, actor Actor, name, backend string, reuse bool) (store.Volume, error) {
+	vol, err := m.store.GetVolumeByName(ctx, actor.KeyID, name)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Volume{}, nil
+	}
+	if err != nil {
 		return store.Volume{}, err
+	}
+	if !reuse {
+		return store.Volume{}, conflict(fmt.Sprintf("volume %q already exists as %s; delete it, or create with if_exists=reuse to get it back", name, vol.ID))
+	}
+	if vol.Backend != backend {
+		return store.Volume{}, conflict(fmt.Sprintf("volume %q already exists on backend %s, not %s", name, vol.Backend, backend))
 	}
 	return vol, nil
 }

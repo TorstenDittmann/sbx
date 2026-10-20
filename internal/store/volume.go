@@ -45,6 +45,14 @@ func (s *Store) GetVolume(ctx context.Context, id string) (Volume, error) {
 	return scanVolume(row)
 }
 
+// GetVolumeByName loads the volume an owner created under name.
+func (s *Store) GetVolumeByName(ctx context.Context, ownerID, name string) (Volume, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, name, owner_key_id, backend, docker_name, created_at FROM volumes
+		WHERE owner_key_id = ? AND name = ?`, ownerID, name)
+	return scanVolume(row)
+}
+
 // ListVolumes returns volumes, optionally limited to one owner. Newest first.
 func (s *Store) ListVolumes(ctx context.Context, ownerID string) ([]Volume, error) {
 	q := `SELECT id, name, owner_key_id, backend, docker_name, created_at FROM volumes`
