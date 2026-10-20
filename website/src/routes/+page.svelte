@@ -12,7 +12,7 @@
 		{
 			name: "gvisor",
 			isolation: "The Docker driver with runsc. A user-space kernel, no KVM.",
-			host: "Docker and runsc",
+			host: "Docker with runsc",
 		},
 		{
 			name: "kata",
@@ -22,7 +22,7 @@
 		{
 			name: "firecracker",
 			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock.",
-			host: "KVM, kernel, agent",
+			host: "/dev/kvm, a kernel, and sbx-agent",
 		},
 		{
 			name: "kubernetes",
@@ -101,13 +101,13 @@
 			<colgroup>
 				<col class="name" />
 				<col />
-				<col class="status" />
+				<col class="needs" />
 			</colgroup>
 			<thead>
 				<tr>
 					<th scope="col">Backend</th>
 					<th scope="col">Isolation</th>
-					<th scope="col">Host</th>
+					<th scope="col">Needs</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -115,7 +115,7 @@
 					<tr>
 						<th scope="row">{row.name}</th>
 						<td data-label="Isolation">{row.isolation}</td>
-						<td data-label="Host">{row.host}</td>
+						<td data-label="Needs">{row.host}</td>
 					</tr>
 				{/each}
 			</tbody>
@@ -301,8 +301,8 @@
 		width: 18%;
 	}
 
-	col.status {
-		width: 26%;
+	col.needs {
+		width: 34%;
 	}
 
 	th,
@@ -337,22 +337,6 @@
 
 	td {
 		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
-	}
-
-	.compare td:last-child,
-	.compare thead th:last-child {
-		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-		color: var(--fg);
-		font-weight: 500;
-	}
-
-	.compare thead th:last-child {
-		color: var(--accent);
-		border-radius: 8px 8px 0 0;
-	}
-
-	.compare tbody tr:last-child td:last-child {
-		border-radius: 0 0 8px 8px;
 	}
 
 	tbody tr:last-child > * {
@@ -500,11 +484,6 @@
 		.compare td:last-child,
 		.compare tbody tr:last-child td:last-child {
 			border-bottom: 0;
-			border-radius: 0;
-		}
-
-		.compare td:last-child::before {
-			color: var(--accent);
 		}
 
 		.api th,
