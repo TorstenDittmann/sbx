@@ -1,5 +1,7 @@
 # Copy to sbx.yaml. Every value here is optional; omitted keys keep the defaults.
-# Flags override environment variables, which override this file.
+# Flags override environment variables, which override this file. Every key
+# also has a variable: SBX_ plus the key path upper-cased, dots as underscores,
+# for example limits.max_cpu is SBX_LIMITS_MAX_CPU. Lists are comma-separated.
 addr: 127.0.0.1:8080
 data_dir: data
 backend: docker

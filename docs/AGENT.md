@@ -20,7 +20,7 @@ The token is 32 random bytes, hex-encoded, stored in the container environment a
 
 sbx copies the binary into the named volume `sbx-agent-bin` with a short-lived `alpine:3.20` helper, then bind-mounts that volume read-only at `/opt/sbx`. The sandbox entrypoint is `/opt/sbx/sbx-agent init`. Images do not need a shell for exec, files, terminals, or previews.
 
-The server looks for the binary in `docker.agent_bin`, `SBX_AGENT_BIN`, `--agent-bin`, and finally next to the `sbx` executable. The container image sets `SBX_AGENT_BIN=/usr/local/bin/sbx-agent`. When no binary is configured, exec and files stay on the engine API and the new routes return `unsupported`.
+The server looks for the binary in `docker.agent_bin`, `SBX_DOCKER_AGENT_BIN`, `--agent-bin`, and finally next to the `sbx` executable. The container image sets the older name `SBX_AGENT_BIN=/usr/local/bin/sbx-agent`, so either name set at run time overrides it. When no binary is configured, exec and files stay on the engine API and the new routes return `unsupported`.
 
 ## What the agent does
 

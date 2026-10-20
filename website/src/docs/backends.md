@@ -101,7 +101,7 @@ firecracker:
   gid: 123
 ```
 
-The host needs a writable `/dev/kvm`, `sbx-agent` next to `sbx` (or `SBX_AGENT_BIN`), Docker to export the OCI image the first time it is used, `mkfs.ext4` and permission to mount a loop device, and, for `full` and `allow` networking, root or enough capability to create a tap device and install iptables rules. The jailer is only used when `firecracker.jailer` is set, and needs a uid and gid of at least 1.
+The host needs a writable `/dev/kvm`, `sbx-agent` next to `sbx` (or `SBX_DOCKER_AGENT_BIN`), Docker to export the OCI image the first time it is used, `mkfs.ext4` and permission to mount a loop device, and, for `full` and `allow` networking, root or enough capability to create a tap device and install iptables rules. The jailer is only used when `firecracker.jailer` is set, and needs a uid and gid of at least 1.
 
 | | Firecracker sandbox |
 |---|---|

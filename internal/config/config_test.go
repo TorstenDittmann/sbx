@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -131,7 +132,6 @@ func TestValidateEdges(t *testing.T) {
 			t.Fatalf("case %d accepted", i)
 		}
 	}
-	t.Setenv("SBX_DEFAULT_TTL_SECONDS", "nope")
 	t.Setenv("SBX_MAX_UPLOAD_BYTES", "4096")
 	t.Setenv("SBX_SANDBOX_UID", "2000")
 	cfg, err := Load("")
@@ -176,5 +176,113 @@ func TestEmptyFileKeepsReadOnlyDefault(t *testing.T) {
 	}
 	if cfg.LogLevel != "debug" {
 		t.Fatalf("level %q", cfg.LogLevel)
+	}
+}
+
+func TestEnvCoversEveryFileKey(t *testing.T) {
+	keys := EnvKeys()
+	seen := map[string]bool{}
+	for _, key := range keys {
+		name := EnvName(key)
+		if seen[name] {
+			t.Fatalf("duplicate env name %s", name)
+		}
+		seen[name] = true
+	}
+	for _, want := range []string{"addr", "docker.host", "limits.max_cpu", "network.dns", "builds.timeout_seconds"} {
+		if !seen[EnvName(want)] {
+			t.Fatalf("missing %s", want)
+		}
+	}
+	for old, canonical := range legacyEnv {
+		if seen[old] {
+			t.Fatalf("legacy %s collides with a canonical name", old)
+		}
+		if !seen[canonical] {
+			t.Fatalf("legacy %s points at unknown %s", old, canonical)
+		}
+	}
+}
+
+func TestCanonicalEnvNames(t *testing.T) {
+	t.Setenv("SBX_LIMITS_MAX_CPU", "8")
+	t.Setenv("SBX_LIMITS_DEFAULT_CPU", "2.5")
+	t.Setenv("SBX_LIMITS_DEFAULT_PIDS", "512")
+	t.Setenv("SBX_LIMITS_CREATING_TIMEOUT_SECONDS", "60")
+	t.Setenv("SBX_NETWORK_DEFAULT_MODE", "full")
+	t.Setenv("SBX_NETWORK_DNS", "9.9.9.9, 1.0.0.1")
+	t.Setenv("SBX_AUTH_BOOTSTRAP_KEY", "sbx_canonical")
+	t.Setenv("SBX_BUILDS_TIMEOUT_SECONDS", "30")
+	t.Setenv("SBX_DOCKER_READ_ONLY_ROOTFS", "false")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Limits.MaxCPU != 8 || cfg.Limits.DefaultCPU != 2.5 || cfg.Limits.DefaultPIDs != 512 || cfg.Limits.CreatingTimeoutSeconds != 60 {
+		t.Fatalf("%+v", cfg.Limits)
+	}
+	if cfg.Network.DefaultMode != "full" || len(cfg.Network.DNS) != 2 || cfg.Network.DNS[1] != "1.0.0.1" {
+		t.Fatalf("%+v", cfg.Network)
+	}
+	if cfg.Auth.BootstrapKey != "sbx_canonical" || cfg.Builds.TimeoutSeconds != 30 || cfg.Docker.ReadOnlyRootfs {
+		t.Fatalf("%+v %+v %+v", cfg.Auth, cfg.Builds, cfg.Docker)
+	}
+}
+
+func TestCanonicalEnvBeatsLegacy(t *testing.T) {
+	t.Setenv("SBX_NETWORK_MODE", "none")
+	t.Setenv("SBX_NETWORK_DEFAULT_MODE", "full")
+	t.Setenv("SBX_BOOTSTRAP_KEY", "sbx_legacy")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Network.DefaultMode != "full" {
+		t.Fatalf("mode %q", cfg.Network.DefaultMode)
+	}
+	if cfg.Auth.BootstrapKey != "sbx_legacy" {
+		t.Fatalf("legacy name should still work, got %q", cfg.Auth.BootstrapKey)
+	}
+}
+
+func TestEnvOnlyUntouchedSectionsKeepDefaults(t *testing.T) {
+	t.Setenv("SBX_LIMITS_MAX_PIDS", "8192")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Default()
+	want.Limits.MaxPIDs = 8192
+	if cfg.Limits != want.Limits || cfg.Docker != want.Docker || cfg.Kata != want.Kata {
+		t.Fatalf("%+v", cfg)
+	}
+}
+
+func TestBadEnvValueFails(t *testing.T) {
+	for name, val := range map[string]string{
+		"SBX_DEFAULT_TTL_SECONDS":   "nope",
+		"SBX_LIMITS_MAX_CPU":        "lots",
+		"SBX_NETWORK_BLOCK_PRIVATE": "maybe",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, val)
+			_, err := Load("")
+			if err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("want error naming %s, got %v", name, err)
+			}
+		})
+	}
+}
+
+func TestConfigDocsListEveryEnvName(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "website", "src", "docs", "configuration.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(raw)
+	for _, key := range EnvKeys() {
+		if !strings.Contains(doc, "`"+EnvName(key)+"`") {
+			t.Errorf("configuration.md does not list %s (%s)", EnvName(key), key)
+		}
 	}
 }

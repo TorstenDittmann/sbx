@@ -8,7 +8,7 @@ Snapshot and restore are not in this build. A cold boot is what `POST /v1/sandbo
 
 - Linux with a writable `/dev/kvm`
 - the `firecracker` binary and `vmlinux` from `sbx setup firecracker --apply` (or `firecracker.bin` and `firecracker.kernel`)
-- `sbx-agent` next to `sbx`, or `SBX_AGENT_BIN`
+- `sbx-agent` next to `sbx`, or `SBX_DOCKER_AGENT_BIN`
 - Docker, so the server can export the OCI image the first time it is used
 - `mkfs.ext4` and permission to mount a loop device while the rootfs is built
 - for `network: full` and `network: allow`: root, or enough capability to create a tap and install iptables

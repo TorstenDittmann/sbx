@@ -3,9 +3,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -295,7 +297,9 @@ func Load(path string) (Config, error) {
 		}
 		file.apply(&cfg)
 	}
-	applyEnv(&cfg)
+	if err := applyEnv(&cfg); err != nil {
+		return Config{}, fmt.Errorf("environment: %w", err)
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -383,50 +387,156 @@ func (f fileConfig) apply(cfg *Config) {
 	}
 }
 
-func applyEnv(cfg *Config) {
-	envString(&cfg.Addr, "SBX_ADDR")
-	envString(&cfg.DataDir, "SBX_DATA_DIR")
-	envString(&cfg.Backend, "SBX_BACKEND")
-	envString(&cfg.LogLevel, "SBX_LOG_LEVEL")
-	envString(&cfg.Docker.Host, "SBX_DOCKER_HOST")
-	envString(&cfg.Docker.GVisorRuntime, "SBX_GVISOR_RUNTIME")
-	envBool(&cfg.Docker.ReadOnlyRootfs, "SBX_READ_ONLY_ROOTFS")
-	envInt(&cfg.Docker.SandboxUID, "SBX_SANDBOX_UID")
-	envInt(&cfg.Docker.SandboxGID, "SBX_SANDBOX_GID")
-	envString(&cfg.Docker.AgentBin, "SBX_AGENT_BIN")
-	envBool(&cfg.Docker.SandboxRoot, "SBX_SANDBOX_ROOT")
-	envString(&cfg.Kata.Runtime, "SBX_KATA_RUNTIME")
-	envString(&cfg.Kata.RuntimeType, "SBX_KATA_RUNTIME_TYPE")
-	envString(&cfg.Firecracker.Bin, "SBX_FIRECRACKER_BIN")
-	envString(&cfg.Firecracker.Kernel, "SBX_FIRECRACKER_KERNEL")
-	envString(&cfg.Firecracker.Jailer, "SBX_FIRECRACKER_JAILER")
-	envInt(&cfg.Firecracker.UID, "SBX_FIRECRACKER_UID")
-	envInt(&cfg.Firecracker.GID, "SBX_FIRECRACKER_GID")
-	envString(&cfg.Auth.BootstrapKey, "SBX_BOOTSTRAP_KEY")
-	envInt(&cfg.Limits.DefaultTTLSeconds, "SBX_DEFAULT_TTL_SECONDS")
-	envInt(&cfg.Limits.MaxTTLSeconds, "SBX_MAX_TTL_SECONDS")
-	envInt(&cfg.Limits.MaxSandboxesPerKey, "SBX_MAX_SANDBOXES_PER_KEY")
-	envInt(&cfg.Limits.MaxSandboxes, "SBX_MAX_SANDBOXES")
-	envInt(&cfg.Limits.RequestsPerMinute, "SBX_REQUESTS_PER_MINUTE")
-	envInt(&cfg.Limits.DefaultMemoryMB, "SBX_DEFAULT_MEMORY_MB")
-	envInt(&cfg.Limits.MaxUploadBytes, "SBX_MAX_UPLOAD_BYTES")
-	envString(&cfg.Network.DefaultMode, "SBX_NETWORK_MODE")
-	envBool(&cfg.Network.BlockPrivate, "SBX_BLOCK_PRIVATE")
-	envBool(&cfg.Network.BlockMetadata, "SBX_BLOCK_METADATA")
-	envCSV(&cfg.Network.PrivateAllow, "SBX_PRIVATE_ALLOW")
-	envCSV(&cfg.Network.DNS, "SBX_DNS")
-	envString(&cfg.Network.IPv6, "SBX_IPV6")
-	envCSV(&cfg.Network.EgressAllow, "SBX_EGRESS_ALLOW")
-	envCSV(&cfg.Network.EgressDeny, "SBX_EGRESS_DENY")
-	envInt(&cfg.Network.DefaultEgressKbps, "SBX_DEFAULT_EGRESS_KBPS")
-	envInt(&cfg.Network.DefaultMaxConns, "SBX_DEFAULT_MAX_CONNECTIONS")
-	envString(&cfg.Network.PreviewDomain, "SBX_PREVIEW_DOMAIN")
-	envString(&cfg.Network.PublicURL, "SBX_PUBLIC_URL")
-	envBool(&cfg.Network.AllowPublicPreviews, "SBX_ALLOW_PUBLIC_PREVIEWS")
-	envBool(&cfg.Network.TrustForwardedHost, "SBX_TRUST_FORWARDED_HOST")
-	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
-	envBool(&cfg.Builds.AllowSandboxKeys, "SBX_BUILDS_ALLOW_SANDBOX_KEYS")
-	envInt(&cfg.Builds.TimeoutSeconds, "SBX_BUILD_TIMEOUT_SECONDS")
+// legacyEnv maps the flat variable names from earlier releases to the
+// canonical SBX_<SECTION>_<KEY> names. The canonical name wins when both are
+// set.
+var legacyEnv = map[string]string{
+	"SBX_GVISOR_RUNTIME":          "SBX_DOCKER_GVISOR_RUNTIME",
+	"SBX_READ_ONLY_ROOTFS":        "SBX_DOCKER_READ_ONLY_ROOTFS",
+	"SBX_SANDBOX_UID":             "SBX_DOCKER_SANDBOX_UID",
+	"SBX_SANDBOX_GID":             "SBX_DOCKER_SANDBOX_GID",
+	"SBX_AGENT_BIN":               "SBX_DOCKER_AGENT_BIN",
+	"SBX_SANDBOX_ROOT":            "SBX_DOCKER_SANDBOX_ROOT",
+	"SBX_BOOTSTRAP_KEY":           "SBX_AUTH_BOOTSTRAP_KEY",
+	"SBX_DEFAULT_TTL_SECONDS":     "SBX_LIMITS_DEFAULT_TTL_SECONDS",
+	"SBX_MAX_TTL_SECONDS":         "SBX_LIMITS_MAX_TTL_SECONDS",
+	"SBX_MAX_SANDBOXES_PER_KEY":   "SBX_LIMITS_MAX_SANDBOXES_PER_KEY",
+	"SBX_MAX_SANDBOXES":           "SBX_LIMITS_MAX_SANDBOXES",
+	"SBX_REQUESTS_PER_MINUTE":     "SBX_LIMITS_REQUESTS_PER_MINUTE",
+	"SBX_DEFAULT_MEMORY_MB":       "SBX_LIMITS_DEFAULT_MEMORY_MB",
+	"SBX_MAX_UPLOAD_BYTES":        "SBX_LIMITS_MAX_UPLOAD_BYTES",
+	"SBX_NETWORK_MODE":            "SBX_NETWORK_DEFAULT_MODE",
+	"SBX_BLOCK_PRIVATE":           "SBX_NETWORK_BLOCK_PRIVATE",
+	"SBX_BLOCK_METADATA":          "SBX_NETWORK_BLOCK_METADATA",
+	"SBX_PRIVATE_ALLOW":           "SBX_NETWORK_PRIVATE_ALLOW",
+	"SBX_DNS":                     "SBX_NETWORK_DNS",
+	"SBX_IPV6":                    "SBX_NETWORK_IPV6",
+	"SBX_EGRESS_ALLOW":            "SBX_NETWORK_EGRESS_ALLOW",
+	"SBX_EGRESS_DENY":             "SBX_NETWORK_EGRESS_DENY",
+	"SBX_DEFAULT_EGRESS_KBPS":     "SBX_NETWORK_DEFAULT_EGRESS_KBPS",
+	"SBX_DEFAULT_MAX_CONNECTIONS": "SBX_NETWORK_DEFAULT_MAX_CONNECTIONS",
+	"SBX_PREVIEW_DOMAIN":          "SBX_NETWORK_PREVIEW_DOMAIN",
+	"SBX_PUBLIC_URL":              "SBX_NETWORK_PUBLIC_URL",
+	"SBX_ALLOW_PUBLIC_PREVIEWS":   "SBX_NETWORK_ALLOW_PUBLIC_PREVIEWS",
+	"SBX_TRUST_FORWARDED_HOST":    "SBX_NETWORK_TRUST_FORWARDED_HOST",
+	"SBX_PREVIEW_MAX_STREAMS":     "SBX_NETWORK_PREVIEW_MAX_STREAMS",
+	"SBX_BUILD_TIMEOUT_SECONDS":   "SBX_BUILDS_TIMEOUT_SECONDS",
+}
+
+// EnvName is the variable for a YAML key path such as "limits.max_cpu":
+// SBX_ followed by the upper-cased path with dots replaced by underscores.
+func EnvName(key string) string {
+	return "SBX_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+}
+
+// EnvKeys lists every YAML key path, in file order, that an environment
+// variable can set.
+func EnvKeys() []string {
+	var keys []string
+	walkFile(reflect.ValueOf(&fileConfig{}).Elem(), "", func(key string, _ reflect.Value) {
+		keys = append(keys, key)
+	})
+	return keys
+}
+
+// applyEnv sets every file key from its SBX_ variable. Empty variables are
+// ignored. A value that does not parse is an error.
+func applyEnv(cfg *Config) error {
+	aliases := make(map[string][]string, len(legacyEnv))
+	for old, canonical := range legacyEnv {
+		aliases[canonical] = append(aliases[canonical], old)
+	}
+	var file fileConfig
+	var errs []error
+	walkFile(reflect.ValueOf(&file).Elem(), "", func(key string, field reflect.Value) {
+		name := EnvName(key)
+		raw, ok := os.LookupEnv(name)
+		if !ok || raw == "" {
+			for _, old := range aliases[name] {
+				if v, found := os.LookupEnv(old); found && v != "" {
+					name, raw, ok = old, v, true
+					break
+				}
+			}
+		}
+		if !ok || raw == "" {
+			return
+		}
+		if err := setEnvField(field, raw); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	})
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	file.apply(cfg)
+	return nil
+}
+
+// walkFile visits each leaf of a fileConfig, allocating section structs on
+// the way so the visitor can set fields in place.
+func walkFile(v reflect.Value, prefix string, visit func(key string, field reflect.Value)) {
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		tag := strings.Split(t.Field(i).Tag.Get("yaml"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+		key := tag
+		if prefix != "" {
+			key = prefix + "." + tag
+		}
+		field := v.Field(i)
+		if field.Kind() == reflect.Pointer && field.Type().Elem().Kind() == reflect.Struct {
+			if field.IsNil() {
+				field.Set(reflect.New(field.Type().Elem()))
+			}
+			walkFile(field.Elem(), key, visit)
+			continue
+		}
+		visit(key, field)
+	}
+}
+
+func setEnvField(field reflect.Value, raw string) error {
+	if field.Kind() == reflect.Slice {
+		parts := strings.Split(raw, ",")
+		out := make([]string, 0, len(parts))
+		for _, p := range parts {
+			if p = strings.TrimSpace(p); p != "" {
+				out = append(out, p)
+			}
+		}
+		field.Set(reflect.ValueOf(out))
+		return nil
+	}
+	val := reflect.New(field.Type().Elem())
+	switch val.Elem().Kind() {
+	case reflect.String:
+		val.Elem().SetString(raw)
+	case reflect.Int:
+		n, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("%q is not an integer", raw)
+		}
+		val.Elem().SetInt(int64(n))
+	case reflect.Float64:
+		f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil {
+			return fmt.Errorf("%q is not a number", raw)
+		}
+		val.Elem().SetFloat(f)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("%q is not a boolean", raw)
+		}
+		val.Elem().SetBool(b)
+	default:
+		return fmt.Errorf("unsupported type %s", field.Type())
+	}
+	field.Set(val)
+	return nil
 }
 
 // Validate checks the resolved configuration.
@@ -587,50 +697,4 @@ func setBool(dst *bool, src *bool) {
 	if src != nil {
 		*dst = *src
 	}
-}
-
-func envString(dst *string, key string) {
-	if v, ok := os.LookupEnv(key); ok && v != "" {
-		*dst = v
-	}
-}
-
-func envInt(dst *int, key string) {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return
-	}
-	*dst = n
-}
-
-func envCSV(dst *[]string, key string) {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return
-	}
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	*dst = out
-}
-
-func envBool(dst *bool, key string) {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return
-	}
-	*dst = b
 }

@@ -45,10 +45,10 @@ Usage:
   sbx version
 
 Environment (overrides the config file):
-  SBX_ADDR SBX_DATA_DIR SBX_BACKEND SBX_DOCKER_HOST SBX_BOOTSTRAP_KEY
-  SBX_GVISOR_RUNTIME SBX_READ_ONLY_ROOTFS SBX_SANDBOX_ROOT SBX_LOG_LEVEL
-  SBX_CONFIG SBX_AGENT_BIN SBX_NETWORK_MODE SBX_DNS SBX_IPV6
-  SBX_PREVIEW_DOMAIN SBX_PUBLIC_URL
+  SBX_CONFIG is the config file path. Every config key also has a variable:
+  SBX_ plus the key path upper-cased, dots as underscores. Lists are
+  comma-separated. Examples: SBX_ADDR SBX_DATA_DIR SBX_DOCKER_HOST
+  SBX_LIMITS_MAX_CPU SBX_NETWORK_DEFAULT_MODE SBX_NETWORK_DNS=1.1.1.1,8.8.8.8
 `
 
 // Run executes a command. args is os.Args[1:].

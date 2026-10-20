@@ -80,7 +80,7 @@ gVisor has syscall-compat gaps. That tradeoff is why it stays optional.
 
 ## 5. HTTP API
 
-Authenticate with `Authorization: Bearer sbx_<key>`. Keys are stored as sha256. Scopes are `admin` (implies everything) and `sandbox`. A sandbox key only sees sandboxes it created; other ids are 404. The first boot of an empty data directory generates an admin key, logs `SBX_API_KEY` once, and writes `$data_dir/initial_api_key` mode 0600. `SBX_BOOTSTRAP_KEY` pins that first key instead.
+Authenticate with `Authorization: Bearer sbx_<key>`. Keys are stored as sha256. Scopes are `admin` (implies everything) and `sandbox`. A sandbox key only sees sandboxes it created; other ids are 404. The first boot of an empty data directory generates an admin key, logs `SBX_API_KEY` once, and writes `$data_dir/initial_api_key` mode 0600. `SBX_AUTH_BOOTSTRAP_KEY` pins that first key instead.
 
 ```
 POST   /v1/sandboxes
@@ -178,7 +178,7 @@ Inside that container the listen address has to be `:8080`. Binding only `127.0.
 
 `sbx doctor` checks the socket and warns when `runsc` is missing. `sbx keys create --name NAME` mints another key, `sbx keys list` shows them, and `sbx keys revoke --id ID` revokes one. `sbx healthcheck` hits `/healthz`, mapping `:8080` and `0.0.0.0` to `127.0.0.1`.
 
-Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_KATA_RUNTIME`, `SBX_FIRECRACKER_BIN`, `SBX_FIRECRACKER_KERNEL`, `SBX_FIRECRACKER_JAILER`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
+Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_DOCKER_GVISOR_RUNTIME`, `SBX_KATA_RUNTIME`, `SBX_FIRECRACKER_BIN`, `SBX_FIRECRACKER_KERNEL`, `SBX_FIRECRACKER_JAILER`, `SBX_DOCKER_READ_ONLY_ROOTFS`, `SBX_AUTH_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_DOCKER_AGENT_BIN`.
 
 Startup lists containers, adopts ones that still match a sandbox row, marks missing ones stopped with error `lost`, and deletes containers that have no live row. `/readyz` is 503 until that pass finishes. `/healthz` only checks that the process and Docker answer. `max_sandboxes` caps the node. `requests_per_minute` caps each API key. Request bodies larger than `max_upload_bytes` are rejected.
 

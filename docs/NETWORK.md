@@ -69,7 +69,7 @@ A preview is reachable when it is `public` (and `allow_public_previews` is still
 
 The first request that carries `?token=` gets an HttpOnly `sbx_preview` cookie scoped to that preview and, for GET and HEAD, a redirect to the same URL without the token, so the page's scripts, styles, and XHRs are authorized too. Host previews (`preview_domain`) forward the browser's own cookies to the app, minus `sbx_preview`. Path previews (`/p/...`) drop all cookies, because every sandbox shares the server's origin there and one sandbox could read another's cookies. Use `preview_domain` for apps that need sessions or that you do not trust.
 
-`X-Forwarded-Host` is ignored when picking a preview host unless `network.trust_forwarded_host` (`SBX_TRUST_FORWARDED_HOST`) is true. Turn it on only behind a proxy that sets that header. The proxies in this document pass `Host`, which needs no setting.
+`X-Forwarded-Host` is ignored when picking a preview host unless `network.trust_forwarded_host` (`SBX_NETWORK_TRUST_FORWARDED_HOST`) is true. Turn it on only behind a proxy that sets that header. The proxies in this document pass `Host`, which needs no setting.
 
 The server does not speak HTTP/2 to the sandbox. Terminate TLS and HTTP/2 at the proxy and use HTTP/1.1 upstream so `Upgrade: websocket` still works. The proxy must pass `Host` and `Upgrade`.
 
@@ -111,10 +111,10 @@ http:
           - url: http://sbx:8080
 ```
 
-Dokploy puts Traefik in front of the service. Add the API domain and a wildcard domain for `*.sbx.example.com`, both targeting container port 8080. Set `SBX_ADDR=:8080`, `SBX_NETWORK_MODE=full`, `SBX_PREVIEW_DOMAIN=sbx.example.com`, and `SBX_PUBLIC_URL=https://api.example.com`. The same compose file already mounts the Docker socket, which the firewall helper needs when the server is not root.
+Dokploy puts Traefik in front of the service. Add the API domain and a wildcard domain for `*.sbx.example.com`, both targeting container port 8080. Set `SBX_ADDR=:8080`, `SBX_NETWORK_DEFAULT_MODE=full`, `SBX_NETWORK_PREVIEW_DOMAIN=sbx.example.com`, and `SBX_NETWORK_PUBLIC_URL=https://api.example.com`. The same compose file already mounts the Docker socket, which the firewall helper needs when the server is not root.
 
 Copies of these snippets live in `deploy/proxy/`.
 
 ## Environment
 
-`SBX_NETWORK_MODE`, `SBX_BLOCK_PRIVATE`, `SBX_BLOCK_METADATA`, `SBX_PRIVATE_ALLOW`, `SBX_DNS`, `SBX_IPV6`, `SBX_EGRESS_ALLOW`, `SBX_EGRESS_DENY`, `SBX_DEFAULT_EGRESS_KBPS`, `SBX_DEFAULT_MAX_CONNECTIONS`, `SBX_PREVIEW_DOMAIN`, `SBX_PUBLIC_URL`, `SBX_ALLOW_PUBLIC_PREVIEWS`, `SBX_PREVIEW_MAX_STREAMS`, `SBX_SANDBOX_ROOT`. Lists are comma-separated.
+`SBX_NETWORK_DEFAULT_MODE`, `SBX_NETWORK_BLOCK_PRIVATE`, `SBX_NETWORK_BLOCK_METADATA`, `SBX_NETWORK_PRIVATE_ALLOW`, `SBX_NETWORK_DNS`, `SBX_NETWORK_IPV6`, `SBX_NETWORK_EGRESS_ALLOW`, `SBX_NETWORK_EGRESS_DENY`, `SBX_NETWORK_DEFAULT_EGRESS_KBPS`, `SBX_NETWORK_DEFAULT_MAX_CONNECTIONS`, `SBX_NETWORK_PREVIEW_DOMAIN`, `SBX_NETWORK_PUBLIC_URL`, `SBX_NETWORK_ALLOW_PUBLIC_PREVIEWS`, `SBX_NETWORK_PREVIEW_MAX_STREAMS`, `SBX_DOCKER_SANDBOX_ROOT`. Lists are comma-separated.

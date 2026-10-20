@@ -81,7 +81,7 @@ network:
 
 ### `X-Forwarded-Host`
 
-sbx picks the preview from the `Host` header. It ignores `X-Forwarded-Host` unless `network.trust_forwarded_host` (`SBX_TRUST_FORWARDED_HOST`) is `true`. Turn that on only behind a proxy that sets or strips the header, otherwise any client could pick a preview host by sending it. The Caddy and Traefik configs in these docs pass `Host` and need no setting.
+sbx picks the preview from the `Host` header. It ignores `X-Forwarded-Host` unless `network.trust_forwarded_host` (`SBX_NETWORK_TRUST_FORWARDED_HOST`) is `true`. Turn that on only behind a proxy that sets or strips the header, otherwise any client could pick a preview host by sending it. The Caddy and Traefik configs in these docs pass `Host` and need no setting.
 
 ## Limits
 

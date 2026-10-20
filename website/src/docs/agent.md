@@ -18,7 +18,7 @@ go build -o sbx ./cmd/sbx
 go build -o sbx-agent ./cmd/sbx-agent
 ```
 
-The server looks for the binary in `docker.agent_bin`, then `SBX_AGENT_BIN`, then `--agent-bin`, then next to the `sbx` executable. The container image sets `SBX_AGENT_BIN=/usr/local/bin/sbx-agent`.
+The server looks for the binary in `docker.agent_bin`, then `SBX_DOCKER_AGENT_BIN`, then `--agent-bin`, then next to the `sbx` executable. The container image sets the older name `SBX_AGENT_BIN=/usr/local/bin/sbx-agent`, so either name set at run time overrides it.
 
 ## How it gets in
 

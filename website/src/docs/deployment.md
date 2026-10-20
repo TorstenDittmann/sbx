@@ -14,9 +14,9 @@ services:
     environment:
       SBX_ADDR: ":8080"
       SBX_DATA_DIR: /data
-      # SBX_NETWORK_MODE: full
-      # SBX_PREVIEW_DOMAIN: sbx.example.com
-      # SBX_PUBLIC_URL: https://api.example.com
+      # SBX_NETWORK_DEFAULT_MODE: full
+      # SBX_NETWORK_PREVIEW_DOMAIN: sbx.example.com
+      # SBX_NETWORK_PUBLIC_URL: https://api.example.com
     volumes:
       - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -102,7 +102,7 @@ http:
 
 ### Dokploy
 
-Dokploy puts Traefik in front of the service. Add the API domain and a wildcard domain for `*.sbx.example.com`, both targeting container port 8080. Set `SBX_ADDR=:8080`, `SBX_NETWORK_MODE=full` if sandboxes need the internet, `SBX_PREVIEW_DOMAIN=sbx.example.com`, and `SBX_PUBLIC_URL=https://api.example.com`. Mount the Docker socket as in the compose file above.
+Dokploy puts Traefik in front of the service. Add the API domain and a wildcard domain for `*.sbx.example.com`, both targeting container port 8080. Set `SBX_ADDR=:8080`, `SBX_NETWORK_DEFAULT_MODE=full` if sandboxes need the internet, `SBX_NETWORK_PREVIEW_DOMAIN=sbx.example.com`, and `SBX_NETWORK_PUBLIC_URL=https://api.example.com`. Mount the Docker socket as in the compose file above.
 
 Copies of these configs are in [`deploy/proxy/`](https://github.com/TorstenDittmann/sbx/tree/main/deploy/proxy).
 

@@ -12,7 +12,7 @@ Keys start with `sbx_`. The server stores a hash and a short prefix, never the k
 
 ## The first key
 
-The first boot of a data directory generates an admin key, prints it once, and writes it to `data/initial_api_key` with mode `0600`. To choose that key yourself, set `auth.bootstrap_key` or `SBX_BOOTSTRAP_KEY` (or `--bootstrap-key`) before the first boot. It is only used when the database has no keys yet.
+The first boot of a data directory generates an admin key, prints it once, and writes it to `data/initial_api_key` with mode `0600`. To choose that key yourself, set `auth.bootstrap_key` or `SBX_AUTH_BOOTSTRAP_KEY` (or `--bootstrap-key`) before the first boot. It is only used when the database has no keys yet.
 
 ## Scopes
 

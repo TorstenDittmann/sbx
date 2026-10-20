@@ -41,7 +41,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/torstendittmann/sbx:latest
 ```
 
-The image is `linux/amd64` and `linux/arm64`. It listens on `:8080` (`SBX_ADDR`) and stores its data in `/data`. `sbx-agent` is at `/usr/local/bin/sbx-agent`, and the entrypoint exports `SBX_AGENT_BIN` when that file is present. The first boot prints an admin key.
+The image is `linux/amd64` and `linux/arm64`. It listens on `:8080` (`SBX_ADDR`) and stores its data in `/data`. `sbx-agent` is at `/usr/local/bin/sbx-agent`, and the entrypoint exports `SBX_AGENT_BIN` (the older name for `SBX_DOCKER_AGENT_BIN`) when that file is present. The first boot prints an admin key.
 
 Tags:
 

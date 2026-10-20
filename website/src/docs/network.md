@@ -87,4 +87,4 @@ Usually the better option is to install packages once with [build steps](/docs/t
 
 ## Environment variables
 
-`SBX_NETWORK_MODE`, `SBX_BLOCK_PRIVATE`, `SBX_BLOCK_METADATA`, `SBX_PRIVATE_ALLOW`, `SBX_DNS`, `SBX_IPV6`, `SBX_EGRESS_ALLOW`, `SBX_EGRESS_DENY`, `SBX_DEFAULT_EGRESS_KBPS`, and `SBX_DEFAULT_MAX_CONNECTIONS`. Lists are comma-separated. The full list is on the [configuration](/docs/configuration/#network) page.
+`SBX_NETWORK_DEFAULT_MODE`, `SBX_NETWORK_BLOCK_PRIVATE`, `SBX_NETWORK_BLOCK_METADATA`, `SBX_NETWORK_PRIVATE_ALLOW`, `SBX_NETWORK_DNS`, `SBX_NETWORK_IPV6`, `SBX_NETWORK_EGRESS_ALLOW`, `SBX_NETWORK_EGRESS_DENY`, `SBX_NETWORK_DEFAULT_EGRESS_KBPS`, and `SBX_NETWORK_DEFAULT_MAX_CONNECTIONS`. Lists are comma-separated. The full list is on the [configuration](/docs/configuration/#network) page.
