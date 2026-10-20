@@ -25,6 +25,13 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 	_ = os.Remove(guestPath)
 	var guestLn net.Listener
 	if ln, err := net.Listen("unix", guestPath); err == nil {
+		// The jailer runs Firecracker as an unprivileged uid. It connect(2)s
+		// to this socket from inside the chroot, which requires write permission.
+		if err := prepareGuestSocket(guestPath, d.opt.UID, d.opt.GID, d.opt.Jailer != ""); err != nil {
+			_ = ln.Close()
+			_ = os.Remove(guestPath)
+			return nil, err
+		}
 		guestLn = ln
 		defer func() {
 			_ = ln.Close()
@@ -78,6 +85,18 @@ func (d *Driver) dialAgent(ctx context.Context, vm *vm) (*agent.Client, error) {
 		case <-timer.C:
 		}
 	}
+}
+
+// prepareGuestSocket lets the jailer uid connect to the guest-initiated socket.
+// Without a jailer, Firecracker is this process, so a failed chown is harmless.
+func prepareGuestSocket(path string, uid, gid int, jail bool) error {
+	if err := os.Chmod(path, 0o660); err != nil {
+		return fmt.Errorf("guest vsock socket mode: %w", err)
+	}
+	if err := os.Chown(path, uid, gid); err != nil && jail {
+		return fmt.Errorf("guest vsock socket owner: %w", err)
+	}
+	return nil
 }
 
 func handshakeAgent(ctx context.Context, conn net.Conn, token string) (*agent.Client, error) {

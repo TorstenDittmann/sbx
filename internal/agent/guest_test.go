@@ -83,12 +83,27 @@ func TestGuestConfigAndMessages(t *testing.T) {
 	}
 	_ = ln.Close()
 	reapZombies()
+	if err := exerciseVsockConn(); err != nil {
+		t.Fatal(err)
+	}
 	if conn, err := dialHostVsock(1); err == nil {
 		_ = conn.Close()
+		t.Fatal("dialHostVsock(1) succeeded; expected an error with nothing listening")
+	} else if err.Error() == "" {
+		t.Fatal("dialHostVsock(1) returned an empty error")
 	}
-	dialCtx, dialCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer dialCancel()
-	dialHostUntil(dialCtx, 1, "tok")
+	cancelled, cancelDial := context.WithCancel(context.Background())
+	cancelDial()
+	stopped := make(chan struct{})
+	go func() {
+		dialHostUntil(cancelled, 1, "tok")
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("dialHostUntil ignored a cancelled context")
+	}
 	if err := preparePID1(); err != nil {
 		t.Fatal(err)
 	}

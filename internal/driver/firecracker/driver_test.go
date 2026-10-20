@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -619,3 +620,41 @@ type stitch struct {
 }
 
 func (s *stitch) Read(p []byte) (int, error) { return s.r.Read(p) }
+
+func TestPrepareGuestSocket(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vsock.sock_52")
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err := prepareGuestSocket(path, os.Getuid(), os.Getgid(), false); err != nil {
+		t.Fatal(err)
+	}
+	assertSocketOwner(t, path, os.Getuid(), os.Getgid())
+	if err := prepareGuestSocket(path, os.Getuid(), os.Getgid(), true); err != nil {
+		t.Fatal(err)
+	}
+	assertSocketOwner(t, path, os.Getuid(), os.Getgid())
+	if os.Geteuid() != 0 {
+		if err := prepareGuestSocket(path, 1, 1, true); err == nil {
+			t.Fatal("expected chown to fail for the jailer uid")
+		}
+	}
+}
+
+func assertSocketOwner(t *testing.T, path string, uid, gid int) {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o660 {
+		t.Fatalf("mode %o", st.Mode().Perm())
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || int(sys.Uid) != uid || int(sys.Gid) != gid {
+		t.Fatalf("owner uid=%d gid=%d stat=%+v", uid, gid, st.Sys())
+	}
+}
