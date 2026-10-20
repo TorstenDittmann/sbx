@@ -211,3 +211,84 @@ func gzipReader(t *testing.T, gz []byte) io.Reader {
 	t.Cleanup(func() { r.Close() })
 	return r
 }
+
+// Standard tar writers pad the archive with zeros to a full record after the
+// end-of-archive marker. The agent must accept that padding instead of
+// closing the stream early and failing the upload.
+func TestArchiveTrailingRecordPadding(t *testing.T) {
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	raw := tarBytes(t,
+		&tar.Header{Name: "a/f", Mode: 0o644, Size: 3, ModTime: time.Unix(10, 0)},
+		[]byte("hi\n"),
+	)
+	// 10240 is the default record size; 65536 (blocking factor 128) spans
+	// several data frames.
+	for _, record := range []int{10240, 65536} {
+		dir := t.TempDir()
+		if err := c.ExtractArchive(ctx, dir, bytes.NewReader(padRecord(raw, record)), 1<<20); err != nil {
+			t.Fatalf("record %d: %v", record, err)
+		}
+		body, err := os.ReadFile(filepath.Join(dir, "a", "f"))
+		if err != nil || string(body) != "hi\n" {
+			t.Fatalf("record %d: %q %v", record, body, err)
+		}
+	}
+
+	junk := append(append([]byte(nil), raw...), make([]byte, maxArchiveTrailer+1)...)
+	if err := extractTar(t.TempDir(), bytes.NewReader(junk), 1<<20); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatal(err)
+	}
+}
+
+// git archive writes a pax global header holding the commit id before the
+// first entry.
+func TestArchiveGitPaxGlobalHeader(t *testing.T) {
+	c, cleanup := startAgent(t, "tok")
+	defer cleanup()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name:       "pax_global_header",
+		Typeflag:   tar.TypeXGlobalHeader,
+		PAXRecords: map[string]string{"comment": "cb5479736c2f9ad5b6b0e6a6b1f1f5c3d2e1a0b9"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{Name: "src/", Typeflag: tar.TypeDir, Mode: 0o775, ModTime: time.Unix(10, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("package main\n")
+	if err := tw.WriteHeader(&tar.Header{Name: "src/main.go", Mode: 0o664, Size: int64(len(body)), ModTime: time.Unix(10, 0)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := c.ExtractArchive(ctx, dir, bytes.NewReader(padRecord(buf.Bytes(), 10240)), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "src", "main.go"))
+	if err != nil || string(got) != string(body) {
+		t.Fatalf("%q %v", got, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "pax_global_header")); !os.IsNotExist(err) {
+		t.Fatalf("global header was extracted: %v", err)
+	}
+}
+
+func padRecord(raw []byte, record int) []byte {
+	n := (len(raw) + record - 1) / record * record
+	return append(append([]byte(nil), raw...), make([]byte, n-len(raw))...)
+}
