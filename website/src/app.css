@@ -298,3 +298,240 @@ pre {
 	border-top: 1px solid var(--line);
 	margin: 40px 0;
 }
+
+/* Landing page illustrations. Inline SVGs share these classes so they follow the theme. */
+:root {
+	--edge: #cfd4d5;
+	--warn: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--edge: #33393a;
+		--warn: #f07a6e;
+	}
+}
+
+.ill {
+	display: block;
+	width: 100%;
+	height: auto;
+	font-family: var(--mono);
+	font-size: 12px;
+	overflow: visible;
+}
+
+.ill text {
+	fill: var(--fg);
+}
+
+.ill .dim {
+	fill: var(--dim);
+}
+
+.ill .small {
+	font-size: 10.5px;
+}
+
+.ill .t-accent {
+	fill: var(--accent);
+}
+
+.ill .t-warn {
+	fill: var(--warn);
+}
+
+.ill .box {
+	fill: var(--bg);
+	stroke: var(--edge);
+}
+
+.ill .soft {
+	fill: var(--code);
+	stroke: var(--line);
+}
+
+.ill .tint {
+	fill: color-mix(in srgb, var(--accent) 7%, var(--bg));
+	stroke: color-mix(in srgb, var(--accent) 55%, var(--bg));
+}
+
+.ill .ghost {
+	fill: none;
+	stroke: var(--edge);
+	stroke-dasharray: 4 4;
+}
+
+.ill .fill-accent {
+	fill: var(--accent);
+}
+
+.ill .fill-line {
+	fill: var(--line);
+}
+
+.ill .wire {
+	fill: none;
+	stroke: var(--dim);
+	stroke-width: 1.25;
+}
+
+.ill .wire.blocked {
+	stroke: var(--warn);
+	stroke-dasharray: 3 4;
+	opacity: 0.6;
+}
+
+.ill .wire.faint {
+	stroke-dasharray: 3 4;
+	opacity: 0.6;
+}
+
+.ill .head {
+	fill: var(--dim);
+}
+
+.ill .ok {
+	fill: var(--bg);
+	stroke: var(--accent);
+	stroke-width: 1.25;
+}
+
+.ill .ok-mark {
+	fill: none;
+	stroke: var(--accent);
+	stroke-width: 1.5;
+	stroke-linecap: round;
+	stroke-linejoin: round;
+}
+
+.ill .no {
+	fill: var(--bg);
+	stroke: var(--warn);
+	stroke-width: 1.25;
+}
+
+.ill .no-mark {
+	fill: none;
+	stroke: var(--warn);
+	stroke-width: 1.5;
+	stroke-linecap: round;
+}
+
+.ill .packet {
+	fill: var(--accent);
+}
+
+.ill .packet.warn {
+	fill: var(--warn);
+}
+
+.ill .hit,
+.ill .pulse,
+.ill .drain {
+	transform-box: fill-box;
+	transform-origin: center;
+}
+
+/* A blocked packet lands on the cross, which flinches. */
+.ill .hit {
+	animation: ill-hit 4s ease-out infinite;
+}
+
+@keyframes ill-hit {
+	0%,
+	12%,
+	100% {
+		transform: scale(1);
+	}
+	4% {
+		transform: scale(1.3);
+	}
+}
+
+.ill .pulse {
+	animation: ill-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ill-pulse {
+	50% {
+		opacity: 0.35;
+		transform: scale(0.75);
+	}
+}
+
+/* The TTL runs down and starts over. */
+.ill .drain {
+	transform-origin: left;
+	animation: ill-drain 8s linear infinite;
+}
+
+@keyframes ill-drain {
+	from {
+		transform: scaleX(1);
+	}
+	to {
+		transform: scaleX(0);
+	}
+}
+
+.ill .blink {
+	animation: ill-blink 1.1s steps(1) infinite;
+}
+
+@keyframes ill-blink {
+	50% {
+		opacity: 0;
+	}
+}
+
+/* The browser fills in once the request reaches the app. */
+.ill .load {
+	animation: ill-load 4s ease-out infinite;
+}
+
+@keyframes ill-load {
+	0%,
+	50% {
+		opacity: 0.25;
+	}
+	62%,
+	92% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0.25;
+	}
+}
+
+/* A backend column lights up when a request reaches it. */
+.ill .glow {
+	opacity: 0;
+	animation: ill-glow 4s ease-out infinite;
+}
+
+@keyframes ill-glow {
+	0%,
+	22%,
+	100% {
+		opacity: 0;
+	}
+	4% {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.ill .packet {
+		display: none;
+	}
+
+	.ill *,
+	.flow * {
+		animation: none !important;
+	}
+
+	.ill .load {
+		opacity: 1;
+	}
+}

@@ -1,52 +1,71 @@
 <script lang="ts">
 	import Seo from "../lib/components/Seo.svelte";
+	import Sandbox from "../lib/components/illustrations/Sandbox.svelte";
+	import Templates from "../lib/components/illustrations/Templates.svelte";
+	import Previews from "../lib/components/illustrations/Previews.svelte";
+	import Backends from "../lib/components/illustrations/Backends.svelte";
+	import Volumes from "../lib/components/illustrations/Volumes.svelte";
+	import Network from "../lib/components/illustrations/Network.svelte";
 
 	let { data } = $props();
 
-	const backends = [
+	const concepts = [
 		{
-			name: "docker",
-			isolation: "Namespaces and cgroups.",
-			host: "Docker",
+			title: "Closed by default",
+			text: "A sandbox starts with no network, no Linux capabilities, uid 1000, a read-only root filesystem, and a TTL the server enforces.",
+			href: "/docs/sandboxes/",
+			link: "Sandboxes",
+			art: Sandbox,
 		},
 		{
-			name: "gvisor",
-			isolation: "The Docker driver with runsc. A user-space kernel, no KVM.",
-			host: "Docker with runsc",
+			title: "Templates with warm pools",
+			text: "Bake dependencies into a template with cached build steps, and keep a few sandboxes warm so create returns one right away.",
+			href: "/docs/templates/",
+			link: "Templates and builds",
+			art: Templates,
 		},
 		{
-			name: "kata",
-			isolation: "The Docker driver with the Kata runtime class. Same image and network policy.",
-			host: "Kata and /dev/kvm",
+			title: "Previews for what runs inside",
+			text: "Publish a port as a URL, public or behind a token. The proxy reaches it through the agent, so it works without network.",
+			href: "/docs/previews/",
+			link: "Previews",
+			art: Previews,
 		},
 		{
-			name: "firecracker",
-			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock.",
-			host: "/dev/kvm, a kernel, and sbx-agent",
+			title: "One API, four backends",
+			text: "Start on Docker. Move to gVisor, Kata, or Firecracker microVMs for stronger isolation without changing a call.",
+			href: "/docs/backends/",
+			link: "Backends",
+			art: Backends,
 		},
 		{
-			name: "kubernetes",
-			isolation: "No driver.",
-			host: "—",
+			title: "Network you opt into",
+			text: "Choose none, full, or an allow list. Cloud metadata and private ranges stay blocked either way.",
+			href: "/docs/network/",
+			link: "Network",
+			art: Network,
+		},
+		{
+			title: "Volumes that outlive a sandbox",
+			text: "Mount a named volume at /workspace and pick up where the last sandbox stopped.",
+			href: "/docs/volumes/",
+			link: "Volumes",
+			art: Volumes,
 		},
 	];
 
-	const routes = [
-		{ method: "POST", path: "/v1/sandboxes", detail: "create" },
-		{ method: "GET", path: "/v1/sandboxes", detail: "status, backend, template, label, and q" },
-		{ method: "POST", path: "/v1/sandboxes/{id}/exec", detail: "wait, or SSE with ?stream=1" },
-		{ method: "POST", path: "/v1/sandboxes/{id}/processes", detail: "background command" },
-		{ method: "POST", path: "/v1/sandboxes/{id}/terminals", detail: "PTY, then a WebSocket" },
-		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "inotify, or a poll every 200 ms" },
-		{ method: "POST", path: "/v1/sandboxes/{id}/files/archive", detail: "extract a tar or gzip tar" },
-		{ method: "GET", path: "/v1/sandboxes/{id}/files/archive", detail: "download a gzip tar" },
-		{ method: "PUT", path: "/v1/sandboxes/{id}/secrets", detail: "replace secrets; values stay off the response" },
-		{ method: "POST", path: "/v1/sandboxes/{id}/previews", detail: "a port on the sandbox loopback" },
-		{ method: "POST", path: "/v1/volumes", detail: "a Docker volume on Docker, gVisor, or Kata" },
-		{ method: "GET", path: "/v1/backends", detail: "which backends this host can run" },
-		{ method: "GET", path: "/readyz", detail: "503 until startup reconcile finishes" },
-		{ method: "GET", path: "/healthz", detail: "liveness; pings the configured backend" },
-		{ method: "GET", path: "/openapi.yaml", detail: "the contract" },
+	const steps = [
+		"Your code calls the API with a key, through the SDK or plain HTTP.",
+		"sbx checks the key's quota and network policy, then starts a sandbox from an image or template.",
+		"Exec, files, terminals, and previews go through sbx-agent inside the sandbox.",
+		"When the TTL runs out, the reaper deletes the sandbox.",
+	];
+
+	const next = [
+		{ href: "/docs/quickstart/", title: "Quickstart", text: "Start the server and run your first command." },
+		{ href: "/docs/installation/", title: "Installation", text: "Release binaries, the container image, and the npm package." },
+		{ href: "/docs/sdk/", title: "TypeScript SDK", text: "The client for Node and Bun." },
+		{ href: "/docs/api/", title: "HTTP API", text: "Every route, its body, and its errors." },
 	];
 </script>
 
@@ -65,122 +84,103 @@
 	<div class="code">{@html data.sdk}</div>
 </section>
 
-<section class="container">
-	<div class="features">
-		<div>
-			<h2>One binary</h2>
-			<p>A Go process, a SQLite file, and the Docker socket.</p>
-		</div>
-		<div>
-			<h2>Closed by default</h2>
-			<p>No network, no capabilities, uid 1000, a read-only rootfs, and a server-side TTL.</p>
-		</div>
-		<div>
-			<h2>Agent inside</h2>
-			<p>Streaming exec, a PTY, inotify watches, archives, and preview ports.</p>
-		</div>
-		<div>
-			<h2>Opt-in network</h2>
-			<p><code>none</code>, <code>full</code>, or an allow list. Public preview hosts when a domain is set.</p>
-		</div>
-		<div>
-			<h2>Kept across sandboxes</h2>
-			<p>Named volumes outlive a sandbox. A template can hold a warm pool.</p>
-		</div>
-		<div>
-			<h2>Checked on the host</h2>
-			<p><code>GET /v1/backends</code> and <code>sbx doctor</code> report what this machine can run.</p>
-		</div>
-	</div>
-</section>
+<section class="container how" id="how">
+	<h2>How it fits together</h2>
+	<p class="sub">sbx sits between your code and the machine. It holds the keys, the state, and the clock, and every sandbox carries a small agent that does the work inside.</p>
 
-<section class="container compare" id="backends">
-	<h2>Choose a backend</h2>
-	<p class="sub">Set it for the server, or pass <code>backend</code> on a template or a sandbox. Omit it and the sandbox uses Docker. Docker, gVisor, Kata, and Firecracker share the calls. <code>GET /v1/backends</code> and <code>sbx doctor</code> report which of them this host can run. A missing runtime is an error. There is no Kubernetes driver.</p>
-	<div class="table">
-		<table>
-			<colgroup>
-				<col class="name" />
-				<col />
-				<col class="needs" />
-			</colgroup>
-			<thead>
-				<tr>
-					<th scope="col">Backend</th>
-					<th scope="col">Isolation</th>
-					<th scope="col">Needs</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each backends as row}
-					<tr>
-						<th scope="row">{row.name}</th>
-						<td data-label="Isolation">{row.isolation}</td>
-						<td data-label="Needs">{row.host}</td>
-					</tr>
+	<div class="flow" role="img" aria-label="Your code calls sbx over HTTP. sbx starts sandboxes on a backend, each with sbx-agent inside.">
+		<div class="node">
+			<span class="label">your code</span>
+			<ul>
+				<li><code>Sandbox.create()</code></li>
+				<li><code>POST /v1/sandboxes</code></li>
+			</ul>
+			<span class="foot">TypeScript SDK, curl, an AI agent</span>
+		</div>
+
+		<div class="link" aria-hidden="true">
+			<span>HTTP + key</span>
+			<svg viewBox="0 0 48 10"><path d="M0 5 H42" /><path class="tip" d="M48 5 l-7 -4 v8 Z" /><circle class="dot" cx="0" cy="5" r="2.5" /></svg>
+		</div>
+
+		<div class="node server">
+			<span class="label">sbx</span>
+			<ul>
+				<li>API and API keys</li>
+				<li>SQLite state</li>
+				<li>TTL reaper</li>
+				<li>preview proxy</li>
+				<li>template builds</li>
+			</ul>
+			<span class="foot">one Go binary</span>
+		</div>
+
+		<div class="link" aria-hidden="true">
+			<span>start, exec</span>
+			<svg viewBox="0 0 48 10"><path d="M0 5 H42" /><path class="tip" d="M48 5 l-7 -4 v8 Z" /><circle class="dot" cx="0" cy="5" r="2.5" /></svg>
+		</div>
+
+		<div class="node backend">
+			<span class="label">backend</span>
+			<div class="backends">
+				<span class="on">docker</span>
+				<span>gvisor</span>
+				<span>kata</span>
+				<span>firecracker</span>
+			</div>
+			<div class="boxes">
+				{#each ["sbx_3f2a", "sbx_8c1d"] as id}
+					<div class="box">
+						<span class="id">{id}</span>
+						<span class="agent">sbx-agent</span>
+						<span class="ops">exec · files · pty · ports</span>
+					</div>
 				{/each}
-			</tbody>
-		</table>
+			</div>
+		</div>
 	</div>
+
+	<ol class="steps">
+		{#each steps as step, i}
+			<li><span class="n">{i + 1}</span>{step}</li>
+		{/each}
+	</ol>
+	<p class="more"><a href="/docs/">Read the introduction →</a></p>
 </section>
 
-<section class="container setup" id="quickstart">
-	<div class="intro">
-		<h2>Build both binaries, then a request</h2>
-		<p>Docker has to be running. Build <code>sbx-agent</code> next to <code>sbx</code> so the agent starts inside the sandbox. The first boot prints an admin key once and writes it to <code>data/initial_api_key</code>.</p>
-		<p class="note">Templates are <code>base</code>, <code>python</code>, and <code>node</code>. A template can keep up to 8 warm sandboxes and a setup command. Create takes one when it does not change image, resources, backend, network policy, env, secrets, or mounts. Otherwise sbx starts a sandbox and runs setup then. Warm sandboxes stay off the normal list unless an admin asks for <code>status=warm</code>. The SDK reads <code>SBX_URL</code> and <code>SBX_API_KEY</code>. From this repo, <code>node --experimental-strip-types examples/quickstart.ts</code> runs on Node, and the same client runs on Bun.</p>
-	</div>
-	<div class="code">{@html data.quickstart}</div>
+<section class="container concepts">
+	{#each concepts as concept}
+		{@const Art = concept.art}
+		<article>
+			<div class="art"><Art /></div>
+			<h3>{concept.title}</h3>
+			<p>{concept.text}</p>
+			<a href={concept.href}>{concept.link} →</a>
+		</article>
+	{/each}
 </section>
 
-<section class="container setup" id="install">
+<section class="container start" id="start">
 	<div class="intro">
-		<h2>Install a release</h2>
-		<p>A version tag publishes the binary, <code>ghcr.io/torstendittmann/sbx</code>, and <code>@sbx.torsten.work/sbx</code>. The npm name <code>sbx</code> is a different project.</p>
-		<p class="note">Linux installs <code>sbx</code> and <code>sbx-agent</code>. macOS installs a darwin server and a linux agent, because the agent runs in the container. The image includes both and sets <code>SBX_AGENT_BIN</code>.</p>
+		<h2>Start in a minute</h2>
+		<p>Install the binary, start the server, and add the SDK. The first boot prints an admin key. Docker has to be running.</p>
+		<ul class="next">
+			{#each next as item}
+				<li>
+					<a href={item.href}>
+						<span class="title">{item.title}</span>
+						<span class="text">{item.text}</span>
+					</a>
+				</li>
+			{/each}
+		</ul>
 	</div>
 	<div class="code">{@html data.install}</div>
 </section>
 
-<section class="container setup" id="sdk">
-	<div class="intro">
-		<h2>The same client</h2>
-		<p><code>SbxClient</code> and <code>Sandbox.create</code> read <code>SBX_URL</code> (default <code>http://127.0.0.1:8080</code>) and <code>SBX_API_KEY</code>. <code>listBackends</code> reports the host. <code>createVolume</code> takes <code>docker</code>, <code>gvisor</code>, or <code>kata</code>.</p>
-		<p class="note"><code>box.secretKeys</code> lists names only. <code>client.setSecrets</code> replaces the map. <code>client.listSandboxes</code> takes <code>template</code>, <code>q</code>, and exact <code>labels</code>. <code>client.uploadArchive</code> accepts a tar or gzip tar, and <code>client.downloadArchive</code> returns a gzip tar. <code>box.files.watch</code> yields <code>create</code>, <code>write</code>, and <code>remove</code>. <code>box.createPreview</code> returns <code>url</code>, <code>publicUrl</code>, and a token shown once. <code>client.createTemplate</code> takes <code>warm</code> and <code>setup</code>. Its <code>network</code> is <code>none</code> or <code>full</code>.</p>
-	</div>
-	<div class="code">{@html data.client}</div>
-</section>
-
-<section class="container api" id="api">
-	<h2>The calls you make</h2>
-	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. <code>secrets</code> are injected into the sandbox and into later commands. Get and list return <code>secret_keys</code> and never the values, and a secret name cannot also be set in <code>env</code>. List filters combine exact <code>status</code>, <code>backend</code>, <code>template</code>, and <code>label=key:value</code> with <code>q</code>, a case-insensitive substring of the id, template, image, status, and label text, at most 128 characters. Env values are not searched. Processes, terminals, watches, archives, and previews need <code>sbx-agent</code>. Watches use inotify and poll every 200 ms when inotify cannot be created. Without the agent those routes return <code>unsupported</code>, and exec, files, and archives use a shell in the image, including <code>tar</code>. Pause and resume are <code>POST …/pause</code> and <code>POST …/resume</code>.</p>
-	<div class="table">
-		<table>
-			<tbody>
-				{#each routes as route}
-					<tr>
-						<th scope="row">{route.method}</th>
-						<td><code>{route.path}</code></td>
-						<td data-label="">{route.detail}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-	</div>
-</section>
-
-<section class="container limits">
-	<h2>Limits</h2>
-	<ul>
-		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and a connection limit. Docker, gVisor, and Kata also enforce per-sandbox bandwidth. Firecracker does not: a positive <code>egress_kbps</code> is rejected, and the guest NIC is IPv4. Metadata and private ranges stay blocked unless the operator opts out. Previews work with <code>network: none</code>. They can be public or token-protected, on <code>{'/p/{id}/{port}/'}</code> and, with <code>preview_domain</code>, on <code>{'{port}-sbx-{id}.{domain}'}</code>.</li>
-		<li>On Docker, gVisor, and Kata, <code>disk_mb</code> is the writable <code>/workspace</code> tmpfs. A volume at <code>/workspace</code> replaces that tmpfs, and <code>disk_mb</code> does not cap the volume. Firecracker sizes an ext4 rootfs to <code>disk_mb</code> and does not attach volumes. The container root filesystem is read-only, memory has no swap, and a PID limit applies. Firecracker does not set a guest PID rlimit.</li>
-		<li>On startup the server adopts sandboxes that are still running and marks missing ones stopped. <code>/readyz</code> stays 503 until that reconcile finishes. <code>/healthz</code> is liveness and pings the configured backend. <code>max_sandboxes</code> defaults to 100, on top of 20 sandboxes per key. The agent packs and extracts archives, and rejects a path that leaves the destination or passes through a symlink. The server pauses and resumes, keeps templates and quotas, and serves <code>/metrics</code>. It does not snapshot, restore, or schedule across nodes.</li>
-	</ul>
-</section>
-
 <style>
 	.hero,
-	.setup {
+	.start {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 56px;
@@ -191,12 +191,8 @@
 		padding-block: 80px 72px;
 	}
 
-	.setup {
-		padding-block: 72px 0;
-	}
-
 	.hero > *,
-	.setup > * {
+	.start > * {
 		min-width: 0;
 	}
 
@@ -209,21 +205,23 @@
 		text-wrap: balance;
 	}
 
+	h2 {
+		margin: 0 0 12px;
+		font-size: 24px;
+		font-weight: 500;
+		letter-spacing: -0.03em;
+	}
+
 	.intro p,
-	.sub,
-	.note {
+	.sub {
 		margin: 0 0 16px;
 		max-width: 46ch;
 		color: var(--dim);
 	}
 
-	.intro p:last-child,
-	.note {
-		margin-bottom: 0;
-	}
-
-	.note {
-		font-size: 14px;
+	.sub {
+		max-width: 62ch;
+		margin-bottom: 36px;
 	}
 
 	.actions {
@@ -256,190 +254,305 @@
 		color: var(--fg);
 	}
 
-	.compare,
-	.api {
-		padding-block: 88px 0;
+	/* How it fits together */
+
+	.how {
+		padding-block: 72px 0;
 	}
 
-	.compare h2,
-	.setup h2,
-	.api h2,
-	.limits h2 {
-		margin: 0 0 12px;
-		font-size: 24px;
-		font-weight: 500;
-		letter-spacing: -0.03em;
+	.flow {
+		display: grid;
+		grid-template-columns: 1fr 72px 1fr 72px 1.35fr;
+		align-items: center;
 	}
 
-	.sub {
-		margin: 0 0 32px;
-		max-width: 62ch;
-	}
-
-	.sub code,
-	.intro code,
-	.features code,
-	.limits code {
-		font-size: 0.86em;
-		background: var(--code);
-		border: 1px solid var(--line);
-		border-radius: 4px;
-		padding: 1px 5px;
-	}
-
-	table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 15px;
-		line-height: 1.5;
-	}
-
-	.compare table {
-		table-layout: fixed;
-	}
-
-	col.name {
-		width: 18%;
-	}
-
-	col.needs {
-		width: 34%;
-	}
-
-	th,
-	td {
-		text-align: left;
-		vertical-align: top;
-		padding: 16px 20px;
-		border-bottom: 1px solid var(--line);
-		text-wrap: pretty;
-	}
-
-	.compare th:first-child,
-	.compare td:first-child,
-	.api th {
-		padding-left: 0;
-	}
-
-	thead th {
-		padding-block: 12px;
+	.node {
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		border: 1px solid var(--edge);
+		border-radius: 10px;
+		padding: 16px;
+		min-width: 0;
 		font-size: 13px;
-		font-weight: 500;
-		color: var(--dim);
-		border-bottom-color: var(--fg);
 	}
 
-	tbody th {
-		font-weight: 500;
-		color: var(--fg);
+	.label {
 		font-family: var(--mono);
-		font-size: 13px;
+		font-size: 12px;
+		color: var(--dim);
 	}
 
-	.compare .table {
+	.server {
+		background: var(--code);
+	}
+
+	.server .label {
+		color: var(--fg);
+		font-size: 15px;
+		font-weight: 500;
+	}
+
+	.node ul {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 6px;
+	}
+
+	.node li {
+		border: 1px solid var(--line);
+		border-radius: 5px;
+		background: var(--bg);
+		padding: 4px 8px;
+	}
+
+	.node li code {
+		font-size: 12px;
+	}
+
+	.foot {
+		font-size: 12px;
+		color: var(--dim);
+	}
+
+	.link {
+		display: grid;
+		justify-items: center;
+		gap: 4px;
+		padding-inline: 8px;
+		font-family: var(--mono);
+		font-size: 11px;
+		color: var(--dim);
+		text-align: center;
+	}
+
+	.link svg {
+		width: 100%;
+		height: 10px;
 		overflow: visible;
 	}
 
-	.compare thead th:first-child,
-	.compare tbody th:first-child {
-		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-		padding-left: 20px;
+	.link path {
+		fill: none;
+		stroke: var(--dim);
+		stroke-width: 1.25;
+		vector-effect: non-scaling-stroke;
 	}
 
-	.compare thead th:first-child {
-		color: var(--accent);
-		border-radius: 8px 8px 0 0;
+	.link path.tip {
+		fill: var(--dim);
+		stroke: none;
 	}
 
-	.compare tbody tr:last-child th {
-		border-radius: 0 0 8px 8px;
+	/* A request crosses each arrow in turn. */
+	.link .dot {
+		fill: var(--accent);
+		opacity: 0;
+		animation: travel 3s ease-in-out infinite;
 	}
 
-	td {
-		color: color-mix(in srgb, var(--fg) 72%, var(--bg));
+	.link + .server + .link .dot {
+		animation-delay: 1.2s;
 	}
 
-	tbody tr:last-child > * {
-		border-bottom: 0;
+	@keyframes travel {
+		0% {
+			opacity: 0;
+			transform: translateX(0);
+		}
+		8% {
+			opacity: 1;
+		}
+		32% {
+			opacity: 1;
+		}
+		40%,
+		100% {
+			opacity: 0;
+			transform: translateX(40px);
+		}
 	}
 
-	.api th {
-		width: 4.5rem;
-		padding-right: 12px;
+	.backends {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 6px;
+		font-family: var(--mono);
+		font-size: 11px;
 	}
 
-	.api td code {
-		font-size: 13px;
-	}
-
-	.api td:last-child {
+	.backends span {
+		border: 1px solid var(--line);
+		border-radius: 99px;
+		padding: 1px 8px;
 		color: var(--dim);
-		font-weight: 400;
 	}
 
-	.features {
+	.backends .on {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+
+	.boxes {
 		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		border-block: 1px solid var(--line);
+		grid-template-columns: 1fr 1fr;
+		gap: 8px;
 	}
 
-	.features div {
-		padding: 28px 24px 28px 0;
+	.box {
+		display: grid;
+		gap: 6px;
+		border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--bg));
+		background: color-mix(in srgb, var(--accent) 7%, var(--bg));
+		border-radius: 8px;
+		padding: 10px;
 		min-width: 0;
 	}
 
-	.features div:not(:nth-child(3n + 1)) {
-		padding-left: 24px;
-		border-left: 1px solid var(--line);
+	.box .id {
+		font-family: var(--mono);
+		font-size: 12px;
+		color: var(--accent);
 	}
 
-	@media (min-width: 761px) {
-		.features div:nth-child(n + 4) {
-			border-top: 1px solid var(--line);
-		}
-
-		.compare .table {
-			margin-left: -20px;
-			width: calc(100% + 20px);
-		}
+	.box .agent {
+		justify-self: start;
+		font-family: var(--mono);
+		font-size: 11px;
+		border: 1px solid var(--edge);
+		border-radius: 4px;
+		background: var(--bg);
+		padding: 1px 6px;
 	}
 
-	.features h2 {
-		margin: 0 0 6px;
-		font-size: 16px;
-		font-weight: 500;
-	}
-
-	.features p {
-		margin: 0;
-		font-size: 14px;
+	.box .ops {
+		font-size: 11px;
 		color: var(--dim);
 	}
 
-	.limits {
-		padding-block: 88px 72px;
-	}
-
-	.limits ul {
+	.steps {
 		list-style: none;
-		margin: 8px 0 0;
+		margin: 40px 0 0;
 		padding: 0;
-		max-width: 68ch;
+		display: grid;
+		grid-template-columns: repeat(4, 1fr);
+		gap: 24px;
+		font-size: 14px;
+		color: color-mix(in srgb, var(--fg) 78%, var(--bg));
 	}
 
-	.limits li {
-		padding: 14px 0;
+	.steps li {
+		display: grid;
+		gap: 10px;
+		align-content: start;
+		border-top: 1px solid var(--line);
+		padding-top: 14px;
+	}
+
+	.n {
+		display: grid;
+		place-items: center;
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+		color: var(--accent);
+		font-family: var(--mono);
+		font-size: 12px;
+	}
+
+	.more {
+		margin: 28px 0 0;
+		font-size: 14px;
+	}
+
+	.more a,
+	.concepts a {
+		color: var(--accent);
+	}
+
+	.more a:hover,
+	.concepts a:hover {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+
+	/* Concepts */
+
+	.concepts {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 64px 48px;
+		padding-block: 96px 0;
+	}
+
+	.concepts article {
+		min-width: 0;
+	}
+
+	.art {
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		padding: 20px;
+		margin-bottom: 20px;
+	}
+
+	h3 {
+		margin: 0 0 6px;
+		font-size: 17px;
+		font-weight: 500;
+		letter-spacing: -0.01em;
+	}
+
+	.concepts p {
+		margin: 0 0 10px;
+		color: var(--dim);
+		max-width: 52ch;
+	}
+
+	.concepts a {
+		font-size: 14px;
+	}
+
+	/* Start */
+
+	.start {
+		padding-block: 112px 88px;
+	}
+
+	.next {
+		list-style: none;
+		margin: 24px 0 0;
+		padding: 0;
+		border-top: 1px solid var(--line);
+	}
+
+	.next a {
+		display: grid;
+		gap: 2px;
+		padding: 12px 0;
 		border-bottom: 1px solid var(--line);
-		color: color-mix(in srgb, var(--fg) 82%, var(--bg));
 	}
 
-	.table {
-		overflow-x: auto;
+	.next .title {
+		font-size: 15px;
+		font-weight: 500;
+	}
+
+	.next .text {
+		font-size: 13px;
+		color: var(--dim);
+	}
+
+	.next a:hover .title {
+		color: var(--accent);
 	}
 
 	@media (max-width: 760px) {
 		.hero,
-		.setup {
+		.start {
 			grid-template-columns: 1fr;
 			gap: 36px;
 		}
@@ -448,92 +561,55 @@
 			padding-block: 48px;
 		}
 
-		.setup {
-			padding-block: 48px 0;
+		.how {
+			padding-top: 40px;
 		}
 
-		.compare,
-		.api {
-			padding-block: 64px 0;
-		}
-
-		.limits {
-			padding-block: 64px 48px;
-		}
-
-		.compare table,
-		.compare tbody,
-		.compare tr,
-		.compare th,
-		.compare td {
-			display: block;
-		}
-
-		.compare colgroup,
-		.compare thead {
-			display: none;
-		}
-
-		.compare tbody {
-			display: grid;
-			gap: 12px;
-		}
-
-		.compare tbody tr {
-			border: 1px solid var(--line);
-			border-radius: 10px;
-			overflow: hidden;
-		}
-
-		.compare tbody th,
-		.compare tbody td,
-		.compare tbody tr:last-child > *,
-		.compare th:first-child {
-			padding: 10px 16px;
-			border-bottom: 1px solid var(--line);
-		}
-
-		.compare thead th:first-child,
-		.compare tbody th,
-		.compare tbody tr:last-child th {
-			border-radius: 0;
-		}
-
-		.compare tbody th {
-			padding-block: 12px;
-			font-size: 16px;
-		}
-
-		.compare td::before {
-			content: attr(data-label);
-			display: block;
-			font-size: 12px;
-			font-weight: 500;
-			color: var(--dim);
-		}
-
-		.compare td:last-child,
-		.compare tbody tr:last-child td:last-child {
-			border-bottom: 0;
-		}
-
-		.api th,
-		.api td {
-			padding-left: 0;
-		}
-
-		.features {
+		.flow {
 			grid-template-columns: 1fr;
 		}
 
-		.features div,
-		.features div:not(:nth-child(3n + 1)) {
-			padding: 22px 0;
-			border-left: 0;
+		.link {
+			grid-template-columns: 10px auto;
+			justify-content: center;
+			align-items: center;
+			gap: 10px;
+			padding-block: 10px;
 		}
 
-		.features div + div {
-			border-top: 1px solid var(--line);
+		.link span {
+			order: 2;
+		}
+
+		.link svg {
+			width: 32px;
+			height: 10px;
+			transform: rotate(90deg);
+			justify-self: center;
+		}
+
+		.steps {
+			grid-template-columns: 1fr 1fr;
+		}
+
+		.concepts {
+			grid-template-columns: 1fr;
+			gap: 48px;
+			padding-top: 72px;
+		}
+
+		.art {
+			padding: 12px;
+		}
+
+		.start {
+			padding-block: 72px 56px;
+		}
+	}
+
+	@media (max-width: 440px) {
+		.steps {
+			grid-template-columns: 1fr;
 		}
 	}
 </style>
