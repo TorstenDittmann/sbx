@@ -455,13 +455,28 @@ func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
 
 // UpdateSandbox writes mutable fields of an existing row.
 func (s *Store) UpdateSandbox(ctx context.Context, sb Sandbox) error {
-	res, err := s.db.ExecContext(ctx, `
+	return s.UpdateSandboxFrom(ctx, sb)
+}
+
+// UpdateSandboxFrom writes mutable fields only while the stored status is one
+// of from. No from statuses means any status. A row in another status (for
+// example one a concurrent delete stopped) is left alone and ErrNotFound is
+// returned, so a stale copy cannot overwrite a newer state.
+func (s *Store) UpdateSandboxFrom(ctx context.Context, sb Sandbox, from ...string) error {
+	q := `
 		UPDATE sandboxes SET
 			status = ?, expires_at = ?, idle_timeout_seconds = ?, last_activity_at = ?,
 			finished_at = ?, container_id = ?, error = ?, labels_json = ?
-		WHERE id = ?`,
-		sb.Status, millis(sb.ExpiresAt), sb.IdleTimeoutSeconds, millis(sb.LastActivityAt),
-		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.ID)
+		WHERE id = ?`
+	args := []any{sb.Status, millis(sb.ExpiresAt), sb.IdleTimeoutSeconds, millis(sb.LastActivityAt),
+		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.ID}
+	if len(from) > 0 {
+		q += ` AND status IN (?` + strings.Repeat(`, ?`, len(from)-1) + `)`
+		for _, st := range from {
+			args = append(args, st)
+		}
+	}
+	res, err := s.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
@@ -473,6 +488,15 @@ func (s *Store) UpdateSandbox(ctx context.Context, sb Sandbox) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// TouchSandbox records activity on a live sandbox. It only writes
+// last_activity_at, and only while the row is running or paused.
+func (s *Store) TouchSandbox(ctx context.Context, id string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET last_activity_at = ?
+		WHERE id = ? AND status IN ('running', 'paused')`, millis(at), id)
+	return err
 }
 
 // GetSandbox loads one sandbox.

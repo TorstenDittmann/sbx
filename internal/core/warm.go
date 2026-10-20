@@ -98,7 +98,7 @@ func (m *Manager) createWarm(ctx context.Context, tpl store.Template, backend st
 		return err
 	}
 	sb.Status = "warm"
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "creating"); err != nil {
 		_ = d.Delete(context.Background(), handle.ID)
 		return err
 	}
