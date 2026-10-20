@@ -57,7 +57,8 @@
 		<h1>Run untrusted code on your own machine.</h1>
 		<p>One Go binary. Create a sandbox, run a command, and use the same API on Docker, gVisor, Kata, or Firecracker.</p>
 		<div class="actions">
-			<a class="button" href="#quickstart">Quickstart</a>
+			<a class="button" href="/docs/quickstart/">Get started</a>
+			<a class="quiet" href="/docs/">Read the docs</a>
 			<a class="quiet" href={data.site.repo}>GitHub</a>
 		</div>
 	</div>

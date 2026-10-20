@@ -3,8 +3,12 @@
 	import "@fontsource-variable/geist-mono";
 	import "../app.css";
 	import { onMount } from "svelte";
+	import { page } from "$app/state";
 
 	let { data, children } = $props();
+
+	// Docs pages use a wider grid, so the header and footer follow it.
+	const wide = $derived(page.url.pathname.startsWith("/docs"));
 
 	// Code blocks are server-rendered HTML, so their copy buttons are handled by delegation.
 	onMount(() => {
@@ -28,13 +32,13 @@
 	});
 </script>
 
-<header class="container">
+<header class="container" class:wide>
 	<nav aria-label="Main">
 		<a class="logo" href="/">sbx</a>
-		<a href="/#quickstart">Quickstart</a>
-		<a href="/#backends">Backends</a>
-		<a href="/#sdk">SDK</a>
-		<a href="/#api">API</a>
+		<a href="/docs/">Docs</a>
+		<a href="/docs/quickstart/">Quickstart</a>
+		<a href="/docs/sdk/">SDK</a>
+		<a href="/docs/api/">API</a>
 		<a class="strong" href={data.site.repo}>GitHub</a>
 	</nav>
 </header>
@@ -43,14 +47,21 @@
 	{@render children()}
 </main>
 
-<footer class="container">
+<footer class="container" class:wide>
 	<div>
 		<span>sbx is MIT licensed.</span>
-		<a href={data.site.repo}>github.com/TorstenDittmann/sbx</a>
+		<span class="links">
+			<a href="/docs/">Docs</a>
+			<a href={data.site.repo}>github.com/TorstenDittmann/sbx</a>
+		</span>
 	</div>
 </footer>
 
 <style>
+	.wide {
+		--width: 1200px;
+	}
+
 	nav {
 		display: flex;
 		flex-wrap: wrap;
@@ -86,6 +97,11 @@
 		padding-block: 22px 32px;
 		font-size: 13px;
 		color: var(--dim);
+	}
+
+	footer .links {
+		display: flex;
+		gap: 20px;
 	}
 
 	footer a:hover {
