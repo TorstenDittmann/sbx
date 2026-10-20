@@ -11,6 +11,47 @@ import (
 	"time"
 )
 
+func TestDialedSessionSharesProcessTable(t *testing.T) {
+	a := New("tok")
+	server, client := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	once := make(chan struct{}, 1)
+	once <- struct{}{}
+	go serveDialed(ctx, a, func() (net.Conn, error) {
+		select {
+		case <-once:
+			return server, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	})
+	hctx, hcancel := context.WithTimeout(context.Background(), 3*time.Second)
+	dialed, err := Handshake(hctx, client, "tok")
+	hcancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dialed.Close()
+	other, done := pair(t, a)
+	defer done()
+
+	run, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelRun()
+	info, err := dialed.Start(run, ExecSpec{Cmd: []string{"sleep", "30"}})
+	if err != nil || info.ID == "" {
+		t.Fatalf("start %+v %v", info, err)
+	}
+	defer func() { _ = other.Signal(context.Background(), info.ID, "KILL") }()
+	list, err := other.List(run)
+	if err != nil || len(list) != 1 || list[0].ID != info.ID {
+		t.Fatalf("list %+v %v", list, err)
+	}
+	if err := other.Signal(run, info.ID, "KILL"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGuestConfigAndMessages(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "guest.json")
@@ -96,7 +137,7 @@ func TestGuestConfigAndMessages(t *testing.T) {
 	cancelDial()
 	stopped := make(chan struct{})
 	go func() {
-		dialHostUntil(cancelled, 1, "tok")
+		dialHostUntil(cancelled, 1, New("tok"))
 		close(stopped)
 	}()
 	select {

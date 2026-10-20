@@ -96,7 +96,8 @@ func (c *vsockConn) Read(p []byte) (int, error) {
 			continue
 		}
 		if err != nil {
-			return n, err
+			// unix.Read returns -1 on failure. io.Reader requires 0 <= n <= len(p).
+			return 0, err
 		}
 		if n == 0 {
 			return 0, io.EOF
@@ -291,25 +292,10 @@ func dialHostVsock(port uint32) (net.Conn, error) {
 }
 
 // dialHostUntil keeps a guest-initiated session up until ctx is cancelled.
-func dialHostUntil(ctx context.Context, port uint32, token string) {
-	a := New(token)
-	delay := 20 * time.Millisecond
-	for ctx.Err() == nil {
-		conn, err := dialHostVsock(port)
-		if err != nil {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-			if delay < time.Second {
-				delay *= 2
-			}
-			continue
-		}
-		delay = 20 * time.Millisecond
-		a.ServeConn(conn)
-	}
+// a is the same agent that serves the host-initiated listener, so both
+// transports share one process table.
+func dialHostUntil(ctx context.Context, port uint32, a *Agent) {
+	serveDialed(ctx, a, func() (net.Conn, error) {
+		return dialHostVsock(port)
+	})
 }

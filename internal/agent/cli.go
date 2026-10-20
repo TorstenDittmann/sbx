@@ -236,18 +236,22 @@ func serveGuest(ctx context.Context, cfg GuestConfig) error {
 	if err != nil {
 		return err
 	}
-	go dialHostUntil(ctx, uint32(port), token)
-	return serveListener(ctx, ln, token)
+	a := New(token)
+	go dialHostUntil(ctx, uint32(port), a)
+	return serveAgent(ctx, ln, a)
 }
 
 func serveListener(ctx context.Context, ln net.Listener, token string) error {
+	return serveAgent(ctx, ln, New(token))
+}
+
+func serveAgent(ctx context.Context, ln net.Listener, a *Agent) error {
 	fmt.Fprintf(os.Stderr, "sbx-agent listening on %s\n", ln.Addr())
 	defer ln.Close()
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
-	a := New(token)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -257,5 +261,29 @@ func serveListener(ctx context.Context, ln net.Listener, token string) error {
 			continue
 		}
 		go a.ServeConn(conn)
+	}
+}
+
+// serveDialed accepts connections from dial and serves them on a.
+// The guest-initiated vsock path and the listening path pass the same agent.
+func serveDialed(ctx context.Context, a *Agent, dial func() (net.Conn, error)) {
+	delay := 20 * time.Millisecond
+	for ctx.Err() == nil {
+		conn, err := dial()
+		if err != nil {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			if delay < time.Second {
+				delay *= 2
+			}
+			continue
+		}
+		delay = 20 * time.Millisecond
+		a.ServeConn(conn)
 	}
 }

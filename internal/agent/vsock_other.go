@@ -16,4 +16,4 @@ func dialHostVsock(uint32) (net.Conn, error) {
 	return nil, errors.New("vsock is only available on linux")
 }
 
-func dialHostUntil(context.Context, uint32, string) {}
+func dialHostUntil(context.Context, uint32, *Agent) {}

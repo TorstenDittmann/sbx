@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -77,4 +78,19 @@ func exerciseVsockSocketpair() error {
 		return fmt.Errorf("write after close %v", err)
 	}
 	return nil
+}
+
+func TestVsockReadErrorCount(t *testing.T) {
+	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Close(fd); err != nil {
+		t.Fatal(err)
+	}
+	conn := &vsockConn{fd: fd, remote: 1}
+	n, err := conn.Read(make([]byte, 8))
+	if n != 0 || err == nil {
+		t.Fatalf("read on a closed fd = %d, %v", n, err)
+	}
 }
