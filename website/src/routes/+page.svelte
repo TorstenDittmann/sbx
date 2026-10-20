@@ -7,22 +7,22 @@
 		{
 			name: "docker",
 			isolation: "Namespaces and cgroups.",
-			host: "Docker. The default when a sandbox omits backend.",
+			host: "Docker",
 		},
 		{
 			name: "gvisor",
 			isolation: "The Docker driver with runsc. A user-space kernel, no KVM.",
-			host: "Docker with runsc registered.",
+			host: "Docker and runsc",
 		},
 		{
 			name: "kata",
 			isolation: "The Docker driver with the Kata runtime class. Same image and network policy.",
-			host: "The Kata runtime and /dev/kvm.",
+			host: "Kata and /dev/kvm",
 		},
 		{
 			name: "firecracker",
 			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock.",
-			host: "/dev/kvm, the Firecracker binary, a kernel, and sbx-agent.",
+			host: "KVM, kernel, agent",
 		},
 		{
 			name: "kubernetes",
@@ -95,7 +95,7 @@
 
 <section class="container compare" id="backends">
 	<h2>Choose a backend</h2>
-	<p class="sub">Set it for the server, or pass <code>backend</code> on a template or a sandbox. Docker, gVisor, Kata, and Firecracker share the calls. <code>GET /v1/backends</code> and <code>sbx doctor</code> report which of them this host can run. A missing runtime is an error. There is no Kubernetes driver.</p>
+	<p class="sub">Set it for the server, or pass <code>backend</code> on a template or a sandbox. Omit it and the sandbox uses Docker. Docker, gVisor, Kata, and Firecracker share the calls. <code>GET /v1/backends</code> and <code>sbx doctor</code> report which of them this host can run. A missing runtime is an error. There is no Kubernetes driver.</p>
 	<div class="table">
 		<table>
 			<colgroup>
@@ -302,7 +302,7 @@
 	}
 
 	col.status {
-		width: 22%;
+		width: 26%;
 	}
 
 	th,
