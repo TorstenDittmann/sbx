@@ -236,6 +236,7 @@ func serveGuest(ctx context.Context, cfg GuestConfig) error {
 	if err != nil {
 		return err
 	}
+	go dialHostUntil(ctx, uint32(port), token)
 	return serveListener(ctx, ln, token)
 }
 

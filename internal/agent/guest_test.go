@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGuestConfigAndMessages(t *testing.T) {
@@ -82,6 +83,12 @@ func TestGuestConfigAndMessages(t *testing.T) {
 	}
 	_ = ln.Close()
 	reapZombies()
+	if conn, err := dialHostVsock(1); err == nil {
+		_ = conn.Close()
+	}
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer dialCancel()
+	dialHostUntil(dialCtx, 1, "tok")
 	if err := preparePID1(); err != nil {
 		t.Fatal(err)
 	}
