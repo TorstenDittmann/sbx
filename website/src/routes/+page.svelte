@@ -389,8 +389,10 @@
 		border-left: 1px solid var(--line);
 	}
 
-	.features div:nth-child(n + 4) {
-		border-top: 1px solid var(--line);
+	@media (min-width: 761px) {
+		.features div:nth-child(n + 4) {
+			border-top: 1px solid var(--line);
+		}
 	}
 
 	.features h2 {
@@ -515,11 +517,9 @@
 		}
 
 		.features div,
-		.features div:not(:nth-child(3n + 1)),
-		.features div:nth-child(n + 4) {
+		.features div:not(:nth-child(3n + 1)) {
 			padding: 22px 0;
 			border-left: 0;
-			border-top: 0;
 		}
 
 		.features div + div {
