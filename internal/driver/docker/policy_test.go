@@ -35,3 +35,110 @@ func TestCompileListsResolvesDomains(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func newPolicyDriver(t *testing.T, run func(string)) (*Driver, *fakeDaemon) {
+	t.Helper()
+	fd, sock := startFakeDaemon(t)
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewWithClient(Options{
+		Name: "docker", UID: 1000, GID: 1000,
+		ScriptRunner: func(_ context.Context, script string) error {
+			if run != nil {
+				run(script)
+			}
+			return nil
+		},
+	}, cli)
+	return d, fd
+}
+
+func addRunning(fd *fakeDaemon, id string) {
+	fd.mu.Lock()
+	fd.containers[id] = &fakeContainer{id: id, status: "running"}
+	fd.mu.Unlock()
+}
+
+func tracked(d *Driver, id string) bool {
+	d.polMu.Lock()
+	defer d.polMu.Unlock()
+	_, ok := d.policies[id]
+	return ok
+}
+
+const policyChain = "SBX0123456789AB"
+
+func isDrop(script string) bool {
+	return strings.HasPrefix(script, "set +e") && strings.Contains(script, "-X "+policyChain)
+}
+
+func isInstall(script string) bool {
+	return strings.HasPrefix(script, "set -e") && strings.Contains(script, policyChain)
+}
+
+func TestRefreshForgetsRemovedContainers(t *testing.T) {
+	var drops int
+	d, fd := newPolicyDriver(t, func(script string) {
+		if isDrop(script) {
+			drops++
+		}
+	})
+	ctx := context.Background()
+	spec := driver.SandboxSpec{ID: "sbx_0123456789abcdef", Network: driver.NetFull}
+	addRunning(fd, "cid-gone")
+	if err := d.ApplyNetPolicy(ctx, "cid-gone", spec); err != nil {
+		t.Fatal(err)
+	}
+	fd.mu.Lock()
+	delete(fd.containers, "cid-gone")
+	fd.mu.Unlock()
+	if err := d.RefreshNetPolicies(ctx); err != nil {
+		t.Fatalf("refresh with a removed container = %v", err)
+	}
+	if tracked(d, "cid-gone") || drops != 1 {
+		t.Fatalf("removed container: tracked=%v drops=%d", tracked(d, "cid-gone"), drops)
+	}
+	if err := d.RefreshNetPolicies(ctx); err != nil {
+		t.Fatalf("second refresh = %v", err)
+	}
+}
+
+func TestRefreshDoesNotResurrectDeletedPolicy(t *testing.T) {
+	var d *Driver
+	var refreshing, deleted bool
+	var last string
+	d, fd := newPolicyDriver(t, func(script string) {
+		last = script
+		if refreshing && !deleted && isInstall(script) {
+			// Delete lands while the refresh is reinstalling this sandbox.
+			deleted = true
+			if err := d.Delete(context.Background(), "cid-race"); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	ctx := context.Background()
+	spec := driver.SandboxSpec{ID: "sbx_0123456789abcdef", Network: driver.NetFull}
+	addRunning(fd, "cid-race")
+	if err := d.ApplyNetPolicy(ctx, "cid-race", spec); err != nil {
+		t.Fatal(err)
+	}
+	refreshing = true
+	if err := d.RefreshNetPolicies(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !deleted {
+		t.Fatal("delete did not run during the refresh")
+	}
+	if tracked(d, "cid-race") {
+		t.Fatal("refresh brought back a deleted sandbox's policy")
+	}
+	if !isDrop(last) {
+		t.Fatalf("rules installed by the refresh were not dropped:\n%s", last)
+	}
+	if err := d.RefreshNetPolicies(ctx); err != nil {
+		t.Fatalf("next refresh = %v", err)
+	}
+}

@@ -27,6 +27,12 @@ var lookupHost = func(ctx context.Context, host string) ([]netip.Addr, error) {
 // ApplyNetPolicy installs per-sandbox egress rules. It is safe to call again
 // after a restart or when a domain's addresses change.
 func (d *Driver) ApplyNetPolicy(ctx context.Context, containerID string, spec driver.SandboxSpec) error {
+	return d.applyNetPolicy(ctx, containerID, spec, false)
+}
+
+// applyNetPolicy installs the rules. A refresh only updates a policy that is
+// still tracked, so a Delete that ran meanwhile is not undone.
+func (d *Driver) applyNetPolicy(ctx context.Context, containerID string, spec driver.SandboxSpec, refresh bool) error {
 	if d.opt.NoEgressFilter || spec.Network != driver.NetFull {
 		return nil
 	}
@@ -48,9 +54,16 @@ func (d *Driver) ApplyNetPolicy(ctx context.Context, containerID string, spec dr
 	if err := d.installScript(ctx, rendered); err != nil {
 		return fmt.Errorf("egress policy: %w", err)
 	}
+	applied := appliedNet{spec: spec, ipv4: st.IPv4, ipv6: st.IPv6, chain: chain}
 	d.polMu.Lock()
-	d.policies[containerID] = appliedNet{spec: spec, ipv4: st.IPv4, ipv6: st.IPv6, chain: chain}
+	_, tracked := d.policies[containerID]
+	if tracked || !refresh {
+		d.policies[containerID] = applied
+	}
 	d.polMu.Unlock()
+	if !tracked && refresh {
+		_ = d.installScript(ctx, netpolicy.RenderDrop(applied.chain, d.bridgeName(), applied.ipv4, applied.ipv6, applied.hostDev))
+	}
 	return nil
 }
 
@@ -61,7 +74,7 @@ func (d *Driver) DropNetPolicy(ctx context.Context, containerID string) error {
 }
 
 // RefreshNetPolicies re-resolves domains and reinstalls rules for sandboxes
-// this process has applied.
+// this process has applied. Containers that no longer exist are forgotten.
 func (d *Driver) RefreshNetPolicies(ctx context.Context) error {
 	reinstalled, baseErr := d.verifyEgress(ctx)
 	if reinstalled && baseErr == nil {
@@ -77,7 +90,12 @@ func (d *Driver) RefreshNetPolicies(ctx context.Context) error {
 	d.polMu.Unlock()
 	var first error
 	for i, pol := range snap {
-		if err := d.ApplyNetPolicy(ctx, ids[i], pol.spec); err != nil && first == nil {
+		err := d.applyNetPolicy(ctx, ids[i], pol.spec, true)
+		if errors.Is(err, driver.ErrNotFound) {
+			d.dropNetPolicy(ctx, ids[i])
+			continue
+		}
+		if err != nil && first == nil {
 			first = err
 		}
 	}
@@ -115,6 +133,9 @@ func (d *Driver) waitAddress(ctx context.Context, id string) (ContainerState, er
 		last, err = d.client.ContainerInspect(ctx, id)
 		if err == nil && last.IPv4 != "" {
 			return last, nil
+		}
+		if errors.Is(err, driver.ErrNotFound) {
+			return ContainerState{}, err
 		}
 		timer := time.NewTimer(100 * time.Millisecond)
 		select {
