@@ -10,13 +10,14 @@ import (
 	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 )
 
 func listenVsock(port uint32) (net.Listener, error) {
-	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
 	if err != nil {
 		return nil, fmt.Errorf("vsock socket: %w", err)
 	}
@@ -28,18 +29,36 @@ func listenVsock(port uint32) (net.Listener, error) {
 		_ = unix.Close(fd)
 		return nil, fmt.Errorf("vsock listen: %w", err)
 	}
-	return &vsockListener{fd: fd, port: port}, nil
+	// A nonblocking fd handed to os.NewFile is registered with the runtime
+	// poller, so Close wakes a goroutine blocked in Accept. Closing a raw
+	// blocking fd does not interrupt accept(2) in another thread.
+	f := os.NewFile(uintptr(fd), "vsock")
+	rc, err := f.SyscallConn()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("vsock listen: %w", err)
+	}
+	return &vsockListener{f: f, rc: rc, port: port}, nil
 }
 
 type vsockListener struct {
-	fd   int
+	f    *os.File
+	rc   syscall.RawConn
 	port uint32
 }
 
 func (l *vsockListener) Accept() (net.Conn, error) {
-	nfd, _, err := unix.Accept4(l.fd, unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
+	var nfd int
+	var aerr error
+	err := l.rc.Read(func(fd uintptr) bool {
+		nfd, _, aerr = unix.Accept4(int(fd), unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK)
+		return aerr != unix.EAGAIN && aerr != unix.EINTR
+	})
 	if err != nil {
-		return nil, err
+		return nil, net.ErrClosed
+	}
+	if aerr != nil {
+		return nil, aerr
 	}
 	conn, err := newVsockConn(nfd, 0)
 	if err != nil {
@@ -48,7 +67,7 @@ func (l *vsockListener) Accept() (net.Conn, error) {
 	return conn, nil
 }
 
-func (l *vsockListener) Close() error { return unix.Close(l.fd) }
+func (l *vsockListener) Close() error { return l.f.Close() }
 
 func (l *vsockListener) Addr() net.Addr { return vsockAddr{port: l.port} }
 
