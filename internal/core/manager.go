@@ -224,7 +224,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 			return store.Sandbox{}, err
 		}
 	}
-	if len(in.Steps) > 0 {
+	// Template steps on a caller-chosen base are a new build too.
+	newBase := len(tpl.Steps) > 0 && in.Image != "" && in.Image != tpl.Image
+	if len(in.Steps) > 0 || newBase {
 		if err := m.canBuild(actor); err != nil {
 			return store.Sandbox{}, err
 		}

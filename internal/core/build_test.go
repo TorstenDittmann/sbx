@@ -189,6 +189,33 @@ func TestTemplateStepsBuildAtCreateAndExtend(t *testing.T) {
 		t.Fatalf("%+v %v", sb, err)
 	}
 
+	// Overriding the base of a template with steps is a new build.
+	var op *OpError
+	if _, err := mgr.Create(ctx, user, CreateInput{Template: "app", Image: "evil/image:1"}); !errors.As(err, &op) || op.Status != 403 {
+		t.Fatalf("image override err = %v", err)
+	}
+	if _, err := mgr.Create(ctx, user, CreateInput{Template: "app", Image: "node:22"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Request steps never take a pooled sandbox built without them.
+	if err := mgr.fillTemplate(ctx, tpl); err != nil {
+		t.Fatal(err)
+	}
+	pool, err = st.ListPool(ctx, "app")
+	if err != nil || len(pool) == 0 {
+		t.Fatalf("pool %+v %v", pool, err)
+	}
+	cold, err := mgr.Create(ctx, Actor{KeyID: user.KeyID, Admin: true}, CreateInput{Template: "app", Steps: []store.BuildStep{{Run: "npm run build"}}})
+	if err != nil || cold.Image == pool[0].Image {
+		t.Fatalf("%+v %v", cold, err)
+	}
+	for _, p := range pool {
+		if cold.ID == p.ID {
+			t.Fatalf("create with steps claimed pooled sandbox %s", p.ID)
+		}
+	}
+
 	res, err := mgr.Build(ctx, Actor{Admin: true}, BuildInput{Template: "app", Steps: []store.BuildStep{{Run: "npm test"}}})
 	if err != nil || res.Cached || res.Base != "node:22" || len(res.Steps) != 3 || res.Image != "sbx-template:"+res.ID {
 		t.Fatalf("%+v %v", res, err)
