@@ -16,31 +16,36 @@
 		},
 		{
 			name: "kata",
-			isolation: "The Kata runtime class. Same image and API as Docker. Needs /dev/kvm.",
+			isolation: "Docker with the Kata runtime class. Same image and network policy. Needs /dev/kvm.",
 			status: "Ships, optional",
 		},
 		{
 			name: "firecracker",
-			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock. Snapshot restore is not in this build.",
+			isolation: "A microVM per sandbox. OCI image to ext4, sbx-agent as init over vsock. No snapshot or restore, and no bandwidth limit.",
 			status: "Ships, optional",
 		},
 		{
 			name: "kubernetes",
-			isolation: "Whatever RuntimeClass the cluster already runs.",
-			status: "Planned",
+			isolation: "No driver in this tree.",
+			status: "Not built",
 		},
 	];
 
 	const routes = [
 		{ method: "POST", path: "/v1/sandboxes", detail: "create" },
+		{ method: "GET", path: "/v1/sandboxes", detail: "status, backend, template, label, and q" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/exec", detail: "wait, or SSE with ?stream=1" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/processes", detail: "background command" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/terminals", detail: "PTY, then a WebSocket" },
-		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "inotify, or a poll fallback" },
+		{ method: "GET", path: "/v1/sandboxes/{id}/files/watch", detail: "inotify, or a poll every 200 ms" },
+		{ method: "POST", path: "/v1/sandboxes/{id}/files/archive", detail: "extract a tar or gzip tar" },
+		{ method: "GET", path: "/v1/sandboxes/{id}/files/archive", detail: "download a gzip tar" },
+		{ method: "PUT", path: "/v1/sandboxes/{id}/secrets", detail: "replace secrets; values stay off the response" },
 		{ method: "POST", path: "/v1/sandboxes/{id}/previews", detail: "a port on the sandbox loopback" },
-		{ method: "POST", path: "/v1/volumes", detail: "a disk that outlives the sandbox" },
-		{ method: "PUT", path: "/v1/sandboxes/{id}/files/content", detail: "upload" },
-		{ method: "GET", path: "/healthz", detail: "Docker reachable, or 503" },
+		{ method: "POST", path: "/v1/volumes", detail: "a Docker volume; not on Firecracker" },
+		{ method: "GET", path: "/v1/backends", detail: "which backends this host can run" },
+		{ method: "GET", path: "/readyz", detail: "503 until startup reconcile finishes" },
+		{ method: "GET", path: "/healthz", detail: "liveness; pings the configured backend" },
 		{ method: "GET", path: "/openapi.yaml", detail: "the contract" },
 	];
 </script>
@@ -71,14 +76,26 @@
 		</div>
 		<div>
 			<h2>Agent inside</h2>
-			<p>Streaming exec, background processes, a PTY, file watches, and preview ports.</p>
+			<p>Streaming exec, a PTY, inotify watches, archives, and preview ports.</p>
+		</div>
+		<div>
+			<h2>Opt-in network</h2>
+			<p><code>none</code>, <code>full</code>, or an allow list. Public preview hosts when a domain is set.</p>
+		</div>
+		<div>
+			<h2>Kept across sandboxes</h2>
+			<p>Named volumes outlive a sandbox. A template can hold a warm pool.</p>
+		</div>
+		<div>
+			<h2>Checked on the host</h2>
+			<p><code>GET /v1/backends</code> and <code>sbx doctor</code> report what this machine can run.</p>
 		</div>
 	</div>
 </section>
 
 <section class="container compare" id="backends">
 	<h2>Easy now, stronger later</h2>
-	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata and Firecracker use the same API when the host has KVM and their runtime. Kubernetes is planned.</p>
+	<p class="sub">Docker is the default. gVisor is that driver with <code>runsc</code> registered. Kata is the same driver with the Kata runtime class. Firecracker is a microVM on the same API: ext4 rootfs, <code>sbx-agent</code> as init, vsock. It does not snapshot or restore, and it rejects a bandwidth limit. Kubernetes is not built. <code>GET /v1/backends</code> and <code>sbx doctor</code> report what this host can run. A missing runtime is an error, not a fallback. <code>snapshot</code> is false on every backend.</p>
 	<div class="table">
 		<table>
 			<colgroup>
@@ -110,7 +127,7 @@
 	<div class="intro">
 		<h2>Build both binaries, then a request</h2>
 		<p>Docker has to be running. Build <code>sbx-agent</code> next to <code>sbx</code> so the agent starts inside the sandbox. The first boot prints an admin key once and writes it to <code>data/initial_api_key</code>.</p>
-		<p class="note">Templates are <code>base</code>, <code>python</code>, and <code>node</code>. A template can keep a warm pool and a setup command so the next sandbox skips install. The SDK reads <code>SBX_URL</code> and <code>SBX_API_KEY</code>. From this repo, <code>node --experimental-strip-types examples/quickstart.ts</code> runs on Node, and the same client runs on Bun.</p>
+		<p class="note">Templates are <code>base</code>, <code>python</code>, and <code>node</code>. A template can keep up to 8 warm sandboxes and a setup command. Create takes one when it does not change image, resources, backend, network policy, env, secrets, or mounts. Otherwise sbx starts a sandbox and runs setup then. Warm sandboxes stay off the normal list unless an admin asks for <code>status=warm</code>. The SDK reads <code>SBX_URL</code> and <code>SBX_API_KEY</code>. From this repo, <code>node --experimental-strip-types examples/quickstart.ts</code> runs on Node, and the same client runs on Bun.</p>
 	</div>
 	<div class="code">{@html data.quickstart}</div>
 </section>
@@ -124,9 +141,18 @@
 	<div class="code">{@html data.install}</div>
 </section>
 
+<section class="container setup" id="sdk">
+	<div class="intro">
+		<h2>The same client</h2>
+		<p><code>SbxClient</code> and <code>Sandbox.create</code> read <code>SBX_URL</code> (default <code>http://127.0.0.1:8080</code>) and <code>SBX_API_KEY</code>. <code>listBackends</code> is the capability check. <code>createVolume</code> takes <code>docker</code>, <code>gvisor</code>, or <code>kata</code>. Firecracker has no volume API.</p>
+		<p class="note"><code>box.secretKeys</code> lists names only. <code>client.setSecrets</code> replaces the map. <code>client.listSandboxes</code> takes <code>template</code>, <code>q</code>, and exact <code>labels</code>. <code>client.uploadArchive</code> accepts a tar or gzip tar, and <code>client.downloadArchive</code> returns a gzip tar. <code>box.files.watch</code> yields <code>create</code>, <code>write</code>, and <code>remove</code>. <code>box.createPreview</code> returns <code>url</code>, <code>publicUrl</code>, and a token shown once. <code>client.createTemplate</code> takes <code>warm</code> and <code>setup</code>. Its <code>network</code> is <code>none</code> or <code>full</code>.</p>
+	</div>
+	<div class="code">{@html data.client}</div>
+</section>
+
 <section class="container api" id="api">
 	<h2>The calls you make</h2>
-	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. <code>secrets</code> are injected into the sandbox and are not returned by get or list. List can filter by exact labels and search id, image, template, status, and label text with <code>q</code>. Processes, terminals, watches, and previews need <code>sbx-agent</code>. File watches use inotify and poll when the kernel cannot. Without the agent those routes return <code>unsupported</code>, and exec and files use a shell in the image.</p>
+	<p class="sub">Send <code>Authorization: Bearer sbx_…</code>. Keys are stored hashed. A sandbox key only sees sandboxes it created. <code>secrets</code> are injected into the sandbox and into later commands. Get and list return <code>secret_keys</code> and never the values, and a secret name cannot also be set in <code>env</code>. List filters combine exact <code>status</code>, <code>backend</code>, <code>template</code>, and <code>label=key:value</code> with <code>q</code>, a case-insensitive substring of the id, template, image, status, and label text, at most 128 characters. Env values are not searched. Processes, terminals, watches, archives, and previews need <code>sbx-agent</code>. Watches use inotify and poll every 200 ms when inotify cannot be created. Without the agent those routes return <code>unsupported</code>, and exec, files, and archives use a shell in the image, including <code>tar</code>. Pause and resume are <code>POST …/pause</code> and <code>POST …/resume</code>.</p>
 	<div class="table">
 		<table>
 			<tbody>
@@ -145,9 +171,9 @@
 <section class="container limits">
 	<h2>Limits</h2>
 	<ul>
-		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and per-sandbox bandwidth. Metadata and private ranges stay blocked unless the operator opts out. Previews can be public or token-protected, including <code>{'{port}-sbx-{id}.example.com'}</code>.</li>
-		<li><code>disk_mb</code> is the size of the writable <code>/workspace</code> tmpfs. Mount a volume at <code>/workspace</code> when a coding agent should keep its project; <code>disk_mb</code> does not cap that path. The root filesystem is read-only, memory has no swap, and a PID limit applies.</li>
-		<li>The agent packs and extracts archives, so the image does not need <code>tar</code>. Without the agent, archives still call <code>tar</code>. Pause, resume, templates, quotas, and <code>/metrics</code> are real. A multi-node scheduler is not.</li>
+		<li><code>network: none</code> is the default. <code>full</code> and <code>allow</code> reach the public internet, with DNS, allow and deny lists, and a connection limit. Docker, gVisor, and Kata also enforce per-sandbox bandwidth. Firecracker does not: a positive <code>egress_kbps</code> is rejected, and the guest NIC is IPv4. Metadata and private ranges stay blocked unless the operator opts out. Previews work with <code>network: none</code>. They can be public or token-protected, on <code>{'/p/{id}/{port}/'}</code> and, with <code>preview_domain</code>, on <code>{'{port}-sbx-{id}.{domain}'}</code>.</li>
+		<li>On Docker, gVisor, and Kata, <code>disk_mb</code> is the writable <code>/workspace</code> tmpfs. A volume at <code>/workspace</code> replaces that tmpfs, and <code>disk_mb</code> does not cap the volume. Firecracker sizes an ext4 rootfs to <code>disk_mb</code> and does not attach volumes. The container root filesystem is read-only, memory has no swap, and a PID limit applies. Firecracker does not set a guest PID rlimit.</li>
+		<li>On startup the server adopts sandboxes that are still running and marks missing ones stopped. <code>/readyz</code> stays 503 until that reconcile finishes. <code>/healthz</code> is liveness and pings the configured backend. <code>max_sandboxes</code> defaults to 100, on top of 20 sandboxes per key. The agent packs and extracts archives, and rejects a path that leaves the destination or passes through a symlink. Pause, resume, templates, quotas, and <code>/metrics</code> are real. Snapshot, restore, and a multi-node scheduler are not.</li>
 	</ul>
 </section>
 
@@ -251,6 +277,7 @@
 
 	.sub code,
 	.intro code,
+	.features code,
 	.limits code {
 		font-size: 0.86em;
 		background: var(--code);
@@ -357,9 +384,15 @@
 		min-width: 0;
 	}
 
-	.features div + div {
+	.features div:not(:nth-child(3n + 1)) {
 		padding-left: 24px;
 		border-left: 1px solid var(--line);
+	}
+
+	@media (min-width: 761px) {
+		.features div:nth-child(n + 4) {
+			border-top: 1px solid var(--line);
+		}
 	}
 
 	.features h2 {
@@ -484,7 +517,7 @@
 		}
 
 		.features div,
-		.features div + div {
+		.features div:not(:nth-child(3n + 1)) {
 			padding: 22px 0;
 			border-left: 0;
 		}
