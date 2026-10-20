@@ -2,6 +2,9 @@ package core
 
 import (
 	"context"
+	"fmt"
+	"net/netip"
+	"strings"
 
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/netpolicy"
@@ -27,6 +30,11 @@ func (m *Manager) effectiveNet(ctx context.Context, actor Actor, in CreateInput)
 	}
 	if mode == "" {
 		mode = "none"
+	}
+	// A server default looser than the key's ceiling is narrowed to it, so
+	// callers that never ask for a mode keep working.
+	if in.Network == "" && key.Mode == "" && key.MaxMode != "" && !ModeWithin(mode, key.MaxMode) {
+		mode = key.MaxMode
 	}
 	switch mode {
 	case "none", "full", "allow":
@@ -57,6 +65,9 @@ func (m *Manager) effectiveNet(ctx context.Context, actor Actor, in CreateInput)
 	if mode == "allow" && len(allow) == 0 {
 		return "", "", driver.NetPolicy{}, invalid("network.mode allow requires an allow list")
 	}
+	if err := checkKeyCeiling(key, mode, allow); err != nil {
+		return "", "", driver.NetPolicy{}, err
+	}
 	if (in.EgressKbps != nil && *in.EgressKbps < 0) || (in.MaxConns != nil && *in.MaxConns < 0) {
 		return "", "", driver.NetPolicy{}, invalid("bandwidth and connection limits must be >= 0")
 	}
@@ -77,6 +88,107 @@ func (m *Manager) effectiveNet(ctx context.Context, actor Actor, in CreateInput)
 		EgressKbps:   kbps, MaxConns: conns,
 	}
 	return mode, netMode, policy, nil
+}
+
+// modeRank orders network modes from most to least restrictive.
+var modeRank = map[string]int{"none": 0, "allow": 1, "full": 2}
+
+// ValidMaxMode reports whether m is an accepted key max_mode ("" is unset).
+func ValidMaxMode(m string) bool {
+	_, ok := modeRank[m]
+	return m == "" || ok
+}
+
+// ModeWithin reports whether mode is no looser than ceiling. An empty mode
+// is the server default and is checked when a sandbox is created.
+func ModeWithin(mode, ceiling string) bool {
+	if mode == "" {
+		return true
+	}
+	return modeRank[mode] <= modeRank[ceiling]
+}
+
+// checkKeyCeiling enforces a key's max_mode. Without one, the key network is
+// only a default the sandbox may override. With max_mode "allow", every
+// sandbox allow entry must fall inside the key's allow list.
+func checkKeyCeiling(key store.KeyNetwork, mode string, allow []string) error {
+	if key.MaxMode == "" {
+		return nil
+	}
+	if modeRank[mode] > modeRank[key.MaxMode] {
+		return forbidden(fmt.Sprintf("network mode %s exceeds this API key's max_mode %s", mode, key.MaxMode))
+	}
+	if mode != "allow" || key.MaxMode != "allow" {
+		return nil
+	}
+	var limit []string
+	if key.Allow != nil {
+		limit = *key.Allow
+	}
+	for _, item := range allow {
+		if !allowCovered(item, limit) {
+			return forbidden(fmt.Sprintf("allow entry %s is outside this API key's allow list", item))
+		}
+	}
+	return nil
+}
+
+// allowCovered reports whether item is in limit: the same hostname, or an
+// address or CIDR inside one of the limit's CIDRs.
+func allowCovered(item string, limit []string) bool {
+	norm := func(v string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(v)), ".") }
+	want := norm(item)
+	inner, innerErr := parsePrefix(want)
+	for _, l := range limit {
+		have := norm(l)
+		if have == want {
+			return true
+		}
+		if innerErr != nil {
+			continue
+		}
+		outer, err := parsePrefix(have)
+		if err == nil && outer.Bits() <= inner.Bits() && outer.Contains(inner.Addr()) {
+			return true
+		}
+	}
+	return false
+}
+
+func parsePrefix(v string) (netip.Prefix, error) {
+	if p, err := netip.ParsePrefix(v); err == nil {
+		return p.Masked(), nil
+	}
+	a, err := netip.ParseAddr(v)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	return netip.PrefixFrom(a, a.BitLen()), nil
+}
+
+// sameNet reports whether two effective network settings are equal. The warm
+// pool uses it so a claim never hands out a looser policy than the
+// claimant's key would get on a fresh create.
+func sameNet(modeA string, a driver.NetPolicy, modeB string, b driver.NetPolicy) bool {
+	return modeA == modeB && sameStrings(a.Allow, b.Allow) && sameStrings(a.Deny, b.Deny) &&
+		a.EgressKbps == b.EgressKbps && a.MaxConns == b.MaxConns
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]int{}
+	for _, v := range a {
+		seen[v]++
+	}
+	for _, v := range b {
+		if seen[v] == 0 {
+			return false
+		}
+		seen[v]--
+	}
+	return true
 }
 
 func unionStrings(lists ...[]string) []string {

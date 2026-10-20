@@ -102,3 +102,24 @@ func TestRenderSandboxAndBaseline(t *testing.T) {
 		t.Fatal("expected pid requirement")
 	}
 }
+
+func TestRenderBaselineCheckMirrorsInstall(t *testing.T) {
+	base := Baseline{BlockPrivate: true, BlockMetadata: true, PrivateAllow: []netip.Prefix{netip.MustParsePrefix("10.1.0.0/16")}}
+	install := RenderBaseline("sbx0", base)
+	check := RenderBaselineCheck("sbx0", base)
+	for _, line := range strings.Split(install, "\n") {
+		if rest, ok := strings.CutPrefix(line, "iptables -w 5 -A SBX-EGRESS "); ok {
+			if !strings.Contains(check, "iptables -w 5 -C SBX-EGRESS "+rest+"\n") {
+				t.Fatalf("check misses %q", rest)
+			}
+		}
+	}
+	if !strings.Contains(check, `[ "$(iptables -w 5 -S DOCKER-USER | sed -n 2p)" = "-A DOCKER-USER -i sbx0 -j SBX-EGRESS" ]`) {
+		t.Fatal(check)
+	}
+	for _, op := range []string{" -F ", " -I ", " -D ", " -N "} {
+		if strings.Contains(check, op) {
+			t.Fatalf("check must not change rules (%s)", op)
+		}
+	}
+}

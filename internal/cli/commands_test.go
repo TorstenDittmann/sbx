@@ -143,8 +143,11 @@ func TestKeysAndEnsureKey(t *testing.T) {
 	if err := Run([]string{"keys"}); err == nil {
 		t.Fatal("expected usage")
 	}
-	if err := Run([]string{"keys", "list"}); err == nil {
+	if err := Run([]string{"keys", "rotate"}); err == nil {
 		t.Fatal("expected usage")
+	}
+	if err := Run([]string{"keys", "revoke"}); err == nil {
+		t.Fatal("expected id")
 	}
 	if err := Run([]string{"keys", "create"}); err == nil {
 		t.Fatal("expected name")
@@ -164,6 +167,18 @@ func TestKeysAndEnsureKey(t *testing.T) {
 	keys, err := st.ListKeys(context.Background())
 	if err != nil || len(keys) != 1 || !keys[0].Admin() {
 		t.Fatalf("%+v %v", keys, err)
+	}
+	if err := Run([]string{"keys", "list", "--data-dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Run([]string{"keys", "revoke", "--id", "key_missing", "--data-dir", dir}); err == nil {
+		t.Fatal("expected not found")
+	}
+	if err := Run([]string{"keys", "revoke", "--id", keys[0].ID, "--data-dir", dir}); err != nil {
+		t.Fatal(err)
+	}
+	if k, err := st.KeyByID(context.Background(), keys[0].ID); err != nil || k.RevokedAt == nil || k.Usable(time.Now()) {
+		t.Fatalf("not revoked: %+v %v", k, err)
 	}
 
 	cfg := config.Default()

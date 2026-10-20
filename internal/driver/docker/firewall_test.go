@@ -227,3 +227,48 @@ func TestFilesCheckAndStream(t *testing.T) {
 		t.Fatal("expected missing runsc")
 	}
 }
+
+func TestVerifyEgressReinstallsMissingBaseline(t *testing.T) {
+	_, sock := startFakeDaemon(t)
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := egressCheckEvery
+	egressCheckEvery = 0
+	t.Cleanup(func() { egressCheckEvery = prev })
+	ctx := context.Background()
+	intact := true
+	var installs, checks int
+	d := NewWithClient(Options{
+		Name: "docker", UID: 1000, GID: 1000,
+		ScriptRunner: func(_ context.Context, script string) error {
+			if strings.Contains(script, "-C SBX-EGRESS") {
+				checks++
+				if !intact {
+					return errors.New("rule missing")
+				}
+				return nil
+			}
+			installs++
+			intact = true
+			return nil
+		},
+	}, cli)
+	if again, err := d.verifyEgress(ctx); again || err != nil || checks != 0 {
+		t.Fatalf("checked before any install: %v %v %d", again, err, checks)
+	}
+	if err := d.ensureEgress(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := d.verifyEgress(ctx); again || err != nil || installs != 1 {
+		t.Fatalf("intact baseline: %v %v installs=%d", again, err, installs)
+	}
+	intact = false
+	if err := d.RefreshNetPolicies(ctx); err == nil || !strings.Contains(err.Error(), "reinstalled") {
+		t.Fatalf("refresh after a flush = %v", err)
+	}
+	if installs != 2 || !intact {
+		t.Fatalf("baseline not reinstalled: installs=%d", installs)
+	}
+}

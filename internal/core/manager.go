@@ -97,6 +97,7 @@ type Manager struct {
 	log      *slog.Logger
 	now      func() time.Time
 	mu       sync.Mutex
+	poolMu   sync.Mutex
 	previews map[string]Preview
 	streams  map[string]int
 	budgets  map[string]*byteBudget
@@ -302,18 +303,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		m.mu.Unlock()
 		return store.Sandbox{}, quota(fmt.Sprintf("sandbox limit of %d reached", m.cfg.Limits.MaxSandboxesPerKey))
 	}
-	if m.cfg.Limits.MaxSandboxes > 0 {
-		total, err := m.store.CountAllActive(ctx)
-		if err != nil {
-			m.mu.Unlock()
-			return store.Sandbox{}, err
-		}
-		if total >= m.cfg.Limits.MaxSandboxes {
-			m.mu.Unlock()
-			return store.Sandbox{}, quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
-		}
-	}
-	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
+	// A claim turns a pooled sandbox into the caller's without adding a
+	// container, so it is tried before the node cap, which counts the pool.
+	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, mode, policy, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
 	if err != nil {
 		m.mu.Unlock()
 		return store.Sandbox{}, err
@@ -321,6 +313,14 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if okClaim {
 		m.mu.Unlock()
 		return claimed, nil
+	}
+	if err := m.checkNodeCap(ctx); err != nil {
+		m.mu.Unlock()
+		return store.Sandbox{}, err
+	}
+	if err := m.mountsStillExist(ctx, mounts); err != nil {
+		m.mu.Unlock()
+		return store.Sandbox{}, err
 	}
 	if err := m.store.InsertSandbox(ctx, sb); err != nil {
 		m.mu.Unlock()
@@ -338,13 +338,16 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		sb.Error = err.Error()
 		finished := m.now()
 		sb.FinishedAt = &finished
-		_ = m.store.UpdateSandbox(ctx, sb)
+		_ = m.store.UpdateSandboxFrom(ctx, sb, "creating")
 		return store.Sandbox{}, m.asDriver(err)
 	}
 	sb.ContainerID = handle.ID
 	sb.Status = "running"
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "creating"); err != nil {
 		_ = d.Delete(context.Background(), handle.ID)
+		if errors.Is(err, store.ErrNotFound) {
+			return store.Sandbox{}, conflict("sandbox was stopped while it was being created")
+		}
 		return store.Sandbox{}, err
 	}
 	if err := m.runSetup(ctx, d, sb.ContainerID, tpl); err != nil {
@@ -354,6 +357,22 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	m.Counts.Creates.Add(1)
 	m.log.Info("sandbox created", "id", sb.ID, "backend", backend, "image", image)
 	return sb, nil
+}
+
+// checkNodeCap enforces max_sandboxes over every live container, warm pool
+// included.
+func (m *Manager) checkNodeCap(ctx context.Context) error {
+	if m.cfg.Limits.MaxSandboxes <= 0 {
+		return nil
+	}
+	total, err := m.store.CountAllActive(ctx)
+	if err != nil {
+		return err
+	}
+	if total >= m.cfg.Limits.MaxSandboxes {
+		return quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
+	}
+	return nil
 }
 
 func (m *Manager) checkResources(cpu float64, mem, disk, pids, ttl, idle int) error {
@@ -387,7 +406,7 @@ func (m *Manager) Get(ctx context.Context, actor Actor, sandboxID string) (store
 	}
 	if sb.Status == "running" || sb.Status == "paused" {
 		sb.LastActivityAt = m.now()
-		_ = m.store.UpdateSandbox(ctx, sb)
+		_ = m.store.TouchSandbox(ctx, sb.ID, sb.LastActivityAt)
 	}
 	return sb, nil
 }
@@ -447,8 +466,8 @@ func (m *Manager) SetTTL(ctx context.Context, actor Actor, sandboxID string, ttl
 	now := m.now()
 	sb.ExpiresAt = now.Add(time.Duration(ttl) * time.Second)
 	sb.LastActivityAt = now
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
-		return store.Sandbox{}, err
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "running", "paused"); err != nil {
+		return store.Sandbox{}, stale(err)
 	}
 	return sb, nil
 }
@@ -474,8 +493,8 @@ func (m *Manager) Pause(ctx context.Context, actor Actor, sandboxID string) (sto
 	}
 	sb.Status = "paused"
 	sb.LastActivityAt = m.now()
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
-		return store.Sandbox{}, err
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "running"); err != nil {
+		return store.Sandbox{}, stale(err)
 	}
 	return sb, nil
 }
@@ -501,8 +520,8 @@ func (m *Manager) Resume(ctx context.Context, actor Actor, sandboxID string) (st
 	}
 	sb.Status = "running"
 	sb.LastActivityAt = m.now()
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
-		return store.Sandbox{}, err
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "paused"); err != nil {
+		return store.Sandbox{}, stale(err)
 	}
 	return sb, nil
 }
@@ -681,7 +700,9 @@ func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest
 		m.Counts.FileOps.Add(1)
 		return nil
 	}
-	tmp := "/tmp/sbx-upload.tar"
+	// A fixed name let two concurrent uploads to one sandbox overwrite each
+	// other's archive before tar read it.
+	tmp := "/tmp/sbx-upload-" + strings.TrimPrefix(id.RecordID(), "key_") + ".tar"
 	if err := d.WriteFile(ctx, sb.ContainerID, tmp, raw, 0o644); err != nil {
 		return m.asDriver(err)
 	}
@@ -975,7 +996,7 @@ func (m *Manager) destroy(ctx context.Context, sb store.Sandbox, reason string) 
 	}
 	containerID := cur.ContainerID
 	backend := cur.Backend
-	m.dropPreviews(cur.ID)
+	m.dropPreviews(ctx, cur.ID)
 	m.mu.Unlock()
 
 	if containerID != "" {
@@ -1052,9 +1073,19 @@ func (m *Manager) backend(sb store.Sandbox) (driver.Driver, error) {
 	return d, nil
 }
 
+// touch records activity without writing back the rest of sb, which may be
+// stale after a long operation (a concurrent delete must stay deleted).
 func (m *Manager) touch(ctx context.Context, sb store.Sandbox) {
-	sb.LastActivityAt = m.now()
-	_ = m.store.UpdateSandbox(ctx, sb)
+	_ = m.store.TouchSandbox(ctx, sb.ID, m.now())
+}
+
+// stale maps a conditional update that matched no row to a conflict: the
+// sandbox changed state while the request was in flight.
+func stale(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return conflict("sandbox is not running")
+	}
+	return err
 }
 
 func (m *Manager) asDriver(err error) error {

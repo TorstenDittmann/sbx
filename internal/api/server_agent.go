@@ -319,7 +319,7 @@ func (s *Server) proxyPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	prefix := "/v1/sandboxes/" + r.PathValue("id") + "/previews/" + pv.ID
-	s.servePreview(w, r, pv, prefix, true)
+	s.servePreview(w, r, pv, prefix, true, false)
 }
 
 func (s *Server) spliceUpgrade(w http.ResponseWriter, upstream io.ReadWriteCloser, resp *http.Response) {

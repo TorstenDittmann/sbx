@@ -376,14 +376,28 @@ func RenderBaseline(bridge string, base Baseline) string {
 	return b.String()
 }
 
-func writeBaselineFamily(b *strings.Builder, bin, bridge, reject string, base Baseline, v6 bool) {
-	fmt.Fprintf(b, "%s -w 5 -N SBX-EGRESS 2>/dev/null || true\n", bin)
-	fmt.Fprintf(b, "%s -w 5 -F SBX-EGRESS\n", bin)
+// RenderBaselineCheck returns a script that exits 0 only while the rules
+// RenderBaseline installs are all present and both jumps are still the first
+// rule of their chain. A firewalld reload, a dockerd restart, or a flush can
+// remove them while the server keeps running.
+func RenderBaselineCheck(bridge string, base Baseline) string {
+	var b strings.Builder
+	b.WriteString("set -e\n")
+	writeBaselineCheck(&b, "iptables", bridge, "icmp-host-prohibited", base, false)
+	b.WriteString("if command -v ip6tables >/dev/null 2>&1 && ip6tables -w 5 -L DOCKER-USER -n >/dev/null 2>&1; then\n")
+	writeBaselineCheck(&b, "ip6tables", bridge, "icmp6-adm-prohibited", base, true)
+	b.WriteString("fi\n")
+	return b.String()
+}
+
+// baselineRules lists the SBX-EGRESS rule specs in order.
+func baselineRules(reject string, base Baseline, v6 bool) []string {
+	var rules []string
 	for _, p := range base.PrivateAllow {
 		if p.Addr().Is6() != v6 || overlapsMetadata(p) {
 			continue
 		}
-		fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -d %s -j RETURN\n", bin, p.String())
+		rules = append(rules, fmt.Sprintf("-d %s -j RETURN", p.String()))
 	}
 	var prefixes []netip.Prefix
 	if base.BlockMetadata {
@@ -403,12 +417,29 @@ func writeBaselineFamily(b *strings.Builder, bin, bridge, reject string, base Ba
 		}
 	}
 	for _, p := range prefixes {
-		fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -d %s -j REJECT --reject-with %s\n", bin, p.String(), reject)
+		rules = append(rules, fmt.Sprintf("-d %s -j REJECT --reject-with %s", p.String(), reject))
 	}
-	fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS -j RETURN\n", bin)
+	return append(rules, "-j RETURN")
+}
+
+func writeBaselineFamily(b *strings.Builder, bin, bridge, reject string, base Baseline, v6 bool) {
+	fmt.Fprintf(b, "%s -w 5 -N SBX-EGRESS 2>/dev/null || true\n", bin)
+	fmt.Fprintf(b, "%s -w 5 -F SBX-EGRESS\n", bin)
+	for _, rule := range baselineRules(reject, base, v6) {
+		fmt.Fprintf(b, "%s -w 5 -A SBX-EGRESS %s\n", bin, rule)
+	}
 	// Insert at the head. An appended jump loses to an earlier ACCEPT on DOCKER-USER.
 	fmt.Fprintf(b, "%s -w 5 -D DOCKER-USER -i %s -j SBX-EGRESS 2>/dev/null || true\n", bin, bridge)
 	fmt.Fprintf(b, "%s -w 5 -I DOCKER-USER 1 -i %s -j SBX-EGRESS\n", bin, bridge)
 	fmt.Fprintf(b, "%s -w 5 -D INPUT -i %s -j SBX-EGRESS 2>/dev/null || true\n", bin, bridge)
 	fmt.Fprintf(b, "%s -w 5 -I INPUT 1 -i %s -j SBX-EGRESS\n", bin, bridge)
+}
+
+func writeBaselineCheck(b *strings.Builder, bin, bridge, reject string, base Baseline, v6 bool) {
+	for _, rule := range baselineRules(reject, base, v6) {
+		fmt.Fprintf(b, "%s -w 5 -C SBX-EGRESS %s\n", bin, rule)
+	}
+	for _, chain := range []string{"DOCKER-USER", "INPUT"} {
+		fmt.Fprintf(b, "[ \"$(%s -w 5 -S %s | sed -n 2p)\" = \"-A %s -i %s -j SBX-EGRESS\" ]\n", bin, chain, chain, bridge)
+	}
 }

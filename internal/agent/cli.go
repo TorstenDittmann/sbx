@@ -252,14 +252,32 @@ func serveAgent(ctx context.Context, ln net.Listener, a *Agent) error {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+	var delay time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			// A transient error such as EMFILE would otherwise spin.
+			if delay == 0 {
+				delay = 5 * time.Millisecond
+			} else if delay < time.Second {
+				delay *= 2
+			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil
+			case <-timer.C:
+			}
 			continue
 		}
+		delay = 0
 		go a.ServeConn(conn)
 	}
 }

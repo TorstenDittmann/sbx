@@ -122,6 +122,34 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/CreatedKey"}
+  /v1/keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getKey
+      summary: Get one API key
+      responses:
+        "200":
+          description: Key without its secret
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APIKey"}
+        "404": {description: Not found}
+    delete:
+      operationId: revokeKey
+      summary: Revoke an API key
+      description: >
+        The key stops authenticating immediately. Revoking twice keeps the
+        first revoked_at. Sandboxes and volumes the key owns are left for an
+        admin to inspect or delete. The last usable admin key cannot be
+        revoked through the API (409); `sbx keys revoke` on the host can.
+      responses:
+        "204": {description: Revoked}
+        "404": {description: Not found}
+        "409": {description: This is the last usable admin key}
   /v1/backends:
     get:
       operationId: listBackends
@@ -865,7 +893,12 @@ components:
           type: array
           items: {type: string}
         created_at: {type: string, format: date-time}
-        last_used_at: {type: string, format: date-time}
+        last_used_at:
+          type: string
+          format: date-time
+          description: Updated at most once a minute.
+        expires_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
         network: {$ref: "#/components/schemas/KeyNetwork"}
     CreateKey:
       type: object
@@ -875,12 +908,26 @@ components:
         scopes:
           type: array
           items: {type: string, enum: [admin, sandbox]}
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional. Must be in the future. The key stops authenticating at this time.
         network: {$ref: "#/components/schemas/KeyNetwork"}
     KeyNetwork:
       type: object
-      description: Default network policy for sandboxes created with this key.
+      description: >
+        Network policy for sandboxes created with this key. mode and allow are
+        defaults a sandbox may override unless max_mode is set.
       properties:
         mode: {type: string, enum: [none, full, allow]}
+        max_mode:
+          type: string
+          enum: [none, allow, full]
+          description: >
+            Optional ceiling. A sandbox asking for a looser mode gets 403, a
+            looser server default is narrowed to it, and under allow every
+            sandbox allow entry must fall inside this key's allow list (which
+            is then required).
         allow:
           type: array
           items: {type: string}

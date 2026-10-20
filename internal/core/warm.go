@@ -30,7 +30,12 @@ func (m *Manager) Replenish(ctx context.Context) {
 	}
 }
 
+// fillTemplate tops up one pool. poolMu serializes fills, since the reaper
+// and every claim start one and two concurrent fills would both see room
+// and overfill the pool.
 func (m *Manager) fillTemplate(ctx context.Context, tpl store.Template) error {
+	m.poolMu.Lock()
+	defer m.poolMu.Unlock()
 	backend := tpl.Backend
 	if backend == "" {
 		backend = m.cfg.Backend
@@ -49,6 +54,12 @@ func (m *Manager) fillTemplate(ctx context.Context, tpl store.Template) error {
 		}
 		if pooling >= maxPoolSandboxes {
 			return invalid("warm pool is full")
+		}
+		m.mu.Lock()
+		err = m.checkNodeCap(ctx)
+		m.mu.Unlock()
+		if err != nil {
+			return err
 		}
 		if err := m.createWarm(ctx, tpl, backend); err != nil {
 			return err
@@ -98,7 +109,7 @@ func (m *Manager) createWarm(ctx context.Context, tpl store.Template, backend st
 		return err
 	}
 	sb.Status = "warm"
-	if err := m.store.UpdateSandbox(ctx, sb); err != nil {
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "creating"); err != nil {
 		_ = d.Delete(context.Background(), handle.ID)
 		return err
 	}
@@ -156,8 +167,15 @@ func (m *Manager) drainPool(ctx context.Context, template string) {
 	}
 }
 
-func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl store.Template, backend string, cpu float64, mem, disk, pids, ttl, idle int) (store.Sandbox, bool, error) {
+func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl store.Template, backend, mode string, policy driver.NetPolicy, cpu float64, mem, disk, pids, ttl, idle int) (store.Sandbox, bool, error) {
 	if tpl.Name == "" || !warmCompatible(in, tpl, backend, cpu, mem, disk, pids) {
+		return store.Sandbox{}, false, nil
+	}
+	// Pooled sandboxes were created without a key. Claim one only when the
+	// caller's key would produce the same network on a fresh create, so a key
+	// default or max_mode is never bypassed through the pool.
+	poolMode, _, poolPolicy, err := m.effectiveNet(ctx, Actor{}, CreateInput{Network: tpl.Network})
+	if err != nil || !sameNet(mode, policy, poolMode, poolPolicy) {
 		return store.Sandbox{}, false, nil
 	}
 	sb, err := m.store.ClaimWarm(ctx, tpl.Name, backend, actor.KeyID, nonNil(in.Labels), ttl, idle, m.now())

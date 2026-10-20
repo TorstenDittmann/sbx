@@ -173,7 +173,7 @@ docker compose up --build
 
 Inside that container the listen address has to be `:8080`. Binding only `127.0.0.1` would hide the port from the published mapping.
 
-`sbx doctor` checks the socket and warns when `runsc` is missing. `sbx keys create --name NAME` mints another key. `sbx healthcheck` hits `/healthz`, mapping `:8080` and `0.0.0.0` to `127.0.0.1`.
+`sbx doctor` checks the socket and warns when `runsc` is missing. `sbx keys create --name NAME` mints another key, `sbx keys list` shows them, and `sbx keys revoke --id ID` revokes one. `sbx healthcheck` hits `/healthz`, mapping `:8080` and `0.0.0.0` to `127.0.0.1`.
 
 Config file, then environment, then flags. See `sbx.yaml.example`. Useful variables: `SBX_ADDR`, `SBX_DATA_DIR`, `SBX_BACKEND`, `SBX_DOCKER_HOST`, `SBX_GVISOR_RUNTIME`, `SBX_KATA_RUNTIME`, `SBX_FIRECRACKER_BIN`, `SBX_FIRECRACKER_KERNEL`, `SBX_FIRECRACKER_JAILER`, `SBX_READ_ONLY_ROOTFS`, `SBX_BOOTSTRAP_KEY`, `SBX_LOG_LEVEL`, `SBX_AGENT_BIN`.
 

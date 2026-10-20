@@ -95,6 +95,11 @@ export type NetworkPolicy = {
   maxConnections?: number
 }
 
+/** A key's network policy. `maxMode` makes the key's mode and allow list a ceiling instead of a default. */
+export type KeyNetworkPolicy = NetworkPolicy & {
+  maxMode?: NetworkMode
+}
+
 export type BackendInfo = {
   name: string
   available: boolean
@@ -177,13 +182,22 @@ export type CreatePreviewOptions = {
   public?: boolean
 }
 
-export type CreatedKey = {
+/** An API key without its secret. */
+export type KeyInfo = {
   id: string
   name: string
   prefix: string
   scopes: string[]
+  network: KeyNetworkPolicy
+  createdAt?: string
+  lastUsedAt?: string
+  expiresAt?: string
+  revokedAt?: string
+}
+
+/** A new API key. `key` is the secret and is only returned once. */
+export type CreatedKey = KeyInfo & {
   key: string
-  network: NetworkPolicy
 }
 
 /** A filesystem change inside a sandbox. `type` is `create`, `write`, or `remove`. */
@@ -467,11 +481,29 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
   }
 
-  createKey(name: string, options: { scopes?: string[]; network?: NetworkPolicy } = {}): Promise<CreatedKey> {
+  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string } = {}): Promise<CreatedKey> {
     const body: Record<string, unknown> = { name }
     if (options.scopes) body.scopes = options.scopes
-    if (options.network) body.network = networkBody(options.network)
-    return this.requestJSON<CreatedKeyJSON>("POST", "/v1/keys", body).then(mapKey)
+    if (options.network) {
+      const network = networkBody(options.network)
+      if (options.network.maxMode) network.max_mode = options.network.maxMode
+      body.network = network
+    }
+    if (options.expiresAt) body.expires_at = options.expiresAt instanceof Date ? options.expiresAt.toISOString() : options.expiresAt
+    return this.requestJSON<KeyJSON & { key: string }>("POST", "/v1/keys", body).then((raw) => ({ ...mapKey(raw), key: raw.key }))
+  }
+
+  listKeys(): Promise<KeyInfo[]> {
+    return this.requestJSON<{ keys: KeyJSON[] }>("GET", "/v1/keys").then((body) => body.keys.map(mapKey))
+  }
+
+  getKey(id: string): Promise<KeyInfo> {
+    return this.requestJSON<KeyJSON>("GET", `/v1/keys/${encodeURIComponent(id)}`).then(mapKey)
+  }
+
+  /** Revoke a key. It stops authenticating immediately. */
+  revokeKey(id: string): Promise<void> {
+    return this.request("DELETE", `/v1/keys/${encodeURIComponent(id)}`).then(() => undefined)
   }
 
   getSandbox(id: string): Promise<SandboxInfo> {
@@ -753,14 +785,18 @@ function mapTerminal(raw: TerminalJSON): TerminalInfo {
   return { id: raw.id, pid: raw.pid, cols: raw.cols, rows: raw.rows }
 }
 
-type CreatedKeyJSON = {
+type KeyJSON = {
   id: string
   name: string
   prefix: string
   scopes?: string[]
-  key: string
+  created_at?: string
+  last_used_at?: string
+  expires_at?: string
+  revoked_at?: string
   network?: {
     mode?: NetworkMode
+    max_mode?: NetworkMode
     allow?: string[]
     deny?: string[]
     egress_kbps?: number
@@ -768,16 +804,20 @@ type CreatedKeyJSON = {
   }
 }
 
-function mapKey(raw: CreatedKeyJSON): CreatedKey {
+function mapKey(raw: KeyJSON): KeyInfo {
   const network = raw.network ?? {}
   return {
     id: raw.id,
     name: raw.name,
     prefix: raw.prefix,
     scopes: raw.scopes ?? [],
-    key: raw.key,
+    createdAt: raw.created_at,
+    lastUsedAt: raw.last_used_at,
+    expiresAt: raw.expires_at,
+    revokedAt: raw.revoked_at,
     network: {
       mode: network.mode,
+      maxMode: network.max_mode,
       allow: network.allow,
       deny: network.deny,
       egressKbps: network.egress_kbps,

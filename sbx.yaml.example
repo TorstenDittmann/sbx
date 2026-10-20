@@ -68,4 +68,6 @@ network:
   # preview_domain: sbx.example.com
   # public_url: https://api.example.com
   allow_public_previews: true
+  # Route preview hosts by X-Forwarded-Host. Only behind a proxy that sets it.
+  trust_forwarded_host: false
   preview_max_streams: 64

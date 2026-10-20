@@ -74,6 +74,12 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		delete(bySandbox, sb.ID)
 	}
+	if err := m.LoadPreviews(ctx); err != nil {
+		m.log.Warn("preview restore failed", "err", err)
+		if first == nil {
+			first = err
+		}
+	}
 	for id, hit := range bySandbox {
 		sb, err := m.store.GetSandbox(ctx, id)
 		if err == nil && (sb.Status == "creating" || sb.Status == "running" || sb.Status == "paused") {

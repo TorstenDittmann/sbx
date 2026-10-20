@@ -117,7 +117,7 @@ func (a *Agent) spawn(spec ExecSpec) (*proc, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := command.Start(); err != nil {
+		if err := startChild(command); err != nil {
 			return nil, err
 		}
 		p.stdin = in
@@ -149,7 +149,7 @@ func (a *Agent) spawn(spec ExecSpec) (*proc, error) {
 	}
 	go func() {
 		readers.Wait()
-		err := command.Wait()
+		err := waitChild(command)
 		code := exitCode(err)
 		p.closeMaster()
 		p.finish(code)
