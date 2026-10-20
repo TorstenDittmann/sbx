@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -62,6 +63,10 @@ func (d *Driver) DropNetPolicy(ctx context.Context, containerID string) error {
 // RefreshNetPolicies re-resolves domains and reinstalls rules for sandboxes
 // this process has applied.
 func (d *Driver) RefreshNetPolicies(ctx context.Context) error {
+	reinstalled, baseErr := d.verifyEgress(ctx)
+	if reinstalled && baseErr == nil {
+		baseErr = errors.New("egress baseline rules were missing and have been reinstalled")
+	}
 	d.polMu.Lock()
 	snap := make([]appliedNet, 0, len(d.policies))
 	ids := make([]string, 0, len(d.policies))
@@ -75,6 +80,9 @@ func (d *Driver) RefreshNetPolicies(ctx context.Context) error {
 		if err := d.ApplyNetPolicy(ctx, ids[i], pol.spec); err != nil && first == nil {
 			first = err
 		}
+	}
+	if baseErr != nil {
+		return baseErr
 	}
 	return first
 }

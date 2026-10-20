@@ -63,7 +63,9 @@ type Driver struct {
 	client      *Client
 	egressMu    sync.Mutex
 	egressReady bool
-	bridge      string
+	// egressChecked is when verifyEgress last looked at the baseline.
+	egressChecked time.Time
+	bridge        string
 
 	agentMu    sync.Mutex
 	agentReady string

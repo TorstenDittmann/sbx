@@ -28,7 +28,7 @@ With the defaults, traffic from the bridge is rejected to:
 - RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`)
 - IPv6 link-local `fe80::/10`, unique-local `fc00::/7`, and `::1`
 
-`network.private_allow` is a list of CIDRs that skip the private-range reject. It cannot open metadata. The only way to reach metadata is `network.block_metadata: false`. `network.block_private: false` turns the private-range reject off. Both blocks default to on. Per-sandbox rules run before this baseline, then return into it, so a sandbox allow list cannot punch through the blocks.
+`network.private_allow` is a list of CIDRs that skip the private-range reject. It cannot open metadata. The only way to reach metadata is `network.block_metadata: false`. `network.block_private: false` turns the private-range reject off. Both blocks default to on. Per-sandbox rules run before this baseline, then return into it, so a sandbox allow list cannot punch through the blocks. The reaper checks the baseline every 30 seconds and reinstalls it when a firewalld reload, a `dockerd` restart, or a flush removed it, and logs a warning when it does.
 
 If the firewall cannot be installed, `full` and `allow` fail and the container is removed.
 

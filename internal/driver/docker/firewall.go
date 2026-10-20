@@ -23,6 +23,10 @@ const (
 )
 
 const sandboxV6Subnet = "fd16:5b00::/64"
+
+// egressCheckEvery is how often verifyEgress looks at the baseline rules.
+var egressCheckEvery = 30 * time.Second
+
 const sandboxV6Gateway = "fd16:5b00::1"
 
 var bridgeNameRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,15}$`)
@@ -86,6 +90,34 @@ func (d *Driver) ensureEgress(ctx context.Context) error {
 	}
 	d.egressReady = true
 	return nil
+}
+
+// verifyEgress reinstalls the baseline when its rules are gone. ensureEgress
+// installs them once per process, but a firewalld reload, a dockerd restart,
+// or an iptables flush can remove them while sandboxes with network=full
+// keep running, which would silently reopen metadata and private ranges.
+// It returns whether the rules had to be reinstalled.
+func (d *Driver) verifyEgress(ctx context.Context) (bool, error) {
+	d.egressMu.Lock()
+	defer d.egressMu.Unlock()
+	if !d.egressReady {
+		return false, nil
+	}
+	// Without host iptables each check starts a privileged helper container,
+	// so the reaper's 5 second tick is too often.
+	now := time.Now()
+	if now.Sub(d.egressChecked) < egressCheckEvery {
+		return false, nil
+	}
+	d.egressChecked = now
+	base := d.baseline()
+	if err := d.installScript(ctx, netpolicy.RenderBaselineCheck(d.bridge, base)); err == nil {
+		return false, nil
+	}
+	if err := d.installScript(ctx, netpolicy.RenderBaseline(d.bridge, base)); err != nil {
+		return true, fmt.Errorf("egress baseline is missing and could not be reinstalled: %w", err)
+	}
+	return true, nil
 }
 
 func (d *Driver) installScript(ctx context.Context, script string) error {
