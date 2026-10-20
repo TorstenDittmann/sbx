@@ -269,6 +269,8 @@ func (d *Driver) DialPort(_ context.Context, id string, port int) (io.ReadWriteC
 		}
 		resp.Header.Set("Content-Type", "text/plain")
 		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		// Tests read back which cookies the proxy forwarded.
+		resp.Header.Set("X-Fake-Cookie", req.Header.Get("Cookie"))
 		_ = resp.Write(server)
 	}()
 	return client, nil

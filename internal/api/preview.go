@@ -24,12 +24,19 @@ func (s *Server) proxyPublicPath(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 		return
 	}
-	if !s.previewAllowed(r, pv) {
+	prefix := "/p/" + sandboxID + "/" + strconv.Itoa(port)
+	ok, fromQuery := s.previewAllowed(r, pv)
+	if !ok {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "preview requires a token or API key")
 		return
 	}
-	prefix := "/p/" + sandboxID + "/" + strconv.Itoa(port)
-	s.servePreview(w, r, pv, prefix, false)
+	if fromQuery != "" && s.exchangePreviewToken(w, r, fromQuery, prefix+"/") {
+		return
+	}
+	// Path previews of every sandbox share the server origin, so a cookie
+	// one sandbox set could be read by another. Only host previews, which
+	// each get their own origin, forward the browser's cookies.
+	s.servePreview(w, r, pv, prefix, false, false)
 }
 
 // routePreviewHost serves <port>-sbx-<id>.<preview_domain> before the API mux.
@@ -40,7 +47,7 @@ func (s *Server) routePreviewHost(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		port, hexID, ok := parsePreviewHost(requestHost(r), domain)
+		port, hexID, ok := parsePreviewHost(s.requestHost(r), domain)
 		if !ok {
 			next.ServeHTTP(w, r)
 			return
@@ -51,34 +58,88 @@ func (s *Server) routePreviewHost(next http.Handler) http.Handler {
 			writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 			return
 		}
-		if !s.previewAllowed(r, pv) {
+		ok, fromQuery := s.previewAllowed(r, pv)
+		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized", "preview requires a token or API key")
 			return
 		}
-		s.servePreview(w, r, pv, "", false)
+		if fromQuery != "" && s.exchangePreviewToken(w, r, fromQuery, "/") {
+			return
+		}
+		s.servePreview(w, r, pv, "", false, true)
 	})
 }
 
-func (s *Server) previewAllowed(r *http.Request, pv core.Preview) bool {
+// previewCookie carries a preview token after the first ?token= request, so
+// the page's own subresources and XHRs are authorized too.
+const previewCookie = "sbx_preview"
+
+// previewAllowed reports whether r may open pv. fromQuery is the token when
+// it was accepted from the ?token= query parameter, so the caller can swap
+// it for a cookie.
+func (s *Server) previewAllowed(r *http.Request, pv core.Preview) (ok bool, fromQuery string) {
 	if pv.Public && s.mgr.Config().Network.AllowPublicPreviews {
-		return true
+		return true, ""
 	}
-	token := r.Header.Get("X-Sbx-Preview-Token")
-	if token == "" {
-		token = r.URL.Query().Get("token")
+	if s.mgr.PreviewTokenOK(pv, r.Header.Get("X-Sbx-Preview-Token")) {
+		return true, ""
 	}
-	if s.mgr.PreviewTokenOK(pv, token) {
-		return true
+	if token := r.URL.Query().Get("token"); s.mgr.PreviewTokenOK(pv, token) {
+		return true, token
+	}
+	// A sandbox app could set a same-named cookie for another path, so
+	// every value the browser sent is tried.
+	for _, c := range r.Cookies() {
+		if c.Name == previewCookie && s.mgr.PreviewTokenOK(pv, c.Value) {
+			return true, ""
+		}
 	}
 	key, err := s.authenticate(r)
 	if err != nil || !key.HasScope("sandbox") {
-		return false
+		return false, ""
 	}
 	_, err = s.mgr.Get(r.Context(), core.Actor{KeyID: key.ID, Admin: key.Admin()}, pv.SandboxID)
-	return err == nil
+	return err == nil, ""
 }
 
-func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Preview, prefix string, ownerOnly bool) {
+// exchangePreviewToken stores token in an HttpOnly cookie scoped to path. A
+// GET or HEAD is redirected to the same URL without ?token= so the secret
+// leaves the address bar and history; it reports true when it redirected.
+func (s *Server) exchangePreviewToken(w http.ResponseWriter, r *http.Request, token, path string) bool {
+	http.SetCookie(w, &http.Cookie{
+		Name: previewCookie, Value: token, Path: path,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure: r.TLS != nil || strings.HasPrefix(s.externalBase(r), "https://"),
+	})
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if headerHasToken(r.Header, "Connection", "upgrade") {
+		return false
+	}
+	u := *r.URL
+	q := u.Query()
+	q.Del("token")
+	u.RawQuery = q.Encode()
+	u.Scheme, u.Host = "", ""
+	http.Redirect(w, r, u.RequestURI(), http.StatusFound)
+	return true
+}
+
+// filterCookies drops the preview token cookie from a Cookie header value.
+func filterCookies(header string) string {
+	var keep []string
+	for _, part := range strings.Split(header, ";") {
+		name, _, _ := strings.Cut(strings.TrimSpace(part), "=")
+		if strings.TrimSpace(part) == "" || name == previewCookie {
+			continue
+		}
+		keep = append(keep, strings.TrimSpace(part))
+	}
+	return strings.Join(keep, "; ")
+}
+
+func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Preview, prefix string, ownerOnly, forwardCookies bool) {
 	if err := s.mgr.AcquirePreview(pv.SandboxID); err != nil {
 		writeManager(w, err)
 		return
@@ -120,7 +181,14 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Pr
 	out.URL.RawQuery = q.Encode()
 	out.Host = out.URL.Host
 	out.Header.Del("Authorization")
+	cookies := ""
+	if forwardCookies {
+		cookies = filterCookies(strings.Join(r.Header.Values("Cookie"), "; "))
+	}
 	out.Header.Del("Cookie")
+	if cookies != "" {
+		out.Header.Set("Cookie", cookies)
+	}
 	out.Header.Del("X-Sbx-Preview-Token")
 	if !headerHasToken(r.Header, "Connection", "upgrade") {
 		stripHop(out.Header)
@@ -140,6 +208,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Pr
 		return
 	}
 	stripHop(resp.Header)
+	dropPreviewSetCookie(resp.Header)
 	for k, values := range resp.Header {
 		for _, v := range values {
 			w.Header().Add(k, v)
@@ -185,8 +254,29 @@ func (t *throttleStream) Write(p []byte) (int, error) {
 	return t.ReadWriteCloser.Write(p)
 }
 
-func requestHost(r *http.Request) string {
-	host := r.Header.Get("X-Forwarded-Host")
+// dropPreviewSetCookie removes upstream attempts to set the token cookie.
+func dropPreviewSetCookie(h http.Header) {
+	values := h.Values("Set-Cookie")
+	if len(values) == 0 {
+		return
+	}
+	h.Del("Set-Cookie")
+	for _, v := range values {
+		name, _, _ := strings.Cut(strings.TrimSpace(v), "=")
+		if name != previewCookie {
+			h.Add("Set-Cookie", v)
+		}
+	}
+}
+
+// requestHost is the host the client asked for. X-Forwarded-Host is only
+// honored when the operator says a proxy in front sets it; otherwise any
+// client could pick which preview host a request is routed as.
+func (s *Server) requestHost(r *http.Request) string {
+	host := ""
+	if s.mgr.Config().Network.TrustForwardedHost {
+		host = r.Header.Get("X-Forwarded-Host")
+	}
 	if host == "" {
 		host = r.Host
 	}

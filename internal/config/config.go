@@ -109,7 +109,10 @@ type NetworkConfig struct {
 	PreviewDomain       string
 	PublicURL           string
 	AllowPublicPreviews bool
-	PreviewMaxStreams   int
+	// TrustForwardedHost routes preview hosts by X-Forwarded-Host. Turn it
+	// on only behind a proxy that sets or strips that header.
+	TrustForwardedHost bool
+	PreviewMaxStreams  int
 }
 
 // Default is the secure single-node configuration.
@@ -255,6 +258,7 @@ type fileNetwork struct {
 	PreviewDomain       *string  `yaml:"preview_domain"`
 	PublicURL           *string  `yaml:"public_url"`
 	AllowPublicPreviews *bool    `yaml:"allow_public_previews"`
+	TrustForwardedHost  *bool    `yaml:"trust_forwarded_host"`
 	PreviewMaxStreams   *int     `yaml:"preview_max_streams"`
 }
 
@@ -352,6 +356,7 @@ func (f fileConfig) apply(cfg *Config) {
 		setString(&cfg.Network.PreviewDomain, n.PreviewDomain)
 		setString(&cfg.Network.PublicURL, n.PublicURL)
 		setBool(&cfg.Network.AllowPublicPreviews, n.AllowPublicPreviews)
+		setBool(&cfg.Network.TrustForwardedHost, n.TrustForwardedHost)
 		setInt(&cfg.Network.PreviewMaxStreams, n.PreviewMaxStreams)
 	}
 }
@@ -396,6 +401,7 @@ func applyEnv(cfg *Config) {
 	envString(&cfg.Network.PreviewDomain, "SBX_PREVIEW_DOMAIN")
 	envString(&cfg.Network.PublicURL, "SBX_PUBLIC_URL")
 	envBool(&cfg.Network.AllowPublicPreviews, "SBX_ALLOW_PUBLIC_PREVIEWS")
+	envBool(&cfg.Network.TrustForwardedHost, "SBX_TRUST_FORWARDED_HOST")
 	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
 }
 

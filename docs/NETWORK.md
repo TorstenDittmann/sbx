@@ -67,6 +67,10 @@ Previews are stored in SQLite (the token only as a hash), so URLs and tokens kee
 
 A preview is reachable when it is `public` (and `allow_public_previews` is still true), or the caller sends the token (`?token=` or `X-Sbx-Preview-Token`), or the caller sends an API key that owns the sandbox. The token and `access_token` query parameters are stripped before the request is forwarded. Hop headers are stripped except on a WebSocket upgrade, which is spliced.
 
+The first request that carries `?token=` gets an HttpOnly `sbx_preview` cookie scoped to that preview and, for GET and HEAD, a redirect to the same URL without the token, so the page's scripts, styles, and XHRs are authorized too. Host previews (`preview_domain`) forward the browser's own cookies to the app, minus `sbx_preview`. Path previews (`/p/...`) drop all cookies, because every sandbox shares the server's origin there and one sandbox could read another's cookies. Use `preview_domain` for apps that need sessions or that you do not trust.
+
+`X-Forwarded-Host` is ignored when picking a preview host unless `network.trust_forwarded_host` (`SBX_TRUST_FORWARDED_HOST`) is true. Turn it on only behind a proxy that sets that header. The proxies in this document pass `Host`, which needs no setting.
+
 The server does not speak HTTP/2 to the sandbox. Terminate TLS and HTTP/2 at the proxy and use HTTP/1.1 upstream so `Upgrade: websocket` still works. The proxy must pass `Host` and `Upgrade`.
 
 ```yaml

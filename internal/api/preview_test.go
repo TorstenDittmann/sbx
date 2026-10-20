@@ -64,18 +64,49 @@ func TestPreviewPublicTokenAndHost(t *testing.T) {
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("open path %s", resp.Status)
 	}
-	resp = h.do(t, http.MethodGet, path+"?token="+preview.Token, "", nil)
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := noFollow.Get(h.srv.URL + path + "?token=" + preview.Token + "&x=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != path+"?x=1" {
+		t.Fatalf("token path %s location %q", resp.Status, resp.Header.Get("Location"))
+	}
+	var tokenCookie *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "sbx_preview" {
+			tokenCookie = c
+		}
+	}
+	if tokenCookie == nil || tokenCookie.Value != preview.Token || !tokenCookie.HttpOnly || !tokenCookie.Secure || tokenCookie.Path != "/p/"+created.ID+"/3000/" {
+		t.Fatalf("token cookie %+v", tokenCookie)
+	}
+	req, err := http.NewRequest(http.MethodGet, h.srv.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Cookie", "app=1; sbx_preview=wrong; sbx_preview="+preview.Token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "preview-ok" {
-		t.Fatalf("token path %s %q", resp.Status, body)
+		t.Fatalf("token cookie path %s %q", resp.Status, body)
+	}
+	if got := resp.Header.Get("X-Fake-Cookie"); got != "" {
+		t.Fatalf("path preview forwarded cookies %q", got)
 	}
 
-	req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/health", nil)
+	req, err = http.NewRequest(http.MethodGet, h.srv.URL+"/health", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Host = wantHost
 	req.Header.Set("X-Sbx-Preview-Token", preview.Token)
+	req.Header.Set("Cookie", "session=abc; sbx_preview=x")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -84,6 +115,26 @@ func TestPreviewPublicTokenAndHost(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || string(body) != "preview-ok" {
 		t.Fatalf("host %s %q", resp.Status, body)
+	}
+	if got := resp.Header.Get("X-Fake-Cookie"); got != "session=abc" {
+		t.Fatalf("host preview cookies %q, want the app cookie without the token", got)
+	}
+
+	// X-Forwarded-Host is ignored unless the operator trusts the proxy.
+	req, err = http.NewRequest(http.MethodGet, h.srv.URL+"/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-Host", wantHost)
+	req.Header.Set("X-Sbx-Preview-Token", preview.Token)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) == "preview-ok" {
+		t.Fatal("untrusted X-Forwarded-Host routed to a preview")
 	}
 
 	resp = h.do(t, http.MethodPost, "/v1/sandboxes/"+created.ID+"/previews", h.key, map[string]any{"port": 4000, "public": true})
@@ -172,4 +223,34 @@ func newConfiguredHarness(t *testing.T, cfg config.Config) *harness {
 	srv := httptest.NewServer(api.New(mgr, log, nil).Handler())
 	t.Cleanup(srv.Close)
 	return &harness{srv: srv, key: plain, docker: fd, store: st}
+}
+
+func TestPreviewTrustedForwardedHost(t *testing.T) {
+	cfg := config.Default()
+	cfg.Network.PreviewDomain = "sbx.example.com"
+	cfg.Network.TrustForwardedHost = true
+	h := newConfiguredHarness(t, cfg)
+	var created struct {
+		ID string `json:"id"`
+	}
+	decode(t, h.do(t, http.MethodPost, "/v1/sandboxes", h.key, map[string]any{"image": "alpine:3.20"}), &created)
+	var preview struct {
+		Token string `json:"token"`
+	}
+	decode(t, h.do(t, http.MethodPost, "/v1/sandboxes/"+created.ID+"/previews", h.key, map[string]any{"port": 3000}), &preview)
+	req, err := http.NewRequest(http.MethodGet, h.srv.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Forwarded-Host", "3000-sbx-"+strings.TrimPrefix(created.ID, "sbx_")+".sbx.example.com")
+	req.Header.Set("X-Sbx-Preview-Token", preview.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if string(body) != "preview-ok" {
+		t.Fatalf("trusted forwarded host %s %q", resp.Status, body)
+	}
 }
