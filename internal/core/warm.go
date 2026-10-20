@@ -30,7 +30,12 @@ func (m *Manager) Replenish(ctx context.Context) {
 	}
 }
 
+// fillTemplate tops up one pool. poolMu serializes fills, since the reaper
+// and every claim start one and two concurrent fills would both see room
+// and overfill the pool.
 func (m *Manager) fillTemplate(ctx context.Context, tpl store.Template) error {
+	m.poolMu.Lock()
+	defer m.poolMu.Unlock()
 	backend := tpl.Backend
 	if backend == "" {
 		backend = m.cfg.Backend
@@ -49,6 +54,12 @@ func (m *Manager) fillTemplate(ctx context.Context, tpl store.Template) error {
 		}
 		if pooling >= maxPoolSandboxes {
 			return invalid("warm pool is full")
+		}
+		m.mu.Lock()
+		err = m.checkNodeCap(ctx)
+		m.mu.Unlock()
+		if err != nil {
+			return err
 		}
 		if err := m.createWarm(ctx, tpl, backend); err != nil {
 			return err

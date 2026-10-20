@@ -82,6 +82,12 @@ func (m *Manager) DeleteVolume(ctx context.Context, actor Actor, volumeID string
 	if err != nil {
 		return err
 	}
+	// Create inserts its row under m.mu after checking that its volumes still
+	// exist. Holding m.mu here keeps a create from slipping between this
+	// in-use check and the delete, which would let Docker recreate the volume
+	// empty under the same name.
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	inUse, err := m.store.VolumeInUse(ctx, vol.ID)
 	if err != nil {
 		return err
@@ -131,6 +137,20 @@ func (m *Manager) resolveMounts(ctx context.Context, actor Actor, backend string
 		out = append(out, store.Mount{VolumeID: vol.ID, Path: p, Source: vol.DockerName})
 	}
 	return out, nil
+}
+
+// mountsStillExist re-checks mounted volumes. The caller holds m.mu, so a
+// concurrent DeleteVolume has either finished or not started.
+func (m *Manager) mountsStillExist(ctx context.Context, mounts []store.Mount) error {
+	for _, mt := range mounts {
+		if _, err := m.store.GetVolume(ctx, mt.VolumeID); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return notFound("volume not found")
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func validVolumeName(name string) error {

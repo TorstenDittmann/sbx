@@ -600,7 +600,7 @@ func (s *Store) CountAllActive(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sandboxes
-		WHERE status IN ('creating', 'running', 'paused')`).Scan(&n)
+		WHERE status IN ('creating', 'running', 'paused', 'warm')`).Scan(&n)
 	return n, err
 }
 

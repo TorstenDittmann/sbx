@@ -139,6 +139,10 @@ func runServer(ctx context.Context, cfg config.Config, mgr *core.Manager, log *s
 		Addr:              cfg.Addr,
 		Handler:           api.New(mgr, log, apispec.OpenAPI).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Idle keep-alive connections are closed so clients that never hang
+		// up cannot hold sockets open forever. Read and write timeouts stay
+		// off: exec streams, watches, and terminals are long-lived.
+		IdleTimeout: 2 * time.Minute,
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

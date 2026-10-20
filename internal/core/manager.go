@@ -97,6 +97,7 @@ type Manager struct {
 	log      *slog.Logger
 	now      func() time.Time
 	mu       sync.Mutex
+	poolMu   sync.Mutex
 	previews map[string]Preview
 	streams  map[string]int
 	budgets  map[string]*byteBudget
@@ -302,17 +303,8 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		m.mu.Unlock()
 		return store.Sandbox{}, quota(fmt.Sprintf("sandbox limit of %d reached", m.cfg.Limits.MaxSandboxesPerKey))
 	}
-	if m.cfg.Limits.MaxSandboxes > 0 {
-		total, err := m.store.CountAllActive(ctx)
-		if err != nil {
-			m.mu.Unlock()
-			return store.Sandbox{}, err
-		}
-		if total >= m.cfg.Limits.MaxSandboxes {
-			m.mu.Unlock()
-			return store.Sandbox{}, quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
-		}
-	}
+	// A claim turns a pooled sandbox into the caller's without adding a
+	// container, so it is tried before the node cap, which counts the pool.
 	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, mode, policy, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
 	if err != nil {
 		m.mu.Unlock()
@@ -321,6 +313,14 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if okClaim {
 		m.mu.Unlock()
 		return claimed, nil
+	}
+	if err := m.checkNodeCap(ctx); err != nil {
+		m.mu.Unlock()
+		return store.Sandbox{}, err
+	}
+	if err := m.mountsStillExist(ctx, mounts); err != nil {
+		m.mu.Unlock()
+		return store.Sandbox{}, err
 	}
 	if err := m.store.InsertSandbox(ctx, sb); err != nil {
 		m.mu.Unlock()
@@ -357,6 +357,22 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	m.Counts.Creates.Add(1)
 	m.log.Info("sandbox created", "id", sb.ID, "backend", backend, "image", image)
 	return sb, nil
+}
+
+// checkNodeCap enforces max_sandboxes over every live container, warm pool
+// included.
+func (m *Manager) checkNodeCap(ctx context.Context) error {
+	if m.cfg.Limits.MaxSandboxes <= 0 {
+		return nil
+	}
+	total, err := m.store.CountAllActive(ctx)
+	if err != nil {
+		return err
+	}
+	if total >= m.cfg.Limits.MaxSandboxes {
+		return quota(fmt.Sprintf("node sandbox limit of %d reached", m.cfg.Limits.MaxSandboxes))
+	}
+	return nil
 }
 
 func (m *Manager) checkResources(cpu float64, mem, disk, pids, ttl, idle int) error {
@@ -684,7 +700,9 @@ func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest
 		m.Counts.FileOps.Add(1)
 		return nil
 	}
-	tmp := "/tmp/sbx-upload.tar"
+	// A fixed name let two concurrent uploads to one sandbox overwrite each
+	// other's archive before tar read it.
+	tmp := "/tmp/sbx-upload-" + strings.TrimPrefix(id.RecordID(), "key_") + ".tar"
 	if err := d.WriteFile(ctx, sb.ContainerID, tmp, raw, 0o644); err != nil {
 		return m.asDriver(err)
 	}
