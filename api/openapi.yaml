@@ -1118,8 +1118,10 @@ components:
             Build steps run after the template's own steps, on image (or the
             template's image). The result is cached by content hash, so only
             the first create with a given base and steps builds. Needs an
-            admin key unless builds.allow_sandbox_keys is set. A create with
-            steps does not take a warm sandbox.
+            admin key unless builds.allow_sandbox_keys is set. So does setting
+            image on a template that has steps, since that is a new build;
+            otherwise the request is rejected with 403. A create with steps
+            does not take a warm sandbox.
     Mount:
       type: object
       required: [volume_id, path]
