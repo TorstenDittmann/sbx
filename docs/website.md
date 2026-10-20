@@ -1,6 +1,6 @@
 # Website
 
-The landing page is a prerendered [SvelteKit](https://svelte.dev/docs/kit) app in `website/`. It uses the same toolchain as [orch](https://github.com/TorstenDittmann/orch): Bun, Vite, `@sveltejs/adapter-static`, the Geist fonts, and Shiki. The page explains what sbx is, the quickstart, which isolation backends exist today versus later, and the API and TypeScript SDK.
+The landing page is a prerendered [SvelteKit](https://svelte.dev/docs/kit) app in `website/`. It uses the same toolchain as [orch](https://github.com/TorstenDittmann/orch): Bun, Vite, `@sveltejs/adapter-static`, the Geist fonts, and Shiki. The landing page explains what sbx is, the quickstart, which isolation backends exist today versus later, and the API and TypeScript SDK.
 
 From `website/`:
 
@@ -11,6 +11,12 @@ bun run dev
 ```
 
 `./build.sh` type-checks the site and prerenders it into `dist`. Generated output is ignored and must not be edited.
+
+## Docs pages
+
+The docs at `/docs/` are Markdown files in `website/src/docs/`, one per page. `website/src/lib/server/docs.ts` lists them in sidebar order with a title and description, renders them with `marked` at build time, and highlights code fences with Shiki (`ts`, `bash`, `yaml`, `json`; anything else is plain text). The first page in the list is served at `/docs/`, the rest at `/docs/<slug>/`.
+
+To add a page, write `website/src/docs/<slug>.md` and add an entry to `sections` in `docs.ts`. Link to other pages as `/docs/<slug>/` (with the trailing slash) and to headings as `/docs/<slug>/#heading-id`. The prerender fails on a link to a page or heading that does not exist.
 
 ## Deploying the website with Dokploy
 

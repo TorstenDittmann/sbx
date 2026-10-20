@@ -10,7 +10,7 @@
 	<p>The sandbox API is not served from this host.</p>
 	<div class="links">
 		<a href="/">Home</a>
-		<a href="/#quickstart">Quickstart</a>
+		<a href="/docs/">Docs</a>
 	</div>
 </section>
 
