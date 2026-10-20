@@ -335,10 +335,14 @@
 		font-size: 13px;
 	}
 
+	.compare .table {
+		overflow: visible;
+	}
+
 	.compare thead th:first-child,
-	.compare tbody th {
+	.compare tbody th:first-child {
 		background: color-mix(in srgb, var(--accent) 9%, var(--bg));
-		padding-left: 16px;
+		padding-left: 20px;
 	}
 
 	.compare thead th:first-child {
@@ -391,6 +395,11 @@
 	@media (min-width: 761px) {
 		.features div:nth-child(n + 4) {
 			border-top: 1px solid var(--line);
+		}
+
+		.compare .table {
+			margin-left: -20px;
+			width: calc(100% + 20px);
 		}
 	}
 
