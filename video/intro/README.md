@@ -10,7 +10,7 @@ The box is one object through every cut:
 | `CodeScene` | 0.0 to 3.2 s | `Sandbox.create({ template: "python", ttl: "5m" })` is typed, and an outline closes around it |
 | `SandboxScene` | 3.2 to 7.8 s | the outline becomes a sandbox, `python main.py` prints `4`, and its defaults are listed: network off, read-only root, uid 1000, a TTL counting down |
 | `PoolScene` | 7.8 to 12.2 s | the box shrinks into a pool of 21; the backend switches docker, gvisor, kata, firecracker and the pool ripples with each switch |
-| `OutroScene` | 12.2 to 17.0 s | the TTL runs out, the reaper clears the pool from the outside in, and the last box becomes the sbx mark |
+| `OutroScene` | 12.2 to 17.0 s | the TTL runs out, the reaper clears the pool from the outside in, and the last box becomes the sbx mark above "Sandbox orchestration for the agentic era." |
 
 Colors are the dark theme of the website (`website/src/app.css`), the mark is
 `website/static/favicon.svg`, and the type is Geist and Geist Mono (OFL, see `FONTS-LICENSE.txt`).

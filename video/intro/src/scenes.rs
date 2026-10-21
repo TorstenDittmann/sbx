@@ -412,7 +412,7 @@ const TAGLINE_AT: f32 = 1.95;
 const MARK: f32 = 220.0;
 const MARK_GAP: f32 = 48.0;
 const MARK_CY: f32 = 440.0;
-const TAGLINE: &str = "Run untrusted code on your own machine.";
+const TAGLINE: &str = "Sandbox orchestration for the agentic era.";
 
 fn reap_at(col: usize, row: usize) -> f32 {
     let farthest = distance(0, 0).max(distance(COLS - 1, ROWS - 1));
