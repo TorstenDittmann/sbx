@@ -63,41 +63,6 @@ fn cursor(x: f32, baseline: f32, size: f32, advance: f32, opacity: f32) -> Svgr<
     fframes::svgr!(<rect x={x} y={baseline - size * 0.86} width={w} height={h} rx="2" fill={ACCENT} opacity={opacity} />)
 }
 
-/// Seconds at which each non-space character of `lines` appears, typing at `cps` from `start`.
-fn key_times(lines: &[Typed], start: f32, cps: f32) -> Vec<f32> {
-    let mut times = Vec::new();
-    let mut i = 0;
-    for line in lines {
-        for (text, _) in line.tokens {
-            for c in text.chars() {
-                if !c.is_whitespace() {
-                    times.push(start + i as f32 / cps);
-                }
-                i += 1;
-            }
-        }
-    }
-    times
-}
-
-fn key_clicks(times: &[f32]) -> Vec<AudioTrack<'static>> {
-    // The text types faster than a person can, so only about two keys in three make a sound.
-    // Four key variants, a few milliseconds of jitter and some level variation keep
-    // it from sounding like a metronome.
-    const KEYS: [&str; 4] = ["key-1.wav", "key-2.wav", "key-3.wav", "key-4.wav"];
-    times
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| i % 3 != 2)
-        .map(|(i, at)| {
-            let jitter = ((i * 37) % 11) as f32 * 0.0015;
-            // A multiplicative hash spreads the four variants without a repeating cycle.
-            let variant = (i.wrapping_mul(2_654_435_761) >> 16) % 4;
-            sfx(KEYS[variant], *at + jitter, -20.0 + ((i * 7) % 5) as f32 * 0.9)
-        })
-        .collect()
-}
-
 // ---------------------------------------------------------------------------------------------
 // 1. Code: the SDK call is typed, and the outline of a sandbox closes around it.
 
@@ -126,10 +91,8 @@ impl Scene for CodeScene {
     }
 
     fn audio(&self) -> AudioMap<'_> {
-        let mut tracks = key_clicks(&key_times(&code_lines(), CODE_TYPE_START, CODE_CPS));
-        tracks.push(sfx("enter.wav", CODE_ENTER, -13.0));
-        tracks.push(sfx("draw.wav", CODE_ENTER, -17.0));
-        AudioMap::from(tracks)
+        // The typing is silent; the sound starts when the outline begins to close.
+        AudioMap::from([sfx("draw.wav", CODE_ENTER, -17.0)])
     }
 
     fn render_frame<'a>(&'a self, mut frame: Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<'a> {
@@ -181,7 +144,6 @@ impl Scene for CodeScene {
 const COMMAND: &[(&str, &str)] = &[("$", ACCENT), (" ", ""), ("python", FG), (" ", ""), ("main.py", FG)];
 const COMMAND_START: f32 = 0.95;
 const COMMAND_CPS: f32 = 28.0;
-const COMMAND_ENTER: f32 = 1.6;
 const OUTPUT_AT: f32 = 1.75;
 const ROWS_START: f32 = 1.35;
 const ROW_STAGGER: f32 = 0.14;
@@ -201,9 +163,8 @@ impl Scene for SandboxScene {
     }
 
     fn audio(&self) -> AudioMap<'_> {
-        let mut tracks = key_clicks(&key_times(&[command_line()], COMMAND_START, COMMAND_CPS));
-        tracks.push(sfx("enter.wav", COMMAND_ENTER, -15.0));
-        tracks.push(sfx("plink-a.wav", OUTPUT_AT, -19.0));
+        // The command types silently; the output lands with a plink.
+        let mut tracks = vec![sfx("plink-a.wav", OUTPUT_AT, -19.0)];
         for i in 0..4 {
             tracks.push(sfx("switch.wav", ROWS_START + i as f32 * ROW_STAGGER, -27.0));
         }
