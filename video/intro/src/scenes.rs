@@ -91,7 +91,9 @@ fn key_clicks(times: &[f32]) -> Vec<AudioTrack<'static>> {
         .filter(|(i, _)| i % 3 != 2)
         .map(|(i, at)| {
             let jitter = ((i * 37) % 11) as f32 * 0.0015;
-            sfx(KEYS[(i * 5 + i / 3) % 4], *at + jitter, -20.0 + ((i * 7) % 5) as f32 * 0.9)
+            // A multiplicative hash spreads the four variants without a repeating cycle.
+            let variant = (i.wrapping_mul(2_654_435_761) >> 16) % 4;
+            sfx(KEYS[variant], *at + jitter, -20.0 + ((i * 7) % 5) as f32 * 0.9)
         })
         .collect()
 }
