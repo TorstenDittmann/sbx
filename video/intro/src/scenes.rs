@@ -81,8 +81,19 @@ fn key_times(lines: &[Typed], start: f32, cps: f32) -> Vec<f32> {
 }
 
 fn key_clicks(times: &[f32]) -> Vec<AudioTrack<'static>> {
-    // A little level variation so the typing does not sound like a metronome.
-    times.iter().enumerate().map(|(i, at)| sfx("key.wav", *at, -24.0 + ((i * 7) % 5) as f32 * 1.2)).collect()
+    // The text types faster than a person can, so only about two keys in three make a sound.
+    // Four key variants, a few milliseconds of jitter and some level variation keep
+    // it from sounding like a metronome.
+    const KEYS: [&str; 4] = ["key-1.wav", "key-2.wav", "key-3.wav", "key-4.wav"];
+    times
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 3 != 2)
+        .map(|(i, at)| {
+            let jitter = ((i * 37) % 11) as f32 * 0.0015;
+            sfx(KEYS[(i * 5 + i / 3) % 4], *at + jitter, -20.0 + ((i * 7) % 5) as f32 * 0.9)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------------------------

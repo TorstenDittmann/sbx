@@ -43,12 +43,34 @@ def save(name, x, peak=0.9):
         f.writeframes((x * 32767).astype("<i2").tobytes())
 
 
-def key():
-    # A soft keyboard tick: a little high noise and a short body tone.
-    s = t(0.045)
-    noise = np.diff(rng.standard_normal(len(s) + 1)) * np.exp(-s / 0.004)
-    body = np.sin(2 * np.pi * 1900 * s) * np.exp(-s / 0.006) * 0.5
-    return lowpass(noise * 0.6 + body, 7000)
+def bandpass(x, freq, q):
+    # RBJ biquad band-pass: the resonance of a keycap and the plate under it.
+    w = 2 * np.pi * freq / RATE
+    alpha = np.sin(w) / (2 * q)
+    b0, b2 = alpha, -alpha
+    a0, a1, a2 = 1 + alpha, -2 * np.cos(w), 1 - alpha
+    y = np.zeros_like(x)
+    x1 = x2 = y1 = y2 = 0.0
+    for i, v in enumerate(x):
+        out = (b0 * v + b2 * x2 - a1 * y1 - a2 * y2) / a0
+        x2, x1, y2, y1 = x1, v, y1, out
+        y[i] = out
+    return y
+
+
+def key(body, click, seed):
+    # A mechanical key: a short bright contact, a damped "thock" from the case, and a
+    # quieter second hit when the key bottoms out a few milliseconds later.
+    r = np.random.default_rng(seed)
+    s = t(0.07)
+    impulse = r.standard_normal(len(s))
+    contact = bandpass(impulse * np.exp(-s / 0.0012), click, 1.4) * 0.5
+    thock = bandpass(impulse * np.exp(-s / 0.004), body, 6.0) * 1.6
+    bottom = np.zeros_like(s)
+    lag = int(RATE * 0.009)
+    bottom[lag:] = thock[: len(s) - lag] * 0.45
+    x = contact + thock + bottom
+    return lowpass(x * np.exp(-s / 0.018), 6500)
 
 
 def enter():
@@ -110,7 +132,8 @@ def pad():
     return lowpass(x, 900)
 
 
-save("key.wav", key())
+for i, (body, click, seed) in enumerate([(310, 3200, 1), (360, 3600, 2), (285, 2900, 3), (335, 3400, 4)]):
+    save(f"key-{i + 1}.wav", key(body, click, seed))
 save("enter.wav", enter())
 save("draw.wav", draw())
 save("plink-a.wav", plink(1318.5))
