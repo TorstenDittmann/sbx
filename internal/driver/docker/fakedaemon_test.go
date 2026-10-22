@@ -182,7 +182,13 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/start"):
 		f.mu.Lock()
 		fail := f.failStart
+		ctn := f.containers[containerID(p)]
+		missingNet := ctn != nil && ctn.body.HostConfig.NetworkMode == sandboxNetwork && !f.network
 		f.mu.Unlock()
+		if missingNet {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "failed to set up container networking: Could not attach to network sbx: rpc error: code = NotFound desc = network sbx not found"})
+			return
+		}
 		if fail {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "cannot start"})
 			return

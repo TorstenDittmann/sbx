@@ -92,6 +92,31 @@ func (d *Driver) ensureEgress(ctx context.Context) error {
 	return nil
 }
 
+// ensureFullNetwork prepares what a network=full sandbox attaches to: the
+// sbx bridge, plus the egress baseline unless filtering is off.
+func (d *Driver) ensureFullNetwork(ctx context.Context) error {
+	if !d.opt.NoEgressFilter {
+		return d.ensureEgress(ctx)
+	}
+	_, err := d.client.EnsureSandboxNetwork(ctx, d.wantIPv6())
+	return err
+}
+
+// forgetEgress makes the next ensureEgress check the network and baseline
+// again instead of trusting what it set up earlier.
+func (d *Driver) forgetEgress() {
+	d.egressMu.Lock()
+	d.egressReady = false
+	d.egressMu.Unlock()
+}
+
+// networkMissing reports whether Docker refused a container because the sbx
+// network does not exist. Create answers 404 and start answers with the
+// containerd error, so the message is all both have in common.
+func networkMissing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "network "+sandboxNetwork+" not found")
+}
+
 // verifyEgress reinstalls the baseline when its rules are gone. ensureEgress
 // installs them once per process, but a firewalld reload, a dockerd restart,
 // or an iptables flush can remove them while sandboxes with network=full

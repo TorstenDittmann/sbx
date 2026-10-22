@@ -234,8 +234,8 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 			return driver.Handle{}, fmt.Errorf("%w: Docker has no %q runtime (%s)", driver.ErrRuntimeUnavailable, d.runtime, hint)
 		}
 	}
-	if spec.Network == driver.NetFull && !d.opt.NoEgressFilter {
-		if err := d.ensureEgress(ctx); err != nil {
+	if spec.Network == driver.NetFull {
+		if err := d.ensureFullNetwork(ctx); err != nil {
 			return driver.Handle{}, err
 		}
 	}
@@ -257,12 +257,17 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 		return driver.Handle{}, err
 	}
 	body := buildCreate(spec, d.opt, meta.Env, token)
-	id, err := d.client.ContainerCreate(ctx, spec.ID, body)
-	if err != nil {
-		return driver.Handle{}, err
+	id, err := d.createAndStart(ctx, spec.ID, body)
+	if err != nil && spec.Network == driver.NetFull && networkMissing(err) {
+		// Something removed the sbx network after it was ensured, for
+		// example docker network prune. Recreate it and try once more.
+		d.forgetEgress()
+		if err := d.ensureFullNetwork(ctx); err != nil {
+			return driver.Handle{}, err
+		}
+		id, err = d.createAndStart(ctx, spec.ID, body)
 	}
-	if err := d.client.ContainerStart(ctx, id); err != nil {
-		_ = d.client.ContainerRemove(context.Background(), id)
+	if err != nil {
 		return driver.Handle{}, err
 	}
 	if token != "" {
@@ -279,6 +284,18 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 		rt = "runc"
 	}
 	return driver.Handle{ID: id, RuntimeName: rt}, nil
+}
+
+func (d *Driver) createAndStart(ctx context.Context, name string, body createRequest) (string, error) {
+	id, err := d.client.ContainerCreate(ctx, name, body)
+	if err != nil {
+		return "", err
+	}
+	if err := d.client.ContainerStart(ctx, id); err != nil {
+		_ = d.client.ContainerRemove(context.Background(), id)
+		return "", err
+	}
+	return id, nil
 }
 
 func (d *Driver) Delete(ctx context.Context, id string) error {

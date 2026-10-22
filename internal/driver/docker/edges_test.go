@@ -181,3 +181,60 @@ func TestPullAndStartFailures(t *testing.T) {
 	}
 	fd.mu.Unlock()
 }
+
+func TestFullNetworkRecreatedWhenRemoved(t *testing.T) {
+	fd, sock := startFakeDaemon(t)
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	d := NewWithClient(Options{
+		Name: "docker", UID: 1000, GID: 1000,
+		ScriptRunner: func(context.Context, string) error { return nil },
+	}, cli)
+	spec := driver.SandboxSpec{
+		ID: "sbx_netgone00000001", Image: "alpine:3.20", CPU: 0.25, MemoryMB: 64, DiskMB: 16, PIDs: 32,
+		Network: driver.NetFull,
+	}
+	if _, err := d.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	// docker network prune, or a manual docker network rm sbx.
+	fd.mu.Lock()
+	fd.network = false
+	before := fd.netCreates
+	fd.mu.Unlock()
+	spec.ID = "sbx_netgone00000002"
+	if _, err := d.Create(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	if fd.netCreates != before+1 || !fd.network {
+		t.Fatalf("network not recreated: creates %d -> %d", before, fd.netCreates)
+	}
+	if _, ok := fd.containers["cid-sbx_netgone00000002"]; !ok {
+		t.Fatal("sandbox missing after retry")
+	}
+}
+
+func TestFullNetworkWithoutEgressFilterCreatesNetwork(t *testing.T) {
+	fd, sock := startFakeDaemon(t)
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewWithClient(Options{Name: "docker", UID: 1000, GID: 1000, NoEgressFilter: true}, cli)
+	if _, err := d.Create(context.Background(), driver.SandboxSpec{
+		ID: "sbx_nofilter0000001", Image: "alpine:3.20", CPU: 0.25, MemoryMB: 64, DiskMB: 16, PIDs: 32,
+		Network: driver.NetFull,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	if !fd.network || fd.netCreates != 1 {
+		t.Fatalf("network %v creates %d", fd.network, fd.netCreates)
+	}
+}
