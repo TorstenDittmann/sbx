@@ -114,8 +114,11 @@ func pumpTerminal(sock *ws.Conn, in io.Reader, out io.Writer) error {
 	}()
 	for {
 		op, data, err := sock.Read()
-		if err != nil {
+		if errors.Is(err, io.EOF) && op == ws.OpClose {
 			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("terminal connection lost: %w", err)
 		}
 		switch op {
 		case ws.OpBinary:

@@ -115,8 +115,7 @@ func (c *client) upload(src, id, dst string, intoDir bool) error {
 	if err := packDir(&buf, src, path.Base(target)); err != nil {
 		return err
 	}
-	_, err = c.do(http.MethodPost, sandboxPath(id, "files", "archive"), url.Values{"path": {path.Dir(target)}}, &buf, "application/gzip")
-	return err
+	return c.send(http.MethodPost, sandboxPath(id, "files", "archive"), url.Values{"path": {path.Dir(target)}}, &buf, "application/gzip")
 }
 
 // uploadTarget reports whether dst is an existing directory to copy into.
@@ -139,8 +138,7 @@ func (c *client) putFile(id, p string, r io.Reader, mode os.FileMode) error {
 	if mode != 0 {
 		q.Set("mode", fmt.Sprintf("%o", mode))
 	}
-	_, err := c.do(http.MethodPut, sandboxPath(id, "files", "content"), q, r, "application/octet-stream")
-	return err
+	return c.send(http.MethodPut, sandboxPath(id, "files", "content"), q, r, "application/octet-stream")
 }
 
 func (c *client) download(id, src, dst string) error {

@@ -108,6 +108,16 @@ func (c *client) do(method, p string, q url.Values, body io.Reader, contentType 
 	return resp, nil
 }
 
+// send is do for calls whose response body is not needed.
+func (c *client) send(method, p string, q url.Values, body io.Reader, contentType string) error {
+	resp, err := c.do(method, p, q, body, contentType)
+	if err != nil {
+		return err
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.Body.Close()
+}
+
 func readAPIError(resp *http.Response) error {
 	var body struct {
 		Error struct {
