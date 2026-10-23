@@ -44,6 +44,19 @@ Usage:
   sbx healthcheck
   sbx version
 
+Sandboxes (talk to a running server):
+  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
+  sbx ls [--status S] [--template T] [--label key:value] [-q TEXT] [--quiet] [--json]
+  sbx get ID
+  sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
+  sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
+  sbx cp SRC DST              one side is ID:PATH; relative paths are under /workspace
+  sbx pause ID | sbx resume ID
+  sbx ttl ID 10m
+  sbx rm ID [ID...]
+  These read SBX_URL (default http://127.0.0.1:8080) and SBX_API_KEY, or --url and --key.
+  Without a key they read initial_api_key from SBX_DATA_DIR (default ./data).
+
 Environment (overrides the config file):
   SBX_ADDR SBX_DATA_DIR SBX_BACKEND SBX_DOCKER_HOST SBX_BOOTSTRAP_KEY
   SBX_GVISOR_RUNTIME SBX_READ_ONLY_ROOTFS SBX_SANDBOX_ROOT SBX_LOG_LEVEL
@@ -68,6 +81,24 @@ func Run(args []string) error {
 		return healthcheck(args[1:])
 	case "keys":
 		return keys(args[1:])
+	case "create":
+		return createCmd(args[1:])
+	case "ls", "list":
+		return listCmd(args[1:])
+	case "get", "inspect":
+		return getCmd(args[1:])
+	case "exec":
+		return execCmd(args[1:])
+	case "shell", "sh":
+		return shellCmd(args[1:])
+	case "cp":
+		return copyCmd(args[1:])
+	case "rm", "delete":
+		return removeCmd(args[1:])
+	case "pause", "resume":
+		return stateCmd(args[0], args[1:])
+	case "ttl":
+		return ttlCmd(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprint(os.Stdout, version.Format())
 		return nil
