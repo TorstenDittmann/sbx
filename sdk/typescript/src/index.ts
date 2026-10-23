@@ -232,6 +232,40 @@ export type FileEvent = {
   path: string
 }
 
+/** Lifecycle event types from `GET /v1/events`. */
+export type SandboxEventType =
+  | "sandbox.created"
+  | "sandbox.failed"
+  | "sandbox.deleted"
+  | "sandbox.expired"
+  | "sandbox.paused"
+  | "sandbox.resumed"
+  | "sandbox.oom"
+  | "sandbox.lost"
+
+/**
+ * A sandbox lifecycle event. `id` only grows; pass it as `after` to resume.
+ * `data.status` is the sandbox status after the event. `data.reason` is set
+ * on expired (`ttl`, `idle`), failed, and lost (`exited`, `missing`) events.
+ */
+export type SandboxEvent = {
+  id: number
+  type: SandboxEventType
+  sandboxId: string
+  time: string
+  data: Record<string, unknown> & { status?: SandboxStatus; reason?: string }
+}
+
+export type EventsOptions = {
+  /** Last event id already seen. Omit to start with the next event; 0 replays everything the server keeps. */
+  after?: number
+  /** Only events for this sandbox. */
+  sandbox?: string
+  /** Reconnect after a dropped stream, resuming after the last id. Default true. */
+  reconnect?: boolean
+  signal?: AbortSignal
+}
+
 export type ExecEvent = {
   type: "stdout" | "stderr" | "exit" | "error"
   data: string
@@ -714,6 +748,40 @@ export class SbxClient {
     }
   }
 
+  /**
+   * Stream sandbox lifecycle events instead of polling. A sandbox key sees its
+   * own sandboxes; an admin key sees all. The stream resumes from the last id
+   * after a disconnect, so no event is skipped while the server still keeps it.
+   * Stop it with `options.signal` or by breaking out of the loop.
+   */
+  async *events(options: EventsOptions = {}): AsyncGenerator<SandboxEvent> {
+    let after = options.after
+    const reconnect = options.reconnect ?? true
+    const signal = options.signal
+    while (!signal?.aborted) {
+      const q = new URLSearchParams()
+      if (after !== undefined) q.set("after", String(after))
+      if (options.sandbox) q.set("sandbox", options.sandbox)
+      const suffix = q.size ? `?${q}` : ""
+      try {
+        const response = await this.request("GET", `/v1/events${suffix}`, undefined, undefined, signal)
+        if (!response.body) throw new SbxError(response.status, "driver", "empty event stream")
+        for await (const block of sseBlocks(response.body)) {
+          // The stream opens with a bare id line: the cursor it starts from.
+          const id = sseID(block)
+          if (id !== undefined) after = id
+          const event = parseSSE(block)
+          if (event) yield mapEvent(event.json)
+        }
+      } catch (err) {
+        if (signal?.aborted) return
+        if (!reconnect || err instanceof SbxError) throw err
+      }
+      if (!reconnect) return
+      await delay(1000, signal)
+    }
+  }
+
   startProcess(id: string, cmd: string | string[], options: ExecOptions = {}): Promise<ProcessInfo> {
     return this.requestJSON<ProcessJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/processes`, execBody(cmd, options)).then(mapProcess)
   }
@@ -796,7 +864,7 @@ export class SbxClient {
     return (await response.json()) as T
   }
 
-  private async request(method: string, path: string, body?: unknown, contentType?: string): Promise<Response> {
+  private async request(method: string, path: string, body?: unknown, contentType?: string, signal?: AbortSignal): Promise<Response> {
     const headers = new Headers({ Authorization: `Bearer ${this.apiKey}` })
     let payload: BodyInit | undefined
     if (body != null && contentType === "application/json") {
@@ -806,7 +874,7 @@ export class SbxClient {
       headers.set("Content-Type", contentType ?? "application/octet-stream")
       payload = body
     }
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body: payload })
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body: payload, signal })
     if (!response.ok) throw await errorFrom(response)
     return response
   }
@@ -939,6 +1007,61 @@ async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator
       split = buffer.indexOf("\n\n")
     }
   }
+}
+
+async function* sseBlocks(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) return
+      buffer += decoder.decode(chunk.value, { stream: true })
+      let split = buffer.indexOf("\n\n")
+      while (split >= 0) {
+        yield buffer.slice(0, split)
+        buffer = buffer.slice(split + 2)
+        split = buffer.indexOf("\n\n")
+      }
+    }
+  } finally {
+    // Closes the connection when the caller stops early.
+    await reader.cancel().catch(() => {})
+  }
+}
+
+function sseID(block: string): number | undefined {
+  for (const line of block.split("\n")) {
+    if (line.startsWith("id:")) {
+      const n = Number(line.slice(3).trim())
+      if (Number.isInteger(n) && n >= 0) return n
+    }
+  }
+  return undefined
+}
+
+function mapEvent(raw: Record<string, unknown>): SandboxEvent {
+  return {
+    id: Number(raw.id ?? 0),
+    type: String(raw.type ?? "") as SandboxEventType,
+    sandboxId: String(raw.sandbox_id ?? ""),
+    time: String(raw.time ?? ""),
+    data: (raw.data as SandboxEvent["data"]) ?? {},
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", done)
+      resolve()
+    }
+    signal?.addEventListener("abort", done, { once: true })
+  })
 }
 
 function parseSSE(block: string): { event: string; json: Record<string, unknown> } | undefined {

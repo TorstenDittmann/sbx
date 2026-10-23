@@ -111,6 +111,11 @@ type Manager struct {
 	Counts   Counters
 	// buildLocks holds one mutex per build tag so concurrent creates build once.
 	buildLocks sync.Map
+	// evWake is closed and replaced on every lifecycle event. evStreams
+	// counts open event streams per key.
+	evMu      sync.Mutex
+	evWake    chan struct{}
+	evStreams map[string]int
 }
 
 // New builds a manager. drivers is keyed by backend name ("docker", "gvisor").
@@ -120,8 +125,10 @@ func New(cfg config.Config, st *store.Store, drivers map[string]driver.Driver, l
 	}
 	return &Manager{
 		cfg: cfg, store: st, drivers: drivers, log: log,
-		now:      func() time.Time { return time.Now().UTC() },
-		previews: map[string]Preview{},
+		now:       func() time.Time { return time.Now().UTC() },
+		previews:  map[string]Preview{},
+		evWake:    make(chan struct{}),
+		evStreams: map[string]int{},
 	}
 }
 
@@ -352,7 +359,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		sb.Error = err.Error()
 		finished := m.now()
 		sb.FinishedAt = &finished
-		_ = m.store.UpdateSandboxFrom(ctx, sb, "creating")
+		if m.store.UpdateSandboxFrom(ctx, sb, "creating") == nil {
+			m.emit(ctx, EventFailed, sb, map[string]any{"reason": "create failed"})
+		}
 		return store.Sandbox{}, m.asDriver(err)
 	}
 	sb.ContainerID = handle.ID
@@ -370,6 +379,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	}
 	m.Counts.Creates.Add(1)
 	m.log.Info("sandbox created", "id", sb.ID, "backend", backend, "image", image)
+	m.emit(ctx, EventCreated, sb, map[string]any{"warm": false})
 	return sb, nil
 }
 
@@ -510,6 +520,7 @@ func (m *Manager) Pause(ctx context.Context, actor Actor, sandboxID string) (sto
 	if err := m.store.UpdateSandboxFrom(ctx, sb, "running"); err != nil {
 		return store.Sandbox{}, stale(err)
 	}
+	m.emit(ctx, EventPaused, sb, nil)
 	return sb, nil
 }
 
@@ -537,6 +548,7 @@ func (m *Manager) Resume(ctx context.Context, actor Actor, sandboxID string) (st
 	if err := m.store.UpdateSandboxFrom(ctx, sb, "paused"); err != nil {
 		return store.Sandbox{}, stale(err)
 	}
+	m.emit(ctx, EventResumed, sb, nil)
 	return sb, nil
 }
 
@@ -943,10 +955,14 @@ func (m *Manager) Sweep(ctx context.Context) (int, error) {
 		n++
 		m.Counts.Reaped.Add(1)
 	}
+	m.checkLiveness(ctx)
 	m.reapOrphans(ctx)
 	cutoff := now.Add(-time.Duration(m.cfg.Limits.RetainStoppedSeconds) * time.Second)
 	if _, err := m.store.PruneFinished(ctx, cutoff); err != nil {
 		m.log.Error("prune failed", "err", err)
+	}
+	if _, err := m.store.PruneEvents(ctx, cutoff); err != nil {
+		m.log.Error("event prune failed", "err", err)
 	}
 	return n, nil
 }
@@ -973,9 +989,11 @@ func (m *Manager) reapOrphans(ctx context.Context) {
 	}
 }
 
-// RunReaper sweeps until ctx is canceled. It also refreshes domain egress rules.
+// RunReaper sweeps until ctx is canceled. It also refreshes domain egress
+// rules and follows backend runtime events.
 func (m *Manager) RunReaper(ctx context.Context) {
 	m.RestoreNetworks(ctx)
+	m.WatchDrivers(ctx)
 	interval := time.Duration(m.cfg.Limits.ReaperIntervalSeconds) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -1086,6 +1104,8 @@ func (m *Manager) destroy(ctx context.Context, sb store.Sandbox, reason string) 
 		}
 	}
 	m.log.Info("sandbox stopped", "id", sb.ID, "reason", reason)
+	typ, data := stopEvent(reason)
+	m.emit(ctx, typ, cur, data)
 	return nil
 }
 

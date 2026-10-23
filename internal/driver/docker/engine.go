@@ -360,6 +360,8 @@ type ContainerState struct {
 	Labels    map[string]string
 	SandboxID string
 	Env       []string
+	OOMKilled bool
+	ExitCode  int
 }
 
 func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerState, error) {
@@ -367,10 +369,12 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 		ID    string `json:"Id"`
 		Image string `json:"Image"`
 		State struct {
-			Status  string `json:"Status"`
-			Running bool   `json:"Running"`
-			Paused  bool   `json:"Paused"`
-			Pid     int    `json:"Pid"`
+			Status    string `json:"Status"`
+			Running   bool   `json:"Running"`
+			Paused    bool   `json:"Paused"`
+			Pid       int    `json:"Pid"`
+			OOMKilled bool   `json:"OOMKilled"`
+			ExitCode  int    `json:"ExitCode"`
 		} `json:"State"`
 		Config struct {
 			Image  string            `json:"Image"`
@@ -407,6 +411,7 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerStat
 		ID: raw.ID, Image: image, Status: raw.State.Status, Running: raw.State.Running, Paused: raw.State.Paused,
 		Pid: raw.State.Pid, IPv4: ipv4, IPv6: ipv6,
 		Labels: raw.Config.Labels, SandboxID: raw.Config.Labels[labelID], Env: raw.Config.Env,
+		OOMKilled: raw.State.OOMKilled, ExitCode: raw.State.ExitCode,
 	}, nil
 }
 
@@ -430,6 +435,53 @@ func (c *Client) ContainerList(ctx context.Context) ([]ContainerState, error) {
 		})
 	}
 	return out, nil
+}
+
+// EngineEvent is one container event from GET /events.
+type EngineEvent struct {
+	Action     string
+	ID         string
+	Attributes map[string]string
+}
+
+// Events streams oom and die events for sbx containers until ctx ends or the
+// daemon closes the stream.
+func (c *Client) Events(ctx context.Context, fn func(EngineEvent)) error {
+	if err := c.ensure(); err != nil {
+		return err
+	}
+	filters := url.Values{}
+	filters.Set("filters", `{"type":["container"],"event":["oom","die"],"label":["`+labelManaged+`=true"]}`)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+c.path("/events?"+filters.Encode()), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		return statusErr(resp.StatusCode, raw)
+	}
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var raw struct {
+			Action string `json:"Action"`
+			Actor  struct {
+				ID         string            `json:"ID"`
+				Attributes map[string]string `json:"Attributes"`
+			} `json:"Actor"`
+		}
+		if err := dec.Decode(&raw); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		fn(EngineEvent{Action: raw.Action, ID: raw.Actor.ID, Attributes: raw.Actor.Attributes})
+	}
 }
 
 func (c *Client) ContainerPause(ctx context.Context, id string) error {

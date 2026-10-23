@@ -309,7 +309,29 @@ func (d *Driver) Inspect(ctx context.Context, id string) (driver.Status, error) 
 	if err != nil {
 		return driver.Status{}, err
 	}
-	return driver.Status{ID: st.ID, SandboxID: st.SandboxID, State: mapState(st), Image: st.Image}, nil
+	return driver.Status{
+		ID: st.ID, SandboxID: st.SandboxID, State: mapState(st), Image: st.Image,
+		OOMKilled: st.OOMKilled, ExitCode: st.ExitCode,
+	}, nil
+}
+
+// WatchEvents reports oom and die events for sbx containers. Every
+// Docker-backed driver shares the daemon, so each sees every sbx container;
+// the caller keeps the events whose sandbox belongs to this backend.
+func (d *Driver) WatchEvents(ctx context.Context, emit func(driver.Event)) error {
+	return d.client.Events(ctx, func(ev EngineEvent) {
+		out := driver.Event{ID: ev.ID, SandboxID: ev.Attributes[labelID]}
+		switch ev.Action {
+		case "oom":
+			out.Kind = driver.EventOOM
+		case "die":
+			out.Kind = driver.EventDie
+			out.ExitCode, _ = strconv.Atoi(ev.Attributes["exitCode"])
+		default:
+			return
+		}
+		emit(out)
+	})
 }
 
 func (d *Driver) List(ctx context.Context) ([]driver.Status, error) {
