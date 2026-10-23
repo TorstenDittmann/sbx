@@ -44,6 +44,10 @@ type fakeDaemon struct {
 	builds      map[string][]string
 	execCmds    [][]string
 	workspace   []byte
+	// buildSteps are step image ids /build reports, and buildErr fails it.
+	buildSteps []string
+	buildErr   string
+	removed    []string
 }
 
 type fakeCommit struct {
@@ -156,6 +160,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v1.44/images/"):
 		ref := imageRefFromPath(p)
 		f.mu.Lock()
+		f.removed = append(f.removed, ref)
 		ok := f.images[ref]
 		used := false
 		for _, ctn := range f.containers {
@@ -218,9 +223,21 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tag := r.URL.Query().Get("t")
 		f.mu.Lock()
 		f.builds[tag] = names
-		f.images[tag] = true
+		steps, fail := f.buildSteps, f.buildErr
+		if fail == "" {
+			f.images[tag] = true
+		}
 		f.mu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]string{"stream": "Successfully built\n"})
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		for _, id := range steps {
+			_ = enc.Encode(map[string]string{"stream": " ---> " + id + "\n"})
+		}
+		if fail != "" {
+			_ = enc.Encode(map[string]string{"error": fail})
+			return
+		}
+		_ = enc.Encode(map[string]string{"stream": "Successfully built\n"})
 	case r.Method == http.MethodPost && p == "/v1.44/images/create":
 		f.mu.Lock()
 		fail, ghost := f.failPull, f.pullGhost

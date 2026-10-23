@@ -103,9 +103,12 @@ func (d *Driver) Snapshot(ctx context.Context, id string, spec driver.SnapshotSp
 	}()
 	steps, err := d.client.ImageBuildContext(ctx, spec.Tag, pr)
 	_ = pr.CloseWithError(errors.New("build finished"))
-	if len(steps) > 0 {
-		drop = append(drop, steps[:len(steps)-1]...)
+	// On success the last step is the tagged result. A failed build never
+	// printed the failing step, so every recorded step is an intermediate.
+	if err == nil && len(steps) > 0 {
+		steps = steps[:len(steps)-1]
 	}
+	drop = append(drop, steps...)
 	return snapshotErr(err)
 }
 

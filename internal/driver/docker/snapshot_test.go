@@ -173,6 +173,33 @@ func TestSnapshotAgainstFakeDaemon(t *testing.T) {
 		t.Fatalf("context %q", names)
 	}
 
+	// Intermediate step images go after the build; the tagged one stays. A
+	// failed build drops every step it reported.
+	fd.mu.Lock()
+	fd.buildSteps = []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"}
+	fd.removed = nil
+	fd.mu.Unlock()
+	if err := d.Snapshot(ctx, h.ID, driver.SnapshotSpec{Tag: tag + "d", Base: "alpine:3.20", Workspace: true}); err != nil {
+		t.Fatal(err)
+	}
+	fd.mu.Lock()
+	removed := fd.removed
+	fd.buildErr = "COPY failed"
+	fd.removed = nil
+	fd.mu.Unlock()
+	if !reflect.DeepEqual(removed, []string{"sha256:commit", "aaaaaaaaaaaa"}) {
+		t.Fatalf("removed %q", removed)
+	}
+	if err := d.Snapshot(ctx, h.ID, driver.SnapshotSpec{Tag: tag + "e", Base: "alpine:3.20", Workspace: true}); !errors.Is(err, driver.ErrImage) {
+		t.Fatalf("err = %v", err)
+	}
+	fd.mu.Lock()
+	removed = fd.removed
+	fd.mu.Unlock()
+	if !reflect.DeepEqual(removed, []string{"sha256:commit", "aaaaaaaaaaaa", "bbbbbbbbbbbb"}) {
+		t.Fatalf("removed after failure %q", removed)
+	}
+
 	gv := NewWithClient(Options{Name: "gvisor", Runtime: "runsc"}, cli)
 	if gv.Capabilities().Snapshot {
 		t.Fatal("gvisor reports snapshot")
