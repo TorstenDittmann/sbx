@@ -41,6 +41,7 @@ builds:
 | `data_dir` | `SBX_DATA_DIR` | `data` | Holds `sbx.db`, `initial_api_key`, and Firecracker files. |
 | `backend` | `SBX_BACKEND` | `docker` | Default backend: `docker`, `gvisor`, `kata`, or `firecracker`. |
 | `log_level` | `SBX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `dashboard` | `SBX_DASHBOARD` | `true` | Serve the [web dashboard](/docs/dashboard) at `/ui/`. |
 | `auth.bootstrap_key` | `SBX_BOOTSTRAP_KEY` | empty | Admin key to create on first boot instead of generating one. |
 
 ## Docker

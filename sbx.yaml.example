@@ -4,6 +4,8 @@ addr: 127.0.0.1:8080
 data_dir: data
 backend: docker
 log_level: info
+# Web UI at /ui/. It is static; sign-in uses an API key.
+dashboard: true
 
 kata:
   # Docker runtime name and the containerd shim it should point at.
