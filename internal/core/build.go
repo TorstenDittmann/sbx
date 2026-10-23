@@ -118,6 +118,13 @@ func (m *Manager) canBuild(actor Actor) error {
 func (m *Manager) buildImage(ctx context.Context, backend, base string, steps []store.BuildStep) (string, bool, error) {
 	scripts := renderSteps(steps)
 	if len(scripts) == 0 {
+		// A create that names a built tag directly still counts as a use.
+		if strings.HasPrefix(base, buildImageRepo+":") {
+			mu := m.buildLock(base)
+			mu.Lock()
+			m.touchImage(ctx, base)
+			mu.Unlock()
+		}
 		return base, true, nil
 	}
 	tag := buildTag(base, scripts)

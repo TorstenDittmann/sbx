@@ -44,6 +44,8 @@ func TestCollectImagesKeepsReferencedAndRecent(t *testing.T) {
 	// Built before usage was recorded, so its build time counts.
 	fd.AddImage("sbx-template:legacy", now.Add(-30*24*time.Hour))
 	fd.AddImage("sbx-template:fresh", now.Add(-time.Hour))
+	// Created from by tag, without steps.
+	fd.AddImage("sbx-template:bytag", now.Add(-time.Hour))
 
 	if n, err := mgr.CollectImages(ctx); err != nil || n != 1 {
 		t.Fatalf("first pass removed %d, err %v", n, err)
@@ -58,13 +60,21 @@ func TestCollectImagesKeepsReferencedAndRecent(t *testing.T) {
 	if _, err := mgr.Build(ctx, admin, BuildInput{Image: "alpine:3.20", Steps: []store.BuildStep{{Run: "echo recent"}}}); err != nil {
 		t.Fatal(err)
 	}
+	bytag, err := mgr.Create(ctx, admin, CreateInput{Image: "sbx-template:bytag"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Delete(ctx, admin, bytag.ID); err != nil {
+		t.Fatal(err)
+	}
 	n, err := mgr.CollectImages(ctx)
 	if err != nil || n != 2 {
 		t.Fatalf("second pass removed %d, err %v", n, err)
 	}
 	for ref, want := range map[string]bool{
 		tplImage: true, live.Image: true, recent.Image: true,
-		gone.Image: false, "sbx-template:fresh": false,
+		"sbx-template:bytag": true,
+		gone.Image:           false, "sbx-template:fresh": false,
 	} {
 		if has(t, fd, ref) != want {
 			t.Errorf("%s present = %v, want %v", ref, !want, want)
