@@ -94,10 +94,13 @@ type Limits struct {
 
 // BuildConfig controls template image builds. A build runs its steps as root
 // in Docker's builder, with the daemon's default network, so only admin keys
-// may request one unless AllowSandboxKeys is set.
+// may request one unless AllowSandboxKeys is set. Built images that no
+// template or live sandbox references are removed once unused for
+// RetainUnusedSeconds; 0 keeps them forever.
 type BuildConfig struct {
-	AllowSandboxKeys bool
-	TimeoutSeconds   int
+	AllowSandboxKeys    bool
+	TimeoutSeconds      int
+	RetainUnusedSeconds int
 }
 
 // AuthConfig optionally pins the first API key.
@@ -183,7 +186,8 @@ func Default() Config {
 			PreviewMaxStreams:   64,
 		},
 		Builds: BuildConfig{
-			TimeoutSeconds: 1200,
+			TimeoutSeconds:      1200,
+			RetainUnusedSeconds: 7 * 86400,
 		},
 	}
 }
@@ -213,8 +217,9 @@ type fileConfig struct {
 }
 
 type fileBuilds struct {
-	AllowSandboxKeys *bool `yaml:"allow_sandbox_keys"`
-	TimeoutSeconds   *int  `yaml:"timeout_seconds"`
+	AllowSandboxKeys    *bool `yaml:"allow_sandbox_keys"`
+	TimeoutSeconds      *int  `yaml:"timeout_seconds"`
+	RetainUnusedSeconds *int  `yaml:"retain_unused_seconds"`
 }
 
 type fileDocker struct {
@@ -359,6 +364,7 @@ func (f fileConfig) apply(cfg *Config) {
 	if b := f.Builds; b != nil {
 		setBool(&cfg.Builds.AllowSandboxKeys, b.AllowSandboxKeys)
 		setInt(&cfg.Builds.TimeoutSeconds, b.TimeoutSeconds)
+		setInt(&cfg.Builds.RetainUnusedSeconds, b.RetainUnusedSeconds)
 	}
 	if a := f.Auth; a != nil {
 		setString(&cfg.Auth.BootstrapKey, a.BootstrapKey)
@@ -435,6 +441,7 @@ func applyEnv(cfg *Config) {
 	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
 	envBool(&cfg.Builds.AllowSandboxKeys, "SBX_BUILDS_ALLOW_SANDBOX_KEYS")
 	envInt(&cfg.Builds.TimeoutSeconds, "SBX_BUILD_TIMEOUT_SECONDS")
+	envInt(&cfg.Builds.RetainUnusedSeconds, "SBX_BUILD_RETAIN_UNUSED_SECONDS")
 }
 
 // Validate checks the resolved configuration.
@@ -515,6 +522,9 @@ func (c Config) Validate() error {
 	}
 	if c.Builds.TimeoutSeconds < 1 {
 		return fmt.Errorf("builds.timeout_seconds must be >= 1")
+	}
+	if c.Builds.RetainUnusedSeconds != 0 && c.Builds.RetainUnusedSeconds < 3600 {
+		return fmt.Errorf("builds.retain_unused_seconds must be 0 (keep forever) or >= 3600")
 	}
 	if c.Network.PreviewMaxStreams < 1 {
 		return fmt.Errorf("preview_max_streams must be >= 1")

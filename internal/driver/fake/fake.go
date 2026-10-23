@@ -41,7 +41,7 @@ type Driver struct {
 	// BuildErr fails BuildImage when set.
 	BuildErr error
 	builds   []driver.BuildSpec
-	images   map[string]struct{}
+	images   map[string]time.Time
 }
 
 type proc struct {
@@ -89,7 +89,7 @@ func New(name string) *Driver {
 		procs:    map[string]map[string]*proc{},
 		watchers: map[string][]*watch{},
 		volumes:  map[string]struct{}{},
-		images:   map[string]struct{}{},
+		images:   map[string]time.Time{},
 	}
 }
 
@@ -149,7 +149,43 @@ func (d *Driver) BuildImage(_ context.Context, spec driver.BuildSpec) error {
 	if d.BuildErr != nil {
 		return d.BuildErr
 	}
-	d.images[spec.Tag] = struct{}{}
+	d.images[spec.Tag] = time.Now().UTC()
+	return nil
+}
+
+var _ driver.ImageCollector = (*Driver)(nil)
+
+// AddImage marks ref as built at created.
+func (d *Driver) AddImage(ref string, created time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.images[ref] = created
+}
+
+// ListBuiltImages returns the built images in repo.
+func (d *Driver) ListBuiltImages(_ context.Context, repo string) ([]driver.BuiltImage, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []driver.BuiltImage
+	for ref, created := range d.images {
+		if strings.HasPrefix(ref, repo+":") {
+			out = append(out, driver.BuiltImage{Ref: ref, Created: created})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out, nil
+}
+
+// RemoveImage forgets ref unless a sandbox that still exists uses it.
+func (d *Driver) RemoveImage(_ context.Context, ref string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, b := range d.boxes {
+		if b.image == ref {
+			return driver.ErrImageInUse
+		}
+	}
+	delete(d.images, ref)
 	return nil
 }
 

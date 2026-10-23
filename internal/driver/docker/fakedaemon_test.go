@@ -127,6 +127,39 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"ServerVersion": "test", "Runtimes": rts})
+	case r.Method == http.MethodGet && p == "/v1.44/images/json":
+		var filters map[string][]string
+		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
+		f.mu.Lock()
+		var list []any
+		for ref := range f.images {
+			if len(filters["reference"]) == 1 && !strings.HasPrefix(ref, filters["reference"][0]+":") {
+				continue
+			}
+			list = append(list, map[string]any{"RepoTags": []string{ref}, "Created": 1700000000, "Size": 42})
+		}
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, list)
+	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v1.44/images/"):
+		ref := imageRefFromPath(p)
+		f.mu.Lock()
+		ok := f.images[ref]
+		used := false
+		for _, ctn := range f.containers {
+			used = used || ctn.body.Image == ref
+		}
+		if ok && !used {
+			delete(f.images, ref)
+		}
+		f.mu.Unlock()
+		switch {
+		case !ok:
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + ref})
+		case used:
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "image is being used by a running container"})
+		default:
+			writeJSON(w, http.StatusOK, []map[string]string{{"Untagged": ref}})
+		}
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/images/") && strings.HasSuffix(p, "/json"):
 		ref := imageRefFromPath(p)
 		f.mu.Lock()

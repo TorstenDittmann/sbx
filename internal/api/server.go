@@ -193,6 +193,8 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_file_ops_total %d\n", c.FileOps.Load())
 	b.WriteString("# HELP sbx_image_builds_total Template images built (cache misses).\n# TYPE sbx_image_builds_total counter\n")
 	fmt.Fprintf(&b, "sbx_image_builds_total %d\n", c.Builds.Load())
+	b.WriteString("# HELP sbx_image_gc_removed_total Unused template images removed.\n# TYPE sbx_image_gc_removed_total counter\n")
+	fmt.Fprintf(&b, "sbx_image_gc_removed_total %d\n", c.ImagesGCed.Load())
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, b.String())

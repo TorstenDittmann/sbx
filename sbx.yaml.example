@@ -75,6 +75,9 @@ network:
 # Template builds run their steps as root in Docker's builder, with the
 # daemon's default network. Only admin keys can request one unless
 # allow_sandbox_keys is true. Built images are cached by content hash.
+# Images no template or live sandbox needs are removed after
+# retain_unused_seconds without use (0 keeps them forever).
 builds:
   allow_sandbox_keys: false
   timeout_seconds: 1200
+  retain_unused_seconds: 604800
