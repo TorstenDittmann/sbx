@@ -21,6 +21,8 @@ The client reads two environment variables:
 Or pass them explicitly. Every entry point takes `base_url` and `api_key`, or a ready `client`:
 
 ```python
+import os
+
 from sbx import Sandbox, SbxClient
 
 client = SbxClient("https://api.example.com", os.environ["SBX_KEY"], timeout=60)
@@ -37,6 +39,8 @@ There are two layers. `Sandbox` is the usual entry point: one object per sandbox
 ### Create and connect
 
 ```python
+import os
+
 from sbx import NetworkPolicy, Sandbox
 
 box = Sandbox.create(
@@ -174,6 +178,8 @@ everything = box.list_processes()
 ### Terminals
 
 ```python
+import sys
+
 term = box.start_terminal(["bash"], cols=120, rows=32)
 
 with box.connect_terminal(term.id) as session:

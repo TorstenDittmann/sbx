@@ -124,8 +124,11 @@ class AgentTest(unittest.TestCase):
 
         client = SbxClient(self.server.url, "sbx_testkey", websocket_connect=connect)
         box = Sandbox.create("base", client=client)
-        term = box.start_terminal(["sh"], cols=100, rows=40)
-        self.assertEqual(self.server.last.json(), {"cmd": ["sh"], "cols": 100, "rows": 40})
+        term = box.start_terminal(["sh"], cols=100, rows=40, cwd="/workspace", env={"TERM": "xterm"})
+        self.assertEqual(
+            self.server.last.json(),
+            {"cmd": ["sh"], "cwd": "/workspace", "env": {"TERM": "xterm"}, "cols": 100, "rows": 40},
+        )
         box.resize_terminal(term.id, 80, 24)
         self.assertEqual(self.server.last.json(), {"cols": 80, "rows": 24})
 

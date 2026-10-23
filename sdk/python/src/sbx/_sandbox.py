@@ -273,9 +273,8 @@ class Sandbox:
         rows: Optional[int] = None,
         cwd: Optional[str] = None,
         env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[Duration] = None,
     ) -> TerminalInfo:
-        return self.client.start_terminal(self.id, cmd, cols=cols, rows=rows, cwd=cwd, env=env, timeout=timeout)
+        return self.client.start_terminal(self.id, cmd, cols=cols, rows=rows, cwd=cwd, env=env)
 
     def resize_terminal(self, term_id: str, cols: int, rows: int) -> None:
         self.client.resize_terminal(self.id, term_id, cols, rows)

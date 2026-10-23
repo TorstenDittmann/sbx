@@ -580,10 +580,9 @@ class SbxClient:
         rows: Optional[int] = None,
         cwd: Optional[str] = None,
         env: Optional[Mapping[str, str]] = None,
-        timeout: Optional[Duration] = None,
-        stdin: Optional[Content] = None,
     ) -> TerminalInfo:
-        body = _exec_body(cmd, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
+        # The terminal route takes no timeout or stdin; it rejects unknown fields.
+        body = _exec_body(cmd, cwd=cwd, env=env)
         if cols is not None:
             body["cols"] = cols
         if rows is not None:
