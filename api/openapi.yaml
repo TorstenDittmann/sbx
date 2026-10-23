@@ -450,6 +450,25 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/stats:
+    get:
+      operationId: getSandboxStats
+      summary: Sample resource usage
+      description: |
+        Samples CPU, memory, `/workspace` disk, network, and process count for
+        a running or paused sandbox. The CPU percentage is measured over about
+        one second. Disk is read with `df` inside the sandbox and is null when
+        that fails, for example while the sandbox is paused. Reading stats does
+        not count as activity for the idle timeout. Returns 409 for a stopped
+        sandbox and 400 `unsupported` when the backend cannot report stats.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Resource sample
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SandboxStats"}
   /v1/sandboxes/{id}/exec:
     post:
       operationId: execSandbox
@@ -1209,6 +1228,40 @@ components:
         name: {type: string}
         backend: {type: string}
         created_at: {type: string, format: date-time}
+    SandboxStats:
+      type: object
+      required: [sandbox_id, status, sampled_at, cpu, memory, disk, network, pids]
+      properties:
+        sandbox_id: {type: string}
+        status: {type: string, enum: [running, paused]}
+        sampled_at: {type: string, format: date-time}
+        cpu:
+          type: object
+          properties:
+            usage_seconds: {type: number, description: Total CPU time since start.}
+            percent: {type: [number, "null"], description: "Share of one core times 100, so 2 busy cores read 200."}
+            limit_cores: {type: number}
+        memory:
+          type: object
+          properties:
+            used_bytes: {type: integer, description: Without reclaimable page cache. Includes tmpfs contents.}
+            limit_bytes: {type: integer}
+        disk:
+          type: object
+          properties:
+            used_bytes: {type: [integer, "null"]}
+            total_bytes: {type: [integer, "null"]}
+            limit_bytes: {type: integer}
+        network:
+          type: object
+          properties:
+            rx_bytes: {type: integer}
+            tx_bytes: {type: integer}
+        pids:
+          type: object
+          properties:
+            current: {type: integer}
+            limit: {type: integer}
     Sandbox:
       type: object
       required: [id, status, backend, image, expires_at, node]

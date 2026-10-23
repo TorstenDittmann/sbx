@@ -37,6 +37,7 @@ type fakeDaemon struct {
 	volumes    map[string]map[string]string
 	archives   map[string][]byte
 	onAttach   func(stdin io.Reader, stdout io.Writer)
+	statsQuery string
 }
 
 type fakeContainer struct {
@@ -225,6 +226,29 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"sbx": map[string]any{"IPAddress": "172.30.0.8", "GlobalIPv6Address": ""},
 			}},
 		})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/stats"):
+		f.mu.Lock()
+		_, ok := f.containers[containerID(p)]
+		f.statsQuery = r.URL.RawQuery
+		f.mu.Unlock()
+		if !ok {
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container"})
+			return
+		}
+		pre := map[string]any{"cpu_usage": map[string]any{"total_usage": 1_000_000_000}, "system_cpu_usage": 100_000_000_000, "online_cpus": 2}
+		if r.URL.Query().Get("one-shot") == "true" {
+			pre = map[string]any{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"cpu_stats":    map[string]any{"cpu_usage": map[string]any{"total_usage": 1_500_000_000}, "system_cpu_usage": 102_000_000_000, "online_cpus": 2},
+			"precpu_stats": pre,
+			"memory_stats": map[string]any{"usage": 50 << 20, "limit": 512 << 20, "stats": map[string]any{"inactive_file": 10 << 20}},
+			"pids_stats":   map[string]any{"current": 4},
+			"networks": map[string]any{
+				"eth0": map[string]any{"rx_bytes": 100, "tx_bytes": 200},
+				"eth1": map[string]any{"rx_bytes": 1, "tx_bytes": 2},
+			},
+		})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/containers/") && strings.HasSuffix(p, "/exec"):
 		var body execConfig
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -261,6 +285,9 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			stdout = "regular file|5|1700000000|81a4|/workspace/a.txt\n" +
 				"directory|0|1700000000|41ed|/workspace/sub\n" +
 				"symbolic link|0|1700000000|a1ff|/workspace/link\n"
+		}
+		if strings.Contains(cmd, "df -Pk") {
+			stdout = "Filesystem 1024-blocks Used Available Capacity Mounted on\ntmpfs 65536 2048 63488 4% /workspace\n"
 		}
 		writeFrame(conn, 1, stdout)
 		writeFrame(conn, 2, "warn\n")

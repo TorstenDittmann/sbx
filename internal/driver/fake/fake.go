@@ -38,6 +38,8 @@ type Driver struct {
 	DialErr error
 	// DropDial accepts a preview connection and closes it without a response.
 	DropDial bool
+	// StatsErr fails Stats when set.
+	StatsErr error
 	// BuildErr fails BuildImage when set.
 	BuildErr error
 	builds   []driver.BuildSpec
@@ -273,6 +275,41 @@ func (d *Driver) Resume(_ context.Context, id string) error {
 	}
 	b.state = driver.StateRunning
 	return nil
+}
+
+// Stats reports fixed CPU and network numbers. Memory and disk follow the
+// spec limits and the bytes written to the sandbox's files.
+func (d *Driver) Stats(_ context.Context, id string, full bool) (driver.Stats, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.StatsErr != nil {
+		return driver.Stats{}, d.StatsErr
+	}
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.Stats{}, driver.ErrNotFound
+	}
+	var used int64
+	for _, content := range d.files[id] {
+		used += int64(len(content))
+	}
+	st := driver.Stats{
+		CPUSeconds:       1.5,
+		MemoryBytes:      32 << 20,
+		MemoryLimitBytes: int64(b.spec.MemoryMB) << 20,
+		DiskUsedBytes:    -1,
+		DiskTotalBytes:   -1,
+		NetRxBytes:       1024,
+		NetTxBytes:       2048,
+		PIDs:             3,
+	}
+	if full {
+		pct := 12.5
+		st.CPUPercent = &pct
+		st.DiskUsedBytes = used
+		st.DiskTotalBytes = int64(b.spec.DiskMB) << 20
+	}
+	return st, nil
 }
 
 // ExecCall is one recorded exec.

@@ -82,6 +82,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.auth("sandbox", s.sandboxStats))
 
 	mux.HandleFunc("POST /v1/sandboxes/{id}/processes", s.auth("sandbox", s.createProcess))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/processes", s.auth("sandbox", s.listProcesses))
@@ -193,6 +194,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_file_ops_total %d\n", c.FileOps.Load())
 	b.WriteString("# HELP sbx_image_builds_total Template images built (cache misses).\n# TYPE sbx_image_builds_total counter\n")
 	fmt.Fprintf(&b, "sbx_image_builds_total %d\n", c.Builds.Load())
+	s.writeSandboxMetrics(r, &b)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, b.String())
