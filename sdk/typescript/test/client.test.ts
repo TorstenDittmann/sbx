@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http"
 import { once } from "node:events"
 import test from "node:test"
 
-import { parseDuration, Sandbox, SbxClient, SbxError } from "../src/index.ts"
+import { parseDuration, Sandbox, SbxClient, SbxError, type SandboxEvent } from "../src/index.ts"
 
 test("parseDuration accepts seconds and unit suffixes", () => {
   assert.equal(parseDuration(90), 90)
@@ -351,6 +351,80 @@ test("client lists, gets, and revokes keys", async () => {
     const got = await client.getKey("key_1")
     assert.equal(got.revokedAt, "2026-10-21T00:00:00Z")
     assert.deepEqual(calls, ["GET /v1/keys", "DELETE /v1/keys/key_1", "GET /v1/keys/key_1"])
+  } finally {
+    server.close()
+  }
+})
+
+test("events streams lifecycle events and resumes after a drop", async () => {
+  const urls: string[] = []
+  const server = createServer((req, res) => {
+    urls.push(req.url ?? "")
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    if (urls.length === 1) {
+      // The first stream starts after id 4, sends one event, then drops.
+      res.end(
+        "id: 4\n\n" +
+          'id: 5\nevent: sandbox.created\ndata: {"id":5,"type":"sandbox.created","sandbox_id":"sbx_a","time":"2026-10-23T12:00:00Z","data":{"status":"running"}}\n\n',
+      )
+      return
+    }
+    res.write(": ping\n\n")
+    res.write(
+      'id: 6\nevent: sandbox.lost\ndata: {"id":6,"type":"sandbox.lost","sandbox_id":"sbx_a","time":"2026-10-23T12:00:01Z","data":{"status":"stopped","reason":"missing"}}\n\n',
+    )
+  })
+  server.listen(0)
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as { port: number }
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "sbx_test" })
+    const controller = new AbortController()
+    const seen: SandboxEvent[] = []
+    for await (const event of client.events({ sandbox: "sbx_a", signal: controller.signal })) {
+      seen.push(event)
+      if (seen.length === 2) break
+    }
+    controller.abort()
+    assert.deepEqual(
+      seen.map((e) => [e.id, e.type, e.sandboxId, e.data.status]),
+      [
+        [5, "sandbox.created", "sbx_a", "running"],
+        [6, "sandbox.lost", "sbx_a", "stopped"],
+      ],
+    )
+    assert.equal(seen[1].data.reason, "missing")
+    assert.equal(urls[0], "/v1/events?sandbox=sbx_a")
+    assert.equal(urls[1], "/v1/events?after=5&sandbox=sbx_a")
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+test("client sends key registry credentials", async () => {
+  const bodies: Record<string, unknown>[] = []
+  const server = createServer(async (req, res) => {
+    let raw = ""
+    for await (const chunk of req) raw += chunk
+    bodies.push(JSON.parse(raw))
+    const key = { id: "key_1", name: "ci", prefix: "sbx_ab", scopes: ["sandbox"], registries: [{ server: "ghcr.io", username: "bot" }] }
+    res.writeHead(req.method === "POST" ? 201 : 200, { "content-type": "application/json" })
+    res.end(JSON.stringify(req.method === "POST" ? { ...key, key: "sbx_new" } : { ...key, registries: [] }))
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as { port: number }
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "sbx_test" })
+    const created = await client.createKey("ci", { registries: [{ server: "ghcr.io", username: "bot", password: "p" }, { server: "quay.io", identityToken: "t" }] })
+    assert.deepEqual(created.registries, [{ server: "ghcr.io", username: "bot" }])
+    const cleared = await client.setKeyRegistries("key_1", [])
+    assert.deepEqual(cleared.registries, [])
+    assert.deepEqual(bodies, [
+      { name: "ci", registries: [{ server: "ghcr.io", username: "bot", password: "p" }, { server: "quay.io", identity_token: "t" }] },
+      { registries: [] },
+    ])
   } finally {
     server.close()
   }

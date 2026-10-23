@@ -129,6 +129,10 @@ Creating from a template whose image is already built needs no build permission.
 
 `sbx_image_builds_total` on `/metrics` counts builds that missed the cache.
 
+### Private images
+
+A template's `image`, a create's `image`, and a build's base can come from a private registry. sbx pulls them with the caller key's [registry credentials](/docs/api-keys/#private-registries), or else the server's [`registries`](/docs/configuration/#registries). The base is pulled before the build starts, so the builder never fetches it anonymously. A template on an image only some keys can pull works for those keys; others get an image error. Its warm pool needs a server credential.
+
 ### Cleanup
 
 Built images are garbage collected. Once an hour sbx removes `sbx-template` images that no template needs and no live sandbox uses, once nothing has created from or built them for `builds.retain_unused_seconds` (`SBX_BUILD_RETAIN_UNUSED_SECONDS`, default 604800, seven days). A template's own image is kept for as long as the template exists. Set it to `0` to keep every image forever. A removed image is rebuilt the next time something asks for it. `sbx_image_gc_removed_total` on `/metrics` counts removals.
@@ -169,6 +173,8 @@ What is not kept: secrets, the sandbox's labels, its network policy, running pro
 The sandbox must be running, not paused; it is paused for the moment of the commit. Snapshots need the same rights as a build (an admin key unless `builds.allow_sandbox_keys` is set), and saving a template needs an admin key. Only the `docker` backend snapshots (`"snapshot": true` in `GET /v1/backends`). gVisor keeps its writes inside the sandbox, where a commit cannot see them. Firecracker can boot a snapshot image, but it does not restore `/workspace` from it.
 
 The copy uses `docker exec` with `/bin/sh`, `tar`, and `cp` from the image, so unlike the rest of sbx, snapshots need an image with a shell and those tools. A snapshot of a sandbox that was itself started from a snapshot replaces the parent's copy, so files deleted from `/workspace` are no longer in the new image's filesystem (its lower layers still hold them, as with any Docker image).
+
+A snapshot of a sandbox whose image came from a private registry with a key's own credential is private in the same way as a build from that base: a create from it pulls the base again with the caller's credential.
 
 Snapshot images are collected like built images (see [Cleanup](#cleanup)), except that one cannot be rebuilt once removed. A template saved from a snapshot keeps its image for as long as the template exists; a snapshot without a template is removed after `builds.retain_unused_seconds` with no create from it.
 

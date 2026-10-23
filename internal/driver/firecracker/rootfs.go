@@ -23,6 +23,9 @@ type RootSpec struct {
 	Dest   string
 	DiskMB int
 	Guest  []byte
+	// Registry and ForcePull are SandboxSpec's, for the OCI image.
+	Registry  *driver.RegistryAuth
+	ForcePull bool
 }
 
 func (d *Driver) buildRoot(ctx context.Context, spec RootSpec) error {
@@ -44,6 +47,16 @@ func buildRootfs(ctx context.Context, dockerHost, cacheDir string, spec RootSpec
 			return fmt.Errorf("%w: %s", driver.ErrImage, err)
 		}
 		return inject(ctx, spec.Dest, spec.Guest)
+	}
+	if spec.ForcePull {
+		// The ext4 cache is keyed by image name, so check the registry first.
+		cli, err := docker.NewClient(dockerHost)
+		if err != nil {
+			return err
+		}
+		if err := cli.ImagePull(ctx, spec.Image, spec.Registry); err != nil {
+			return fmt.Errorf("%w: %v", driver.ErrImage, err)
+		}
 	}
 	sum, err := fileSHA(spec.Agent)
 	if err != nil {
@@ -76,7 +89,7 @@ func buildOCI(ctx context.Context, dockerHost string, spec RootSpec, dest string
 	if err != nil {
 		return err
 	}
-	body, err := cli.ExportFilesystem(ctx, spec.Image)
+	body, err := cli.ExportFilesystem(ctx, spec.Image, spec.Registry)
 	if err != nil {
 		return fmt.Errorf("%w: %v", driver.ErrImage, err)
 	}

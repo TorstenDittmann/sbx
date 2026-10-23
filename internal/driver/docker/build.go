@@ -46,6 +46,11 @@ func (d *Driver) BuildImage(ctx context.Context, spec driver.BuildSpec) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s", driver.ErrImage, err.Error())
 	}
+	// Pull the base here, with its credential, so the builder finds it locally
+	// and never pulls it anonymously.
+	if err := d.ensureImage(ctx, spec.Base, spec.Registry, spec.ForcePull); err != nil {
+		return err
+	}
 	if err := d.client.ImageBuild(ctx, spec.Tag, dockerfile); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return fmt.Errorf("%w: build timed out after %ds", driver.ErrImage, spec.TimeoutSeconds)
@@ -53,6 +58,11 @@ func (d *Driver) BuildImage(ctx context.Context, spec driver.BuildSpec) error {
 		return fmt.Errorf("%w: %s", driver.ErrImage, err.Error())
 	}
 	return nil
+}
+
+// PullImage pulls ref with auth whether or not the daemon has it.
+func (d *Driver) PullImage(ctx context.Context, ref string, auth *driver.RegistryAuth) error {
+	return d.ensureImage(ctx, ref, auth, true)
 }
 
 // renderDockerfile writes every step in exec form. JSON quoting keeps a step

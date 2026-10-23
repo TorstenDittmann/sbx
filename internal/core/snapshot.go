@@ -65,6 +65,19 @@ func (m *Manager) Snapshot(ctx context.Context, actor Actor, sandboxID string, i
 	}
 	snapID := id.Snapshot()
 	tag := buildImageRepo + ":" + snapID
+	// A snapshot holds its base's layers, so a private base keeps it private:
+	// a fork must still be allowed to pull the base.
+	priv := sb.Image
+	if driver.Repository(priv) != driver.Repository(buildImageRepo) {
+		priv = driver.Repository(priv)
+	}
+	if _, private, err := m.store.PrivateImage(ctx, priv); err != nil {
+		return SnapshotResult{}, err
+	} else if private {
+		if err := m.store.MarkPrivateImage(ctx, tag, sb.Image, m.now()); err != nil {
+			return SnapshotResult{}, err
+		}
+	}
 	start := m.now()
 	m.log.Info("snapshotting sandbox", "id", sb.ID, "image", tag, "base", sb.Image)
 	err = snap.Snapshot(ctx, sb.ContainerID, driver.SnapshotSpec{Tag: tag, Base: sb.Image, Workspace: workspace})
@@ -87,7 +100,7 @@ func (m *Manager) Snapshot(ctx context.Context, actor Actor, sandboxID string, i
 	if sb.Network == "full" {
 		network = "full"
 	}
-	t, err := m.CreateTemplate(ctx, TemplateInput{
+	t, err := m.CreateTemplate(ctx, actor, TemplateInput{
 		Name: in.Template, Image: tag, Description: in.Description,
 		CPU: sb.CPU, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB, Env: sb.Env,
 		Backend: sb.Backend, Network: network,

@@ -96,6 +96,16 @@ func TestIntegrationLifecycle(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Name != "hello.txt" || entries[0].Type != driver.FileFile {
 		t.Fatalf("%+v %v", entries, err)
 	}
+	stats, err := d.Stats(ctx, h.ID, true)
+	if err != nil || stats.CPUSeconds <= 0 || stats.CPUPercent == nil || stats.MemoryBytes <= 0 || stats.PIDs < 1 {
+		t.Fatalf("stats %+v %v", stats, err)
+	}
+	if stats.DiskUsedBytes <= 0 || stats.DiskTotalBytes != 32<<20 {
+		t.Fatalf("disk stats %+v", stats)
+	}
+	if stats, err = d.Stats(ctx, h.ID, false); err != nil || stats.CPUSeconds <= 0 || stats.DiskUsedBytes != -1 {
+		t.Fatalf("cheap stats %+v %v", stats, err)
+	}
 	var streamed bytes.Buffer
 	res, err = d.ExecStream(ctx, h.ID, driver.ExecRequest{Cmd: []string{"echo", "streamed"}, TimeoutSeconds: 20}, func(chunk driver.ExecChunk) error {
 		if chunk.Kind == driver.StreamStdout {
@@ -572,5 +582,75 @@ func TestIntegrationGVisorUnavailable(t *testing.T) {
 			}
 		}
 		t.Fatal(err)
+	}
+}
+
+func TestIntegrationEvents(t *testing.T) {
+	if os.Getenv("SBX_INTEGRATION") != "1" {
+		t.Skip("set SBX_INTEGRATION=1 to run against a Docker daemon")
+	}
+	d, err := New(Options{Name: "docker", ReadOnlyRootfs: true, UID: 1000, GID: 1000, MaxOutputBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	sbID := id.Sandbox()
+	h, err := d.Create(ctx, driver.SandboxSpec{
+		ID: sbID, Image: "alpine:3.20", CPU: 0.5, MemoryMB: 32, DiskMB: 32, PIDs: 64, Network: driver.NetNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
+
+	events := make(chan driver.Event, 16)
+	watchCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() { _ = d.WatchEvents(watchCtx, func(ev driver.Event) { events <- ev }) }()
+	// The events request is in flight once the daemon answers a later call.
+	time.Sleep(500 * time.Millisecond)
+
+	wait := func(kind driver.EventKind) driver.Event {
+		t.Helper()
+		for {
+			select {
+			case ev := <-events:
+				if ev.Kind == kind && ev.ID == h.ID {
+					return ev
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatalf("no %s event", kind)
+			}
+		}
+	}
+
+	// A process that outgrows the memory limit is OOM-killed while the
+	// sandbox keeps running.
+	res, err := d.Exec(ctx, h.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "x=aaaaaaaa; while true; do x=$x$x; done"}, TimeoutSeconds: 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode != 137 {
+		t.Fatalf("hog exit %d", res.ExitCode)
+	}
+	if ev := wait(driver.EventOOM); ev.SandboxID != sbID {
+		t.Fatalf("oom event %+v", ev)
+	}
+	if st, err := d.Inspect(ctx, h.ID); err != nil || st.State != driver.StateRunning {
+		t.Fatalf("after oom %+v %v", st, err)
+	}
+
+	if out, err := exec.Command("docker", "kill", h.ID).CombinedOutput(); err != nil {
+		t.Fatalf("docker kill: %v %s", err, out)
+	}
+	if ev := wait(driver.EventDie); ev.ExitCode != 137 {
+		t.Fatalf("die event %+v", ev)
+	}
+	// Docker keeps OOMKilled once any process in the cgroup was OOM-killed,
+	// so it stays set here although the kill stopped the container.
+	st, err := d.Inspect(ctx, h.ID)
+	if err != nil || st.State != driver.StateStopped || st.ExitCode != 137 || !st.OOMKilled {
+		t.Fatalf("after kill %+v %v", st, err)
 	}
 }

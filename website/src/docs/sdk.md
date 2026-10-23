@@ -90,6 +90,19 @@ await box.refresh()       // re-read status and expiry
 await box.kill()          // delete
 ```
 
+Follow lifecycle events instead of polling. The stream resumes after the last id when the connection drops:
+
+```ts
+const stop = new AbortController()
+for await (const event of client.events({ signal: stop.signal })) {
+  if (event.type === "sandbox.lost" || event.type === "sandbox.expired") {
+    console.log(event.sandboxId, event.data.reason)
+  }
+}
+```
+
+`events({ sandbox: id })` narrows the stream to one sandbox, and `after: 0` replays what the server still keeps. Each event is `{ id, type, sandboxId, time, data }`.
+
 ### Exec
 
 ```ts
@@ -266,11 +279,13 @@ const created = await client.createKey("agent", {
   scopes: ["sandbox"],
   expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
   network: { mode: "allow", maxMode: "allow", allow: ["pypi.org"] },
+  registries: [{ server: "ghcr.io", username: "agent-bot", password: process.env.GHCR_TOKEN }],
 })
 created.key // shown once
 
 await client.listKeys()
 await client.getKey(created.id)
+await client.setKeyRegistries(created.id, []) // replace or remove private registry credentials
 await client.revokeKey(created.id) // stops working immediately
 ```
 

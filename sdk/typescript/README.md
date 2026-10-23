@@ -25,6 +25,8 @@ await box.kill()
 
 `box.files.watch` yields `{ type, path }` events (`create`, `write`, `remove`). The agent uses inotify and falls back to polling when inotify is unavailable.
 
+`client.events()` yields sandbox lifecycle events (`sandbox.created`, `sandbox.expired`, `sandbox.oom`, `sandbox.lost`, …) from `GET /v1/events`, so you do not poll for status. It reconnects after a drop and resumes after the last event id. Pass `{ sandbox: id }` for one sandbox and `{ signal }` to stop.
+
 `uploadArchive` accepts a tar or gzip tar, and `downloadArchive` returns a gzip tar. When the server is running `sbx-agent`, those calls do not need a `tar` binary in the sandbox image.
 
 `client.createVolume(name)` creates a volume that outlives sandboxes. A name the key already uses fails with 409; `client.ensureVolume(name)` returns the existing volume instead, so a retried job gets the same one back. Pass `mounts: [{ volumeId, path }]` to `Sandbox.create`. Mounting `/workspace` keeps that directory; `diskMb` does not cap it. `deleteVolume` fails while a live sandbox still mounts the volume.

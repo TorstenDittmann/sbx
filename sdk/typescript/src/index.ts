@@ -234,10 +234,24 @@ export type KeyInfo = {
   prefix: string
   scopes: string[]
   network: KeyNetworkPolicy
+  /** Registries the key has credentials for. Secrets are never returned. */
+  registries: { server: string; username?: string }[]
   createdAt?: string
   lastUsedAt?: string
   expiresAt?: string
   revokedAt?: string
+}
+
+/**
+ * A private image registry credential. Set `username` and `password`, or
+ * `identityToken`. `server` is a host such as `ghcr.io`; `docker.io` covers
+ * unqualified image names.
+ */
+export type RegistryCredential = {
+  server: string
+  username?: string
+  password?: string
+  identityToken?: string
 }
 
 /** A new API key. `key` is the secret and is only returned once. */
@@ -249,6 +263,40 @@ export type CreatedKey = KeyInfo & {
 export type FileEvent = {
   type: string
   path: string
+}
+
+/** Lifecycle event types from `GET /v1/events`. */
+export type SandboxEventType =
+  | "sandbox.created"
+  | "sandbox.failed"
+  | "sandbox.deleted"
+  | "sandbox.expired"
+  | "sandbox.paused"
+  | "sandbox.resumed"
+  | "sandbox.oom"
+  | "sandbox.lost"
+
+/**
+ * A sandbox lifecycle event. `id` only grows; pass it as `after` to resume.
+ * `data.status` is the sandbox status after the event. `data.reason` is set
+ * on expired (`ttl`, `idle`), failed, and lost (`exited`, `missing`) events.
+ */
+export type SandboxEvent = {
+  id: number
+  type: SandboxEventType
+  sandboxId: string
+  time: string
+  data: Record<string, unknown> & { status?: SandboxStatus; reason?: string }
+}
+
+export type EventsOptions = {
+  /** Last event id already seen. Omit to start with the next event; 0 replays everything the server keeps. */
+  after?: number
+  /** Only events for this sandbox. */
+  sandbox?: string
+  /** Reconnect after a dropped stream, resuming after the last id. Default true. */
+  reconnect?: boolean
+  signal?: AbortSignal
 }
 
 export type ExecEvent = {
@@ -604,7 +652,7 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
   }
 
-  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string } = {}): Promise<CreatedKey> {
+  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string; registries?: RegistryCredential[] } = {}): Promise<CreatedKey> {
     const body: Record<string, unknown> = { name }
     if (options.scopes) body.scopes = options.scopes
     if (options.network) {
@@ -613,6 +661,7 @@ export class SbxClient {
       body.network = network
     }
     if (options.expiresAt) body.expires_at = options.expiresAt instanceof Date ? options.expiresAt.toISOString() : options.expiresAt
+    if (options.registries) body.registries = options.registries.map(registryBody)
     return this.requestJSON<KeyJSON & { key: string }>("POST", "/v1/keys", body).then((raw) => ({ ...mapKey(raw), key: raw.key }))
   }
 
@@ -622,6 +671,11 @@ export class SbxClient {
 
   getKey(id: string): Promise<KeyInfo> {
     return this.requestJSON<KeyJSON>("GET", `/v1/keys/${encodeURIComponent(id)}`).then(mapKey)
+  }
+
+  /** Replace a key's private registry credentials. An empty list removes them. */
+  setKeyRegistries(id: string, registries: RegistryCredential[]): Promise<KeyInfo> {
+    return this.requestJSON<KeyJSON>("PUT", `/v1/keys/${encodeURIComponent(id)}/registries`, { registries: registries.map(registryBody) }).then(mapKey)
   }
 
   /** Revoke a key. It stops authenticating immediately. */
@@ -764,6 +818,40 @@ export class SbxClient {
     }
   }
 
+  /**
+   * Stream sandbox lifecycle events instead of polling. A sandbox key sees its
+   * own sandboxes; an admin key sees all. The stream resumes from the last id
+   * after a disconnect, so no event is skipped while the server still keeps it.
+   * Stop it with `options.signal` or by breaking out of the loop.
+   */
+  async *events(options: EventsOptions = {}): AsyncGenerator<SandboxEvent> {
+    let after = options.after
+    const reconnect = options.reconnect ?? true
+    const signal = options.signal
+    while (!signal?.aborted) {
+      const q = new URLSearchParams()
+      if (after !== undefined) q.set("after", String(after))
+      if (options.sandbox) q.set("sandbox", options.sandbox)
+      const suffix = q.size ? `?${q}` : ""
+      try {
+        const response = await this.request("GET", `/v1/events${suffix}`, undefined, undefined, signal)
+        if (!response.body) throw new SbxError(response.status, "driver", "empty event stream")
+        for await (const block of sseBlocks(response.body)) {
+          // The stream opens with a bare id line: the cursor it starts from.
+          const id = sseID(block)
+          if (id !== undefined) after = id
+          const event = parseSSE(block)
+          if (event) yield mapEvent(event.json)
+        }
+      } catch (err) {
+        if (signal?.aborted) return
+        if (!reconnect || err instanceof SbxError) throw err
+      }
+      if (!reconnect) return
+      await delay(1000, signal)
+    }
+  }
+
   startProcess(id: string, cmd: string | string[], options: ExecOptions = {}): Promise<ProcessInfo> {
     return this.requestJSON<ProcessJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/processes`, execBody(cmd, options)).then(mapProcess)
   }
@@ -846,7 +934,7 @@ export class SbxClient {
     return (await response.json()) as T
   }
 
-  private async request(method: string, path: string, body?: unknown, contentType?: string): Promise<Response> {
+  private async request(method: string, path: string, body?: unknown, contentType?: string, signal?: AbortSignal): Promise<Response> {
     const headers = new Headers({ Authorization: `Bearer ${this.apiKey}` })
     let payload: BodyInit | undefined
     if (body != null && contentType === "application/json") {
@@ -856,7 +944,7 @@ export class SbxClient {
       headers.set("Content-Type", contentType ?? "application/octet-stream")
       payload = body
     }
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body: payload })
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method, headers, body: payload, signal })
     if (!response.ok) throw await errorFrom(response)
     return response
   }
@@ -934,6 +1022,15 @@ type KeyJSON = {
     egress_kbps?: number
     max_connections?: number
   }
+  registries?: { server: string; username?: string }[]
+}
+
+function registryBody(r: RegistryCredential): Record<string, string> {
+  const body: Record<string, string> = { server: r.server }
+  if (r.username) body.username = r.username
+  if (r.password) body.password = r.password
+  if (r.identityToken) body.identity_token = r.identityToken
+  return body
 }
 
 function mapKey(raw: KeyJSON): KeyInfo {
@@ -955,6 +1052,7 @@ function mapKey(raw: KeyJSON): KeyInfo {
       egressKbps: network.egress_kbps,
       maxConnections: network.max_connections,
     },
+    registries: raw.registries ?? [],
   }
 }
 
@@ -989,6 +1087,61 @@ async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator
       split = buffer.indexOf("\n\n")
     }
   }
+}
+
+async function* sseBlocks(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ""
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done) return
+      buffer += decoder.decode(chunk.value, { stream: true })
+      let split = buffer.indexOf("\n\n")
+      while (split >= 0) {
+        yield buffer.slice(0, split)
+        buffer = buffer.slice(split + 2)
+        split = buffer.indexOf("\n\n")
+      }
+    }
+  } finally {
+    // Closes the connection when the caller stops early.
+    await reader.cancel().catch(() => {})
+  }
+}
+
+function sseID(block: string): number | undefined {
+  for (const line of block.split("\n")) {
+    if (line.startsWith("id:")) {
+      const n = Number(line.slice(3).trim())
+      if (Number.isInteger(n) && n >= 0) return n
+    }
+  }
+  return undefined
+}
+
+function mapEvent(raw: Record<string, unknown>): SandboxEvent {
+  return {
+    id: Number(raw.id ?? 0),
+    type: String(raw.type ?? "") as SandboxEventType,
+    sandboxId: String(raw.sandbox_id ?? ""),
+    time: String(raw.time ?? ""),
+    data: (raw.data as SandboxEvent["data"]) ?? {},
+  }
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", done)
+      resolve()
+    }
+    signal?.addEventListener("abort", done, { once: true })
+  })
 }
 
 function parseSSE(block: string): { event: string; json: Record<string, unknown> } | undefined {

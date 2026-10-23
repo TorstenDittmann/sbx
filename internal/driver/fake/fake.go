@@ -38,6 +38,8 @@ type Driver struct {
 	DialErr error
 	// DropDial accepts a preview connection and closes it without a response.
 	DropDial bool
+	// StatsErr fails Stats when set.
+	StatsErr error
 	// BuildErr fails BuildImage when set.
 	BuildErr error
 	builds   []driver.BuildSpec
@@ -46,7 +48,18 @@ type Driver struct {
 	SnapshotErr error
 	snapshots   []driver.SnapshotSpec
 	// seeds holds the /workspace files a snapshot image starts with.
-	seeds map[string]map[string][]byte
+	seeds  map[string]map[string][]byte
+	events chan driver.Event
+	// Registry, when set, stands in for the registry on every pull: a forced
+	// pull, a build's base, and PullImage. A nil return lets the pull through.
+	Registry func(ref string, auth *driver.RegistryAuth) error
+	pulls    []PullCall
+}
+
+// PullCall is one pull that reached the fake registry.
+type PullCall struct {
+	Ref  string
+	Auth *driver.RegistryAuth
 }
 
 type proc struct {
@@ -69,6 +82,8 @@ type box struct {
 	spec  driver.SandboxSpec
 	state driver.State
 	image string
+	oom   bool
+	exit  int
 }
 
 // New returns a docker-like fake that supports pause.
@@ -96,6 +111,41 @@ func New(name string) *Driver {
 		volumes:  map[string]struct{}{},
 		images:   map[string]time.Time{},
 		seeds:    map[string]map[string][]byte{},
+		events:   make(chan driver.Event, 16),
+	}
+}
+
+// Crash stops a container the way a dying main process would. oom marks it
+// OOM-killed.
+func (d *Driver) Crash(id string, oom bool, exitCode int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if b, ok := d.boxes[id]; ok {
+		b.state = driver.StateStopped
+		b.oom = oom
+		b.exit = exitCode
+	}
+}
+
+// Vanish removes a container behind the manager's back.
+func (d *Driver) Vanish(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.boxes, id)
+}
+
+// Push queues a runtime event for WatchEvents.
+func (d *Driver) Push(ev driver.Event) { d.events <- ev }
+
+// WatchEvents delivers pushed events until ctx ends.
+func (d *Driver) WatchEvents(ctx context.Context, emit func(driver.Event)) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev := <-d.events:
+			emit(ev)
+		}
 	}
 }
 
@@ -139,7 +189,7 @@ func (d *Driver) EnsureImage(context.Context, string) error { return nil }
 
 var _ driver.Builder = (*Driver)(nil)
 
-// HasImage reports whether BuildImage produced ref.
+// HasImage reports whether BuildImage produced ref or a pull fetched it.
 func (d *Driver) HasImage(_ context.Context, ref string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -154,6 +204,9 @@ func (d *Driver) BuildImage(_ context.Context, spec driver.BuildSpec) error {
 	d.builds = append(d.builds, spec)
 	if d.BuildErr != nil {
 		return d.BuildErr
+	}
+	if err := d.pullLocked(spec.Base, spec.Registry); err != nil {
+		return err
 	}
 	d.images[spec.Tag] = time.Now().UTC()
 	return nil
@@ -195,6 +248,31 @@ func (d *Driver) RemoveImage(_ context.Context, ref string) error {
 	return nil
 }
 
+// PullImage asks the fake registry for ref.
+func (d *Driver) PullImage(_ context.Context, ref string, auth *driver.RegistryAuth) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pullLocked(ref, auth)
+}
+
+func (d *Driver) pullLocked(ref string, auth *driver.RegistryAuth) error {
+	d.pulls = append(d.pulls, PullCall{Ref: ref, Auth: auth})
+	if d.Registry != nil {
+		if err := d.Registry(ref, auth); err != nil {
+			return fmt.Errorf("%w: %s", driver.ErrImage, err.Error())
+		}
+	}
+	d.images[ref] = time.Now().UTC()
+	return nil
+}
+
+// Pulls returns every pull that reached the fake registry.
+func (d *Driver) Pulls() []PullCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]PullCall(nil), d.pulls...)
+}
+
 // Builds returns every BuildImage call so far.
 func (d *Driver) Builds() []driver.BuildSpec {
 	d.mu.Lock()
@@ -207,6 +285,11 @@ func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Hand
 	defer d.mu.Unlock()
 	if d.CreateErr != nil {
 		return driver.Handle{}, d.CreateErr
+	}
+	if spec.ForcePull || spec.Registry != nil {
+		if err := d.pullLocked(spec.Image, spec.Registry); err != nil {
+			return driver.Handle{}, err
+		}
 	}
 	d.boxes[spec.ID] = &box{spec: spec, state: driver.StateRunning, image: spec.Image}
 	if d.files[spec.ID] == nil {
@@ -326,7 +409,7 @@ func (d *Driver) List(context.Context) ([]driver.Status, error) {
 }
 
 func (d *Driver) status(id string, b *box) driver.Status {
-	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image}
+	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image, OOMKilled: b.oom, ExitCode: b.exit}
 }
 
 func (d *Driver) Pause(_ context.Context, id string) error {
@@ -352,6 +435,41 @@ func (d *Driver) Resume(_ context.Context, id string) error {
 	}
 	b.state = driver.StateRunning
 	return nil
+}
+
+// Stats reports fixed CPU and network numbers. Memory and disk follow the
+// spec limits and the bytes written to the sandbox's files.
+func (d *Driver) Stats(_ context.Context, id string, full bool) (driver.Stats, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.StatsErr != nil {
+		return driver.Stats{}, d.StatsErr
+	}
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.Stats{}, driver.ErrNotFound
+	}
+	var used int64
+	for _, content := range d.files[id] {
+		used += int64(len(content))
+	}
+	st := driver.Stats{
+		CPUSeconds:       1.5,
+		MemoryBytes:      32 << 20,
+		MemoryLimitBytes: int64(b.spec.MemoryMB) << 20,
+		DiskUsedBytes:    -1,
+		DiskTotalBytes:   -1,
+		NetRxBytes:       1024,
+		NetTxBytes:       2048,
+		PIDs:             3,
+	}
+	if full {
+		pct := 12.5
+		st.CPUPercent = &pct
+		st.DiskUsedBytes = used
+		st.DiskTotalBytes = int64(b.spec.DiskMB) << 20
+	}
+	return st, nil
 }
 
 // ExecCall is one recorded exec.
