@@ -15,7 +15,7 @@ theme.tokenColors!.push({ scope: "string.unquoted.argument", settings: { foregro
 
 const highlighter = await createHighlighter({
 	themes: [theme],
-	langs: ["typescript", "shellscript", "yaml", "json", "text"],
+	langs: ["typescript", "python", "shellscript", "yaml", "json", "text"],
 });
 
 function escapeHtml(text: string): string {

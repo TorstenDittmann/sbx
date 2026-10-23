@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/core"
+	"github.com/TorstenDittmann/sbx/internal/dashboard"
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/id"
 	"github.com/TorstenDittmann/sbx/internal/store"
@@ -56,6 +57,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /openapi.yaml", s.openapi)
+	if s.mgr.Config().Dashboard {
+		mux.Handle("GET "+dashboard.Prefix, dashboard.Handler())
+		mux.Handle("GET /ui", http.RedirectHandler(dashboard.Prefix, http.StatusMovedPermanently))
+	}
 
 	mux.HandleFunc("POST /v1/keys", s.auth("admin", s.createKey))
 	mux.HandleFunc("GET /v1/keys", s.auth("admin", s.listKeys))
@@ -117,14 +122,24 @@ func (s *Server) Handler() http.Handler {
 	return s.recover(s.logRequests(s.limitBody(s.routePreviewHost(mux))))
 }
 
-func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+func (s *Server) root(w http.ResponseWriter, r *http.Request) {
+	dash := s.mgr.Config().Dashboard
+	// A browser landing on / wants the dashboard; API clients keep the JSON.
+	if dash && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		http.Redirect(w, r, dashboard.Prefix, http.StatusFound)
+		return
+	}
+	body := map[string]string{
 		"name":    "sbx",
 		"version": version.Version,
 		"health":  "/healthz",
 		"openapi": "/openapi.yaml",
 		"docs":    "https://github.com/TorstenDittmann/sbx",
-	})
+	}
+	if dash {
+		body["dashboard"] = dashboard.Prefix
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +208,8 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_file_ops_total %d\n", c.FileOps.Load())
 	b.WriteString("# HELP sbx_image_builds_total Template images built (cache misses).\n# TYPE sbx_image_builds_total counter\n")
 	fmt.Fprintf(&b, "sbx_image_builds_total %d\n", c.Builds.Load())
+	b.WriteString("# HELP sbx_image_gc_removed_total Unused template images removed.\n# TYPE sbx_image_gc_removed_total counter\n")
+	fmt.Fprintf(&b, "sbx_image_gc_removed_total %d\n", c.ImagesGCed.Load())
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, b.String())
@@ -854,11 +871,9 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadArchive(w http.ResponseWriter, r *http.Request) {
-	body, ok := readRequestBody(w, r, s.archiveLimit())
-	if !ok {
-		return
-	}
-	if err := s.mgr.WriteArchive(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), body); err != nil {
+	// The manager streams the body and enforces max_archive_bytes itself;
+	// limitBody already refused a Content-Length over it.
+	if err := s.mgr.WriteArchive(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), r.Body); err != nil {
 		writeManager(w, err)
 		return
 	}

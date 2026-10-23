@@ -134,10 +134,10 @@ func TestGzipArchive(t *testing.T) {
 	if err := gz.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", buf.Bytes()); err != nil {
+	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", bytes.NewReader(buf.Bytes())); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", []byte{0x1f, 0x8b, 0xff}); err == nil {
+	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", bytes.NewReader([]byte{0x1f, 0x8b, 0xff})); err == nil {
 		t.Fatal("expected invalid gzip")
 	}
 }

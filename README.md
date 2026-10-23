@@ -29,7 +29,7 @@ npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -67,11 +67,12 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
   -d '{"cmd":["echo","hello"]}'
 ```
 
-The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@sbx.torsten.work/sbx`; see [Install](#install).
+The same path from the TypeScript SDK (Node 22) or the Python SDK (Python 3.9+) in this repo, with no install step. The published packages are `@sbx.torsten.work/sbx` and `sbx-sdk`; see [Install](#install).
 
 ```bash
 export SBX_URL=http://127.0.0.1:8080
 node --experimental-strip-types examples/quickstart.ts
+python3 examples/quickstart.py
 ```
 
 Built-in templates are `base` (`alpine:3.20`, 0.5 CPU, 128 MiB), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`). Without a template, the server defaults are 1 CPU, 512 MiB, and a 1024 MiB workspace.
@@ -120,6 +121,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes. A key can carry `expires_at`, and `DELETE /v1/keys/{id}` (or `sbx keys revoke --id`) revokes it at once. The API refuses to revoke the last admin key.
 - `secrets` on create, and `PUT /v1/sandboxes/{id}/secrets`. Names come back as `secret_keys`. Values are not returned by get or list. They are injected into the sandbox and into later commands. A secret name cannot also be set in `env`.
 - A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
+- A web dashboard at `/ui/` (see [Dashboard](#dashboard)).
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
 - A node-wide sandbox cap (`max_sandboxes`, default 100) on top of the per-key quota, a per-key request rate limit, and a request body size limit.
 - Secure defaults: no network, all capabilities dropped, non-root, read-only rootfs, memory without swap, PID limit. `disk_mb` is the size of the writable `/workspace` tmpfs. Firecracker uses an ext4 rootfs of that size, with `sbx-agent` as init.
@@ -128,6 +130,10 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 `network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
 When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Firecracker always needs the agent: it is the guest init. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md). Kata setup is [docs/kata.md](docs/kata.md). Firecracker setup is [docs/firecracker.md](docs/firecracker.md).
+
+## Dashboard
+
+`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
 
 ## Deploying the website with Dokploy
 
@@ -150,6 +156,7 @@ go test ./...
 SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test/e2e/
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
+(cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -t .)
 ```
 
-Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.
+Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK tests are skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.

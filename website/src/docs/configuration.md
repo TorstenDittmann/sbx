@@ -41,6 +41,7 @@ builds:
 | `data_dir` | `SBX_DATA_DIR` | `data` | Holds `sbx.db`, `initial_api_key`, and Firecracker files. |
 | `backend` | `SBX_BACKEND` | `docker` | Default backend: `docker`, `gvisor`, `kata`, or `firecracker`. |
 | `log_level` | `SBX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `dashboard` | `SBX_DASHBOARD` | `true` | Serve the [web dashboard](/docs/dashboard) at `/ui/`. |
 | `auth.bootstrap_key` | `SBX_BOOTSTRAP_KEY` | empty | Admin key to create on first boot instead of generating one. |
 
 ## Docker
@@ -93,7 +94,7 @@ builds:
 | `limits.max_exec_seconds` | | `3600` | |
 | `limits.max_output_bytes` | | `8388608` | Exec output kept before `truncated` is set (8 MiB). |
 | `limits.max_upload_bytes` | `SBX_MAX_UPLOAD_BYTES` | `33554432` | Largest request body, such as a file upload or process stdin (32 MiB). |
-| `limits.max_archive_bytes` | `SBX_MAX_ARCHIVE_BYTES` | `268435456` | Largest archive upload, checked on the request body and again after gunzip (256 MiB). The server holds the archive in memory while it extracts it. |
+| `limits.max_archive_bytes` | `SBX_MAX_ARCHIVE_BYTES` | `268435456` | Largest archive upload, checked on the request body and again after gunzip (256 MiB). With `sbx-agent` the archive streams into the sandbox; without it the server holds the whole tar in memory. |
 | `limits.reaper_interval_seconds` | | `5` | How often the reaper runs. |
 | `limits.retain_stopped_seconds` | | `86400` | How long stopped sandbox rows are kept. |
 | `limits.creating_timeout_seconds` | | `900` | A sandbox stuck in `creating` longer than this is reaped. |
@@ -128,6 +129,7 @@ List values in environment variables are comma-separated.
 |---|---|---|---|
 | `builds.allow_sandbox_keys` | `SBX_BUILDS_ALLOW_SANDBOX_KEYS` | `false` | Let sandbox keys run [build steps](/docs/templates/#builds-and-permissions). |
 | `builds.timeout_seconds` | `SBX_BUILD_TIMEOUT_SECONDS` | `1200` | Longest a single image build may take. |
+| `builds.retain_unused_seconds` | `SBX_BUILD_RETAIN_UNUSED_SECONDS` | `604800` | How long a built image no template or live sandbox needs is kept after its last use. `0` keeps images forever; otherwise at least 3600. See [cleanup](/docs/templates/#cleanup). |
 
 ## Flags
 

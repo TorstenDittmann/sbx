@@ -76,6 +76,15 @@ The package is ESM, ships its TypeScript declarations, and runs on Node 20+ and 
 
 Releases are published from GitHub Actions with npm trusted publishing (OIDC), so there is no long-lived npm token. Each version published from CI carries a provenance attestation that links it to the workflow run and commit that built it. You can check it with `npm audit signatures`. See the [SDK reference](/docs/sdk/).
 
+## Python SDK
+
+```bash
+pip install sbx-sdk
+pip install "sbx-sdk[terminal]"   # adds websockets, for terminals
+```
+
+The import name is `sbx`. The client has no runtime dependencies, ships type hints, and runs on Python 3.9+. See the [Python SDK reference](/docs/python-sdk/).
+
 ## Check the host
 
 ```bash

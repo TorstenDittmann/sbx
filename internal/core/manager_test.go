@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -217,7 +218,7 @@ func TestFilesTemplatesDeleteAndReaper(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Name != "note.txt" {
 		t.Fatalf("%+v %v", entries, err)
 	}
-	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", []byte("not-a-real-tar")); err != nil {
+	if err := mgr.WriteArchive(ctx, actor, sb.ID, "/workspace", strings.NewReader("not-a-real-tar")); err != nil {
 		t.Fatal(err)
 	}
 	archive, err := mgr.ReadArchive(ctx, actor, sb.ID, "/workspace")

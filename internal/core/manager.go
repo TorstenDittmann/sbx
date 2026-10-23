@@ -3,6 +3,7 @@
 package core
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -92,6 +93,7 @@ type Counters struct {
 	FileOps    atomic.Int64
 	Reaped     atomic.Int64
 	Builds     atomic.Int64
+	ImagesGCed atomic.Int64
 }
 
 // Manager is safe for concurrent use.
@@ -680,39 +682,41 @@ func (m *Manager) RemoveFile(ctx context.Context, actor Actor, sandboxID, p stri
 	return nil
 }
 
-// WriteArchive extracts a tar or gzip-compressed tar into dest.
-func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest string, body []byte) error {
-	limit := m.cfg.Limits.MaxArchiveBytes
-	if len(body) > limit {
-		return tooLarge("archive is larger than the " + FormatBytes(limit) + " limit (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
-	}
+// WriteArchive extracts a tar or gzip-compressed tar into dest. With a
+// native archiver the body streams through to the sandbox, so the server
+// never holds the whole archive; max_archive_bytes caps both the body and the
+// tar after gunzip.
+func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest string, body io.Reader) error {
 	sb, d, dest, err := m.fileReady(ctx, actor, sandboxID, dest)
 	if err != nil {
 		return err
 	}
-	gz := len(body) >= 2 && body[0] == 0x1f && body[1] == 0x8b
-	raw := body
-	if gz {
-		r, err := gzip.NewReader(bytes.NewReader(body))
+	limit := m.cfg.Limits.MaxArchiveBytes
+	in := &capReader{r: body, left: int64(limit)}
+	br := bufio.NewReader(in)
+	magic, _ := br.Peek(2)
+	var tarStream io.Reader = br
+	var unzipped *capReader
+	if len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		zr, err := gzip.NewReader(br)
 		if err != nil {
-			return invalid("invalid gzip archive")
+			return archiveErr(limit, in, nil, invalid("invalid gzip archive"))
 		}
-		defer r.Close()
-		raw, err = io.ReadAll(io.LimitReader(r, int64(limit)+1))
-		if err != nil {
-			return invalid("invalid gzip archive")
-		}
-		if len(raw) > limit {
-			return tooLarge("archive is larger than the " + FormatBytes(limit) + " limit after gunzip (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
-		}
+		defer zr.Close()
+		unzipped = &capReader{r: zr, left: int64(limit)}
+		tarStream = unzipped
 	}
 	if arc, ok := d.(driver.Archiver); ok && arc.NativeArchive() {
-		if err := arc.ExtractArchive(ctx, sb.ContainerID, dest, bytes.NewReader(raw), int64(limit)); err != nil {
-			return m.asDriver(err)
+		if err := arc.ExtractArchive(ctx, sb.ContainerID, dest, tarStream, int64(limit)); err != nil {
+			return archiveErr(limit, in, unzipped, m.asDriver(err))
 		}
 		m.touch(ctx, sb)
 		m.Counts.FileOps.Add(1)
 		return nil
+	}
+	raw, err := io.ReadAll(tarStream)
+	if err != nil {
+		return archiveErr(limit, in, unzipped, invalid("could not read archive"))
 	}
 	// A fixed name let two concurrent uploads to one sandbox overwrite each
 	// other's archive before tar read it.
@@ -734,6 +738,57 @@ func (m *Manager) WriteArchive(ctx context.Context, actor Actor, sandboxID, dest
 	m.touch(ctx, sb)
 	m.Counts.FileOps.Add(1)
 	return nil
+}
+
+// archiveErr names the real cause of a failed archive upload. A streamed
+// archive surfaces a limit or gzip error as whatever the reader's consumer
+// made of it, so the readers record what they saw. fallback is used when
+// neither did.
+func archiveErr(max int, body, unzipped *capReader, fallback error) error {
+	limit := FormatBytes(max)
+	switch {
+	case body.over:
+		return tooLarge("archive is larger than the " + limit + " limit (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
+	case body.err != nil:
+		return invalid("could not read archive")
+	case unzipped != nil && unzipped.over:
+		return tooLarge("archive is larger than the " + limit + " limit after gunzip (limits.max_archive_bytes, SBX_MAX_ARCHIVE_BYTES)")
+	case unzipped != nil && unzipped.err != nil:
+		return invalid("invalid gzip archive")
+	}
+	return fallback
+}
+
+var errArchiveTooLarge = errors.New("archive is over max_archive_bytes")
+
+// capReader fails once more than its budget has been read, and records
+// whether that happened or the underlying reader failed.
+type capReader struct {
+	r    io.Reader
+	left int64
+	over bool
+	err  error
+}
+
+func (c *capReader) Read(p []byte) (int, error) {
+	if c.over {
+		return 0, errArchiveTooLarge
+	}
+	if int64(len(p)) > c.left+1 {
+		p = p[:c.left+1]
+	}
+	n, err := c.r.Read(p)
+	if int64(n) > c.left {
+		c.over = true
+		n = int(c.left)
+		c.left = 0
+		return n, errArchiveTooLarge
+	}
+	c.left -= int64(n)
+	if err != nil && !errors.Is(err, io.EOF) {
+		c.err = err
+	}
+	return n, err
 }
 
 // ReadArchive returns a gzip-compressed tar of dir.
@@ -925,6 +980,7 @@ func (m *Manager) RunReaper(ctx context.Context) {
 	interval := time.Duration(m.cfg.Limits.ReaperIntervalSeconds) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	var lastGC time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -935,6 +991,12 @@ func (m *Manager) RunReaper(ctx context.Context) {
 				m.log.Error("sweep failed", "err", err)
 			}
 			m.Replenish(ctx)
+			if now := m.now(); now.Sub(lastGC) >= imageGCInterval {
+				lastGC = now
+				if _, err := m.CollectImages(ctx); err != nil {
+					m.log.Error("image collection failed", "err", err)
+				}
+			}
 		}
 	}
 }
