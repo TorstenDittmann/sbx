@@ -278,6 +278,13 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err != nil {
 		return store.Sandbox{}, err
 	}
+	// A pooled sandbox skips the pull that checks the caller's access to a
+	// private image, so check it here, before the pool lock.
+	if access.force && tpl.Warm > 0 {
+		if err := m.verifyImage(ctx, backend, image, access); err != nil {
+			return store.Sandbox{}, err
+		}
+	}
 	env := map[string]string{}
 	for k, v := range tpl.Env {
 		env[k] = v

@@ -181,3 +181,33 @@ func TestNormalizeRegistries(t *testing.T) {
 		}
 	}
 }
+
+func TestWarmClaimChecksCallerCredential(t *testing.T) {
+	st := openStore(t)
+	fd := fake.New("docker")
+	fd.Registry = privateRegistry
+	cfg := config.Default()
+	cfg.Registries = []config.Registry{{Server: "ghcr.io", Username: "bot", Password: "s3cret"}}
+	mgr := New(cfg, st, map[string]driver.Driver{"docker": fd}, discard())
+	ctx := context.Background()
+	// A key's own credential marks the repository private.
+	if err := st.MarkPrivateImage(ctx, "ghcr.io/acme/app", "", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	admin := registryKey(t, st)
+	if _, err := mgr.CreateTemplate(ctx, admin, TemplateInput{Name: "app", Image: "ghcr.io/acme/app:1", Warm: 1}); err != nil {
+		t.Fatal(err)
+	}
+	wrong := registryKey(t, st, store.RegistryCred{Server: "ghcr.io", Username: "other", Password: "nope"})
+	if _, err := mgr.Create(ctx, wrong, CreateInput{Template: "app"}); err == nil {
+		t.Fatal("claimed a pooled sandbox without registry access")
+	}
+	// A key on the server credential still gets the pooled sandbox.
+	sb, err := mgr.Create(ctx, admin, CreateInput{Template: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb.Image != "ghcr.io/acme/app:1" {
+		t.Fatal(sb.Image)
+	}
+}
