@@ -6,7 +6,7 @@ The dashboard is a few static files embedded in the binary. It has no server-sid
 
 ## Signing in
 
-Paste an API key. By default the browser keeps it for the tab (`sessionStorage`) and forgets it when the tab closes. Tick **Remember on this device** to keep it in `localStorage` instead. **Sign out** removes it.
+Paste an API key. The dashboard keeps it in memory only, so reloading or closing the tab signs you out. It is never written to `localStorage`, `sessionStorage`, or a cookie: the same origin also serves sandbox previews under `/p/`, and a preview's scripts could read browser storage. **Sign out** drops it.
 
 An admin key sees every sandbox and the **API keys** page. A sandbox key sees only its own sandboxes, and the keys page is hidden.
 
@@ -30,6 +30,7 @@ With an admin key, create a key with a name, a scope, and an optional expiry. Th
 
 - Pages are served with a strict Content Security Policy: scripts only from the server itself, no framing, and network calls only to the same origin.
 - API calls send the key in the `Authorization` header. The terminal WebSocket cannot set headers, so it passes the key as `access_token`. Request logs record only the path, never the query.
+- The key is never stored in the browser (see above).
 - The dashboard adds no new API routes and no new permissions.
 
 ## Turning it off

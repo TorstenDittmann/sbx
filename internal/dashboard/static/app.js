@@ -3,35 +3,8 @@
 (() => {
 	"use strict";
 
-	const STORE_KEY = "sbx.dashboard.key";
 	const app = document.getElementById("app");
 	const state = { key: "", admin: false, cleanup: [] };
-
-	// ---- storage -----------------------------------------------------------
-
-	function loadKey() {
-		for (const s of [sessionStorage, localStorage]) {
-			try {
-				const v = s.getItem(STORE_KEY);
-				if (v) return v;
-			} catch {}
-		}
-		return "";
-	}
-
-	function saveKey(key, remember) {
-		try {
-			(remember ? localStorage : sessionStorage).setItem(STORE_KEY, key);
-		} catch {}
-	}
-
-	function forgetKey() {
-		for (const s of [sessionStorage, localStorage]) {
-			try {
-				s.removeItem(STORE_KEY);
-			} catch {}
-		}
-	}
 
 	// ---- helpers -----------------------------------------------------------
 
@@ -133,8 +106,8 @@
 			const btn = ev && ev.currentTarget;
 			if (btn) btn.disabled = true;
 			try {
-				await fn();
-				if (ok) toast(ok);
+				// A handler returns false when the user cancelled.
+				if ((await fn()) !== false && ok) toast(ok);
 			} catch (e) {
 				toast(e.message, true);
 			} finally {
@@ -145,7 +118,10 @@
 
 	// ---- session -----------------------------------------------------------
 
-	async function signIn(key, remember) {
+	// The key lives only in memory. This origin also proxies sandbox previews
+	// (/p/...), and a preview's scripts could read localStorage or
+	// sessionStorage, so a reload asks for the key again.
+	async function signIn(key) {
 		await api("GET", "/v1/sandboxes?status=running", undefined, key);
 		let admin = false;
 		try {
@@ -156,12 +132,10 @@
 		}
 		state.key = key;
 		state.admin = admin;
-		saveKey(key, remember);
 		chrome();
 	}
 
 	function signOut(msg) {
-		forgetKey();
 		state.key = "";
 		state.admin = false;
 		chrome();
@@ -200,7 +174,6 @@
 
 	function login() {
 		const input = h("input", { type: "password", placeholder: "sbx_…", autocomplete: "off", spellcheck: "false", required: true });
-		const remember = h("input", { type: "checkbox" });
 		const err = h("div", { class: "err" });
 		const btn = h("button", { class: "primary", type: "submit" }, "Sign in");
 		const form = h(
@@ -210,9 +183,10 @@
 				err.textContent = "";
 				btn.disabled = true;
 				try {
-					await signIn(input.value.trim(), remember.checked);
-					location.hash = "#/sandboxes";
-					route();
+					await signIn(input.value.trim());
+					// Keep a deep link the visitor reloaded on.
+					if (/^#?\/?(login)?$/.test(location.hash)) location.hash = "#/sandboxes";
+					else route();
 				} catch (e) {
 					err.textContent = e.status === 401 ? "That key was not accepted." : e.message;
 				} finally {
@@ -220,9 +194,8 @@
 				}
 			} },
 			h("h1", {}, "Sign in to sbx"),
-			h("p", { class: "muted small" }, "Paste an API key. Admin keys can also manage keys. The key stays in this browser and is sent only to this server."),
+			h("p", { class: "muted small" }, "Paste an API key. Admin keys can also manage keys. The key is kept in memory for this tab only, so reloading signs you out."),
 			h("label", {}, "API key", input),
-			h("label", { class: "inline" }, remember, "Remember on this device"),
 			err,
 			btn,
 		);
@@ -274,7 +247,7 @@
 					{ class: "actions", onclick: (ev) => ev.stopPropagation() },
 					live && h("button", { class: "sm", onclick: open }, "Open"),
 					live && h("button", { class: "sm danger", onclick: act(async () => {
-						if (!confirm("Delete " + sb.id + "?")) return;
+						if (!confirm("Delete " + sb.id + "?")) return false;
 						await api("DELETE", "/v1/sandboxes/" + encodeURIComponent(sb.id));
 						await load();
 					}, "Deleted") }, "Delete"),
@@ -308,7 +281,7 @@
 	function createForm(after) {
 		const template = h("select", {}, h("option", { value: "" }, "server default"));
 		const image = h("input", { placeholder: "or an image, e.g. alpine:3.20" });
-		const ttl = h("input", { type: "number", min: 1, value: 30, style: "width:90px" });
+		const ttl = h("input", { type: "number", min: 1, step: "any", value: 30, placeholder: "default", style: "width:90px" });
 		const network = h("select", {}, h("option", { value: "" }, "default"), h("option", { value: "none" }, "none"), h("option", { value: "full" }, "full"));
 		api("GET", "/v1/templates")
 			.then((d) => template.append(...d.templates.map((t) => h("option", { value: t.name }, t.name))))
@@ -319,7 +292,17 @@
 				ev.preventDefault();
 				const btn = form.querySelector("button[type=submit]");
 				btn.disabled = true;
-				const body = { ttl_seconds: Math.max(1, Math.round(Number(ttl.value) * 60)) };
+				const body = {};
+				// An empty TTL leaves it to the server default.
+				if (ttl.value.trim()) {
+					const min = Number(ttl.value);
+					if (!(min > 0)) {
+						toast("TTL must be a positive number of minutes", true);
+						btn.disabled = false;
+						return;
+					}
+					body.ttl_seconds = Math.max(1, Math.round(min * 60));
+				}
 				if (template.value) body.template = template.value;
 				if (image.value.trim()) body.image = image.value.trim();
 				if (network.value) body.network = { mode: network.value };
@@ -366,12 +349,13 @@
 				sb.status === "paused" && h("button", { onclick: act(async () => { sb = await api("POST", base + "/resume"); header(); }, "Resumed") }, "Resume"),
 				live && h("button", { onclick: act(async () => {
 					const min = prompt("New TTL in minutes, from now:", "30");
-					if (!min) return;
-					sb = await api("POST", base + "/timeout", { ttl_seconds: Math.round(Number(min) * 60) });
+					if (!min) return false;
+					if (!(Number(min) > 0)) throw new Error("TTL must be a positive number of minutes");
+					sb = await api("POST", base + "/timeout", { ttl_seconds: Math.max(1, Math.round(Number(min) * 60)) });
 					header();
 				}, "TTL updated") }, "Set TTL"),
 				live && h("button", { class: "danger", onclick: act(async () => {
-					if (!confirm("Delete " + sb.id + "?")) return;
+					if (!confirm("Delete " + sb.id + "?")) return false;
 					await api("DELETE", base);
 					location.hash = "#/sandboxes";
 				}, "Deleted") }, "Delete"),
@@ -704,7 +688,7 @@
 					"td",
 					{ class: "actions" },
 					st !== "revoked" && h("button", { class: "sm danger", onclick: act(async () => {
-						if (!confirm("Revoke " + k.name + "? Clients using it stop working at once.")) return;
+						if (!confirm("Revoke " + k.name + "? Clients using it stop working at once.")) return false;
 						await api("DELETE", "/v1/keys/" + encodeURIComponent(k.id));
 						if (mine) return signOut("You revoked the key this browser used.");
 						await load();
@@ -777,21 +761,5 @@
 		.then((d) => (document.getElementById("version").textContent = d.version || ""))
 		.catch(() => {});
 
-	(async () => {
-		const saved = loadKey();
-		if (saved) {
-			try {
-				await signIn(saved, (() => {
-					try {
-						return !!localStorage.getItem(STORE_KEY);
-					} catch {
-						return false;
-					}
-				})());
-			} catch {
-				forgetKey();
-			}
-		}
-		route();
-	})();
+	route();
 })();
