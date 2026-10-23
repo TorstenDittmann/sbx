@@ -17,6 +17,9 @@ import (
 	"github.com/TorstenDittmann/sbx/internal/driver"
 )
 
+// stepImageRE matches the image id the classic builder prints after a step.
+var stepImageRE = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
+
 // buildLogTail is how much build output an error message keeps.
 const buildLogTail = 4096
 
@@ -83,14 +86,16 @@ func (c *Client) ImageBuild(ctx context.Context, tag string, dockerfile []byte) 
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	return c.ImageBuildContext(ctx, tag, &ctxTar)
+	_, err := c.ImageBuildContext(ctx, tag, &ctxTar)
+	return err
 }
 
 // ImageBuildContext sends body as the build context and tags the result.
-// body is a tar stream with a Dockerfile at its root.
-func (c *Client) ImageBuildContext(ctx context.Context, tag string, body io.Reader) error {
+// body is a tar stream with a Dockerfile at its root. It returns the image
+// each step produced, in order; the last one is the tagged result.
+func (c *Client) ImageBuildContext(ctx context.Context, tag string, body io.Reader) ([]string, error) {
 	if err := c.ensure(); err != nil {
-		return err
+		return nil, err
 	}
 	q := url.Values{}
 	q.Set("t", tag)
@@ -99,24 +104,27 @@ func (c *Client) ImageBuildContext(ctx context.Context, tag string, body io.Read
 	q.Set("labels", `{"sbx.build":"1"}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+c.path("/build")+"?"+q.Encode(), body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-tar")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := io.ReadAll(resp.Body)
-		return statusErr(resp.StatusCode, raw)
+		return nil, statusErr(resp.StatusCode, raw)
 	}
-	return readBuildStream(resp.Body)
+	var steps []string
+	err = readBuildStream(resp.Body, func(id string) { steps = append(steps, id) })
+	return steps, err
 }
 
 // readBuildStream drains the daemon's JSON progress lines. The first error
 // line fails the build, with the output of the failing step for context.
-func readBuildStream(r io.Reader) error {
+// step, when set, gets the image id each step committed.
+func readBuildStream(r io.Reader, step func(id string)) error {
 	dec := json.NewDecoder(r)
 	var tail []byte
 	for {
@@ -134,6 +142,9 @@ func readBuildStream(r io.Reader) error {
 			// Builder chatter. A new step starts a fresh tail.
 			if strings.HasPrefix(msg.Stream, " ---> Running in ") {
 				tail = tail[:0]
+			}
+			if id := strings.TrimSpace(strings.TrimPrefix(msg.Stream, " ---> ")); step != nil && stepImageRE.MatchString(id) {
+				step(id)
 			}
 			continue
 		}

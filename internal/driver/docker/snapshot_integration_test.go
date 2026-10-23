@@ -22,6 +22,14 @@ func TestIntegrationSnapshot(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	dangling := func() int {
+		out, err := exec.Command("docker", "image", "ls", "-aq", "--filter", "dangling=true", "--no-trunc").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(strings.Fields(string(out)))
+	}
+	before := dangling()
 	tag := "sbx-template:" + id.Snapshot()
 	tag2 := "sbx-template:" + id.Snapshot()
 	t.Cleanup(func() { _ = exec.Command("docker", "rmi", "-f", tag, tag2).Run() })
@@ -40,6 +48,9 @@ func TestIntegrationSnapshot(t *testing.T) {
 	}
 	if err := d.Snapshot(ctx, h.ID, driver.SnapshotSpec{Tag: tag, Base: "alpine:3.20", Workspace: true}); err != nil {
 		t.Fatal(err)
+	}
+	if n := dangling(); n != before {
+		t.Fatalf("snapshot left %d dangling images", n-before)
 	}
 	out, err := exec.Command("docker", "image", "inspect", "-f", "{{json .Config.Env}} {{json .Config.Labels}}", tag).CombinedOutput()
 	if err != nil {
@@ -69,6 +80,9 @@ func TestIntegrationSnapshot(t *testing.T) {
 	}
 	if err := d.Snapshot(ctx, fork.ID, driver.SnapshotSpec{Tag: tag2, Base: tag, Workspace: true}); err != nil {
 		t.Fatal(err)
+	}
+	if n := dangling(); n != before {
+		t.Fatalf("second snapshot left %d dangling images", n-before)
 	}
 	again, err := d.Create(ctx, driver.SandboxSpec{
 		ID: id.Sandbox(), Image: tag2, CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64, Network: driver.NetNone,

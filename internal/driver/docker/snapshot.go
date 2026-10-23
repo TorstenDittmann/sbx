@@ -74,6 +74,17 @@ func (d *Driver) Snapshot(ctx context.Context, id string, spec driver.SnapshotSp
 	if err != nil {
 		return snapshotErr(err)
 	}
+	// The tag is built on top of the untagged commit, and the classic
+	// builder leaves an untagged image per step. Removing them afterwards
+	// leaves their layers to the tag alone, so collecting the tag frees
+	// them. A daemon that refuses because the tag still needs one prunes
+	// it together with the tag instead.
+	drop := []string{imageID}
+	defer func() {
+		for _, ref := range drop {
+			_ = d.client.ImageRemove(context.WithoutCancel(ctx), ref)
+		}
+	}()
 	var df strings.Builder
 	fmt.Fprintf(&df, "FROM %s\n", imageID)
 	if inherited {
@@ -82,17 +93,19 @@ func (d *Driver) Snapshot(ctx context.Context, id string, spec driver.SnapshotSp
 			fmt.Fprintf(&df, "USER %s\n", base.User)
 		}
 	}
-	if !spec.Workspace {
-		return snapshotErr(d.client.ImageBuild(ctx, spec.Tag, []byte(df.String())))
+	if spec.Workspace {
+		fmt.Fprintf(&df, "COPY --chown=%d:%d workspace/ %s/\n", d.opt.UID, d.opt.GID, seed)
 	}
-	fmt.Fprintf(&df, "COPY --chown=%d:%d workspace/ %s/\n", d.opt.UID, d.opt.GID, seed)
 	dockerfile := df.String()
 	pr, pw := io.Pipe()
 	go func() {
-		pw.CloseWithError(d.writeSnapshotContext(ctx, id, []byte(dockerfile), pw))
+		pw.CloseWithError(d.writeSnapshotContext(ctx, id, []byte(dockerfile), spec.Workspace, pw))
 	}()
-	err = d.client.ImageBuildContext(ctx, spec.Tag, pr)
+	steps, err := d.client.ImageBuildContext(ctx, spec.Tag, pr)
 	_ = pr.CloseWithError(errors.New("build finished"))
+	if len(steps) > 0 {
+		drop = append(drop, steps[:len(steps)-1]...)
+	}
 	return snapshotErr(err)
 }
 
@@ -142,9 +155,9 @@ func snapshotConfig(base ImageMeta, ctn ContainerState, seed string) commitConfi
 	}
 }
 
-// writeSnapshotContext writes a build context to w: the Dockerfile, then
-// the container's /workspace under workspace/.
-func (d *Driver) writeSnapshotContext(ctx context.Context, id string, dockerfile []byte, w io.Writer) error {
+// writeSnapshotContext writes a build context to w: the Dockerfile, then,
+// with workspace, the container's /workspace under workspace/.
+func (d *Driver) writeSnapshotContext(ctx context.Context, id string, dockerfile []byte, workspace bool, w io.Writer) error {
 	tw := tar.NewWriter(w)
 	epoch := time.Unix(0, 0)
 	if err := tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(dockerfile)), ModTime: epoch}); err != nil {
@@ -152,6 +165,9 @@ func (d *Driver) writeSnapshotContext(ctx context.Context, id string, dockerfile
 	}
 	if _, err := tw.Write(dockerfile); err != nil {
 		return err
+	}
+	if !workspace {
+		return tw.Close()
 	}
 	if err := tw.WriteHeader(&tar.Header{Name: "workspace/", Typeflag: tar.TypeDir, Mode: 0o755, ModTime: epoch}); err != nil {
 		return err
