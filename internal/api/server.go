@@ -78,6 +78,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/volumes/{id}", s.auth("sandbox", s.getVolume))
 	mux.HandleFunc("DELETE /v1/volumes/{id}", s.auth("sandbox", s.deleteVolume))
 
+	mux.HandleFunc("GET /v1/events", s.auth("sandbox", s.streamEvents))
+
 	mux.HandleFunc("POST /v1/sandboxes", s.auth("sandbox", s.createSandbox))
 	mux.HandleFunc("GET /v1/sandboxes", s.auth("sandbox", s.listSandboxes))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("sandbox", s.getSandbox))

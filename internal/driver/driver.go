@@ -158,12 +158,40 @@ type Handle struct {
 	RuntimeName string
 }
 
-// Status is a point-in-time view of one sandbox.
+// Status is a point-in-time view of one sandbox. OOMKilled and ExitCode are
+// only meaningful once State is StateStopped, and only Inspect fills them.
 type Status struct {
 	ID        string
 	SandboxID string
 	State     State
 	Image     string
+	OOMKilled bool
+	ExitCode  int
+}
+
+// EventKind is a runtime event a backend reports on its own.
+type EventKind string
+
+const (
+	// EventOOM means the kernel OOM-killed a process in the sandbox. The
+	// sandbox itself may still be running.
+	EventOOM EventKind = "oom"
+	// EventDie means the sandbox's main process exited.
+	EventDie EventKind = "die"
+)
+
+// Event is one runtime event. ID is the backend handle (container ID).
+type Event struct {
+	Kind      EventKind
+	ID        string
+	SandboxID string
+	ExitCode  int
+}
+
+// EventSource is implemented by backends that push runtime events. Watch
+// blocks until ctx ends or the stream breaks; the caller reconnects.
+type EventSource interface {
+	WatchEvents(ctx context.Context, emit func(Event)) error
 }
 
 // ExecRequest runs a process inside a sandbox. Cmd is an argv, not a shell line.

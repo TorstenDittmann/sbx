@@ -311,6 +311,54 @@ paths:
         - $ref: "#/components/parameters/VolumeID"
       responses:
         "204": {description: Deleted}
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Stream sandbox lifecycle events
+      description: |
+        Server-Sent Events, so clients do not poll. Each event is
+        `id: <n>`, `event: <type>`, and `data:` holding an `Event` object.
+        Types are `sandbox.created`, `sandbox.failed`, `sandbox.deleted`,
+        `sandbox.expired` (reason `ttl` or `idle`), `sandbox.paused`,
+        `sandbox.resumed`, `sandbox.oom` (a process was OOM-killed; the
+        sandbox usually keeps running), and `sandbox.lost` (the sandbox
+        stopped without sbx stopping it; reason `exited` or `missing`).
+
+        Events are stored, and ids only grow, across restarts too. Send the
+        last id as `Last-Event-ID` or `after` to resume without gaps; `after=0`
+        replays everything still kept (`retain_stopped_seconds`). Without a
+        cursor the stream starts with the next event. The stream opens with a
+        bare `id:` line holding its starting cursor and sends a `: ping`
+        comment every 15 seconds. A sandbox key sees its own sandboxes; an
+        admin key sees every sandbox. At most 16 streams per key.
+      parameters:
+        - in: query
+          name: after
+          schema: {type: integer, minimum: 0}
+          description: Last event id already seen. Overrides Last-Event-ID.
+        - in: header
+          name: Last-Event-ID
+          schema: {type: integer, minimum: 0}
+        - in: query
+          name: sandbox
+          schema: {type: string}
+          description: Only events for this sandbox.
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/Event"}
+        "400":
+          description: Invalid cursor
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429":
+          description: Too many event streams for this key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/sandboxes:
     get:
       operationId: listSandboxes
@@ -933,6 +981,34 @@ components:
       schema: {type: string}
       description: Absolute path inside the sandbox.
   schemas:
+    Event:
+      type: object
+      required: [id, type, sandbox_id, time, data]
+      properties:
+        id: {type: integer}
+        type:
+          type: string
+          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]
+        sandbox_id: {type: string}
+        time: {type: string, format: date-time}
+        data:
+          type: object
+          description: |
+            `status` is the sandbox status after the event; `backend`,
+            `template`, and `labels` are copied from the sandbox. `reason` is
+            set on expired, failed, and lost events. A lost sandbox whose
+            container exited also has `exit_code` and `oom_killed` (Docker's
+            flag: some process in it was OOM-killed at some point).
+          properties:
+            status: {type: string}
+            backend: {type: string}
+            template: {type: string}
+            labels: {type: object, additionalProperties: {type: string}}
+            reason: {type: string}
+            warm: {type: boolean}
+            exit_code: {type: integer}
+            oom_killed: {type: boolean}
+          additionalProperties: true
     Error:
       type: object
       required: [error]

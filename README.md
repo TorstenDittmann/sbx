@@ -108,7 +108,8 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - File list, upload, download, delete, and tar archives.
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes. A key can carry `expires_at`, and `DELETE /v1/keys/{id}` (or `sbx keys revoke --id`) revokes it at once. The API refuses to revoke the last admin key.
 - `secrets` on create, and `PUT /v1/sandboxes/{id}/secrets`. Names come back as `secret_keys`. Values are not returned by get or list. They are injected into the sandbox and into later commands. A secret name cannot also be set in `env`.
-- A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
+- `GET /v1/events`: sandbox lifecycle events (`created`, `expired`, `deleted`, `oom`, `lost`, and more) as server-sent events, so clients do not poll. Events are stored and resume from `Last-Event-ID`, across restarts too. The TypeScript SDK has `client.events()`.
+- A reaper for TTL, idle timeout, stuck creates, orphan containers, and containers that exited or vanished behind sbx's back. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
 - A web dashboard at `/ui/` (see [Dashboard](#dashboard)).
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
 - A node-wide sandbox cap (`max_sandboxes`, default 100) on top of the per-key quota, a per-key request rate limit, and a request body size limit.

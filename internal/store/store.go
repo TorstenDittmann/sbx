@@ -331,6 +331,16 @@ CREATE TABLE IF NOT EXISTS built_images (
     last_used_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    sandbox_id TEXT NOT NULL,
+    owner_key_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    data_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_status ON sandboxes(status);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_expires ON sandboxes(expires_at);

@@ -44,6 +44,7 @@ type Driver struct {
 	BuildErr error
 	builds   []driver.BuildSpec
 	images   map[string]time.Time
+	events   chan driver.Event
 }
 
 type proc struct {
@@ -66,6 +67,8 @@ type box struct {
 	spec  driver.SandboxSpec
 	state driver.State
 	image string
+	oom   bool
+	exit  int
 }
 
 // New returns a docker-like fake that supports pause.
@@ -92,6 +95,41 @@ func New(name string) *Driver {
 		watchers: map[string][]*watch{},
 		volumes:  map[string]struct{}{},
 		images:   map[string]time.Time{},
+		events:   make(chan driver.Event, 16),
+	}
+}
+
+// Crash stops a container the way a dying main process would. oom marks it
+// OOM-killed.
+func (d *Driver) Crash(id string, oom bool, exitCode int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if b, ok := d.boxes[id]; ok {
+		b.state = driver.StateStopped
+		b.oom = oom
+		b.exit = exitCode
+	}
+}
+
+// Vanish removes a container behind the manager's back.
+func (d *Driver) Vanish(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.boxes, id)
+}
+
+// Push queues a runtime event for WatchEvents.
+func (d *Driver) Push(ev driver.Event) { d.events <- ev }
+
+// WatchEvents delivers pushed events until ctx ends.
+func (d *Driver) WatchEvents(ctx context.Context, emit func(driver.Event)) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev := <-d.events:
+			emit(ev)
+		}
 	}
 }
 
@@ -285,7 +323,7 @@ func (d *Driver) List(context.Context) ([]driver.Status, error) {
 }
 
 func (d *Driver) status(id string, b *box) driver.Status {
-	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image}
+	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image, OOMKilled: b.oom, ExitCode: b.exit}
 }
 
 func (d *Driver) Pause(_ context.Context, id string) error {
