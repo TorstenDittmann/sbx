@@ -21,7 +21,7 @@ func TestWarmPoolClaimAndSetup(t *testing.T) {
 	actor := coreActor(t, st)
 
 	fd.ExecCode = 7
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{
 		Name: "bad", Image: "alpine:3.20", Warm: 1, Setup: []string{"echo", "no"},
 	}); err == nil {
 		t.Fatal("expected setup failure")
@@ -31,7 +31,7 @@ func TestWarmPoolClaimAndSetup(t *testing.T) {
 	}
 	fd.ExecCode = 0
 
-	tpl, err := mgr.CreateTemplate(ctx, TemplateInput{
+	tpl, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{
 		Name: "agent", Image: "alpine:3.20", Description: "ready",
 		CPU: 0.5, MemoryMB: 128, DiskMB: 64, Network: "full",
 		Setup: []string{"echo", "ready"}, Warm: 1, Env: map[string]string{"FOO": "bar"},
@@ -79,10 +79,10 @@ func TestWarmPoolClaimAndSetup(t *testing.T) {
 		t.Fatal(fd.Execs())
 	}
 
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "agent", Image: "alpine:3.20"}); err == nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "agent", Image: "alpine:3.20"}); err == nil {
 		t.Fatal("expected duplicate")
 	}
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "too-many", Image: "alpine:3.20", Warm: 9}); err == nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "too-many", Image: "alpine:3.20", Warm: 9}); err == nil {
 		t.Fatal("expected warm cap")
 	}
 	if err := mgr.DeleteTemplate(ctx, "agent"); err != nil {

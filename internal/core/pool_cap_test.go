@@ -18,7 +18,7 @@ func TestNodeCapCountsWarmPool(t *testing.T) {
 	mgr := New(cfg, st, map[string]driver.Driver{"docker": fake.New("docker")}, discard())
 	ctx := context.Background()
 	actor := coreActor(t, st)
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "pool", Image: "alpine:3.20", Warm: 2}); err != nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "pool", Image: "alpine:3.20", Warm: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20"}); !isStatus(err, 429) {
@@ -36,7 +36,7 @@ func TestConcurrentReplenishDoesNotOverfill(t *testing.T) {
 	st := openStore(t)
 	mgr := New(config.Default(), st, map[string]driver.Driver{"docker": fake.New("docker")}, discard())
 	ctx := context.Background()
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "pool", Image: "alpine:3.20", Warm: 2}); err != nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "pool", Image: "alpine:3.20", Warm: 2}); err != nil {
 		t.Fatal(err)
 	}
 	mgr.drainPool(ctx, "pool")

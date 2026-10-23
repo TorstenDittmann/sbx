@@ -274,7 +274,8 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err := m.checkResources(cpu, mem, disk, pids, ttl, idle); err != nil {
 		return store.Sandbox{}, err
 	}
-	if image, _, err = m.buildImage(ctx, backend, image, joinSteps(tpl.Steps, in.Steps)); err != nil {
+	image, access, _, err := m.buildImage(ctx, actor, backend, image, joinSteps(tpl.Steps, in.Steps))
+	if err != nil {
 		return store.Sandbox{}, err
 	}
 	env := map[string]string{}
@@ -345,7 +346,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	handle, err := d.Create(ctx, driver.SandboxSpec{
 		ID: sb.ID, Image: image, CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids,
 		Env: mergeEnv(env, in.Secrets), Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
-		Mounts: driverMounts(mounts),
+		Mounts: driverMounts(mounts), Registry: access.auth, ForcePull: access.force,
 	})
 	if err != nil {
 		sb.Status = "error"
@@ -824,7 +825,7 @@ func (m *Manager) ReadArchive(ctx context.Context, actor Actor, sandboxID, dir s
 }
 
 // CreateTemplate stores a user template.
-func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.Template, error) {
+func (m *Manager) CreateTemplate(ctx context.Context, actor Actor, in TemplateInput) (store.Template, error) {
 	if err := validTemplateName(in.Name); err != nil {
 		return store.Template{}, err
 	}
@@ -876,7 +877,7 @@ func (m *Manager) CreateTemplate(ctx context.Context, in TemplateInput) (store.T
 		backend = m.cfg.Backend
 	}
 	// Build now so a broken step fails the template, not the first create.
-	if _, _, err := m.buildImage(ctx, backend, in.Image, in.Steps); err != nil {
+	if _, _, _, err := m.buildImage(ctx, actor, backend, in.Image, in.Steps); err != nil {
 		return store.Template{}, err
 	}
 	t := store.Template{

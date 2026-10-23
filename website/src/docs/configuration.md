@@ -129,6 +129,32 @@ List values in environment variables are comma-separated.
 | `builds.allow_sandbox_keys` | `SBX_BUILDS_ALLOW_SANDBOX_KEYS` | `false` | Let sandbox keys run [build steps](/docs/templates/#builds-and-permissions). |
 | `builds.timeout_seconds` | `SBX_BUILD_TIMEOUT_SECONDS` | `1200` | Longest a single image build may take. |
 
+## Registries
+
+`registries` lists credentials for private image registries. sbx sends them when it pulls a sandbox image or a template base, for every key. A key can carry [its own credentials](/docs/api-keys/#private-registries), which take precedence for the same server.
+
+```yaml
+registries:
+  - server: ghcr.io
+    username: deploy-bot
+    password_env: GHCR_TOKEN
+  - server: docker.io
+    username: acme
+    password_file: /run/secrets/dockerhub
+  - server: registry.example.com:5000
+    identity_token: ...
+```
+
+| Field | Meaning |
+|---|---|
+| `server` | Registry host. `https://` and a path are dropped, and `index.docker.io` is `docker.io`, the registry for unqualified names such as `acme/app`. |
+| `username`, `password` | Basic credentials. |
+| `password_env` | Read the password from this environment variable. Startup fails when it is unset. |
+| `password_file` | Read the password from this file, without its trailing newline. |
+| `identity_token` | An OAuth refresh token, in place of username and password. |
+
+There is no environment variable form; the list only comes from the file.
+
 ## Flags
 
 `sbx serve` accepts these flags, which override the file and the environment:

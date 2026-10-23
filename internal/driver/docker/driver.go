@@ -208,10 +208,18 @@ func (d *Driver) Check(ctx context.Context) error {
 }
 
 func (d *Driver) EnsureImage(ctx context.Context, ref string) error {
-	if _, err := d.client.ImageInspect(ctx, ref); err == nil {
-		return nil
+	return d.ensureImage(ctx, ref, nil, false)
+}
+
+// ensureImage pulls ref with auth when the daemon lacks it, or always when
+// force is set.
+func (d *Driver) ensureImage(ctx context.Context, ref string, auth *driver.RegistryAuth, force bool) error {
+	if !force {
+		if _, err := d.client.ImageInspect(ctx, ref); err == nil {
+			return nil
+		}
 	}
-	if err := d.client.ImagePull(ctx, ref); err != nil {
+	if err := d.client.ImagePull(ctx, ref, auth); err != nil {
 		return fmt.Errorf("%w: %s", driver.ErrImage, err.Error())
 	}
 	if _, err := d.client.ImageInspect(ctx, ref); err != nil {
@@ -249,7 +257,7 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	if err := d.prepareMounts(ctx, spec.Mounts); err != nil {
 		return driver.Handle{}, err
 	}
-	if err := d.EnsureImage(ctx, spec.Image); err != nil {
+	if err := d.ensureImage(ctx, spec.Image, spec.Registry, spec.ForcePull); err != nil {
 		return driver.Handle{}, err
 	}
 	meta, err := d.client.ImageInspect(ctx, spec.Image)

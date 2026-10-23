@@ -318,3 +318,31 @@ test("client lists, gets, and revokes keys", async () => {
     server.close()
   }
 })
+
+test("client sends key registry credentials", async () => {
+  const bodies: Record<string, unknown>[] = []
+  const server = createServer(async (req, res) => {
+    let raw = ""
+    for await (const chunk of req) raw += chunk
+    bodies.push(JSON.parse(raw))
+    const key = { id: "key_1", name: "ci", prefix: "sbx_ab", scopes: ["sandbox"], registries: [{ server: "ghcr.io", username: "bot" }] }
+    res.writeHead(req.method === "POST" ? 201 : 200, { "content-type": "application/json" })
+    res.end(JSON.stringify(req.method === "POST" ? { ...key, key: "sbx_new" } : { ...key, registries: [] }))
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as { port: number }
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "sbx_test" })
+    const created = await client.createKey("ci", { registries: [{ server: "ghcr.io", username: "bot", password: "p" }, { server: "quay.io", identityToken: "t" }] })
+    assert.deepEqual(created.registries, [{ server: "ghcr.io", username: "bot" }])
+    const cleared = await client.setKeyRegistries("key_1", [])
+    assert.deepEqual(cleared.registries, [])
+    assert.deepEqual(bodies, [
+      { name: "ci", registries: [{ server: "ghcr.io", username: "bot", password: "p" }, { server: "quay.io", identity_token: "t" }] },
+      { registries: [] },
+    ])
+  } finally {
+    server.close()
+  }
+})

@@ -155,7 +155,7 @@ func TestTemplateStepsBuildAtCreateAndExtend(t *testing.T) {
 	user := coreActor(t, st)
 
 	fd.BuildErr = errors.New("exit 127")
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "broken", Image: "node:22", Steps: []store.BuildStep{{Run: "nope"}}}); err == nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "broken", Image: "node:22", Steps: []store.BuildStep{{Run: "nope"}}}); err == nil {
 		t.Fatal("expected build failure")
 	}
 	if _, err := st.GetTemplate(ctx, "broken"); err != store.ErrNotFound {
@@ -163,7 +163,7 @@ func TestTemplateStepsBuildAtCreateAndExtend(t *testing.T) {
 	}
 	fd.BuildErr = nil
 
-	tpl, err := mgr.CreateTemplate(ctx, TemplateInput{
+	tpl, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{
 		Name: "app", Image: "node:22", Warm: 1,
 		Steps: []store.BuildStep{{Workdir: "/app"}, {Run: "npm install"}},
 	})

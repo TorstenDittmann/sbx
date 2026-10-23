@@ -215,10 +215,24 @@ export type KeyInfo = {
   prefix: string
   scopes: string[]
   network: KeyNetworkPolicy
+  /** Registries the key has credentials for. Secrets are never returned. */
+  registries: { server: string; username?: string }[]
   createdAt?: string
   lastUsedAt?: string
   expiresAt?: string
   revokedAt?: string
+}
+
+/**
+ * A private image registry credential. Set `username` and `password`, or
+ * `identityToken`. `server` is a host such as `ghcr.io`; `docker.io` covers
+ * unqualified image names.
+ */
+export type RegistryCredential = {
+  server: string
+  username?: string
+  password?: string
+  identityToken?: string
 }
 
 /** A new API key. `key` is the secret and is only returned once. */
@@ -563,7 +577,7 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
   }
 
-  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string } = {}): Promise<CreatedKey> {
+  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string; registries?: RegistryCredential[] } = {}): Promise<CreatedKey> {
     const body: Record<string, unknown> = { name }
     if (options.scopes) body.scopes = options.scopes
     if (options.network) {
@@ -572,6 +586,7 @@ export class SbxClient {
       body.network = network
     }
     if (options.expiresAt) body.expires_at = options.expiresAt instanceof Date ? options.expiresAt.toISOString() : options.expiresAt
+    if (options.registries) body.registries = options.registries.map(registryBody)
     return this.requestJSON<KeyJSON & { key: string }>("POST", "/v1/keys", body).then((raw) => ({ ...mapKey(raw), key: raw.key }))
   }
 
@@ -581,6 +596,11 @@ export class SbxClient {
 
   getKey(id: string): Promise<KeyInfo> {
     return this.requestJSON<KeyJSON>("GET", `/v1/keys/${encodeURIComponent(id)}`).then(mapKey)
+  }
+
+  /** Replace a key's private registry credentials. An empty list removes them. */
+  setKeyRegistries(id: string, registries: RegistryCredential[]): Promise<KeyInfo> {
+    return this.requestJSON<KeyJSON>("PUT", `/v1/keys/${encodeURIComponent(id)}/registries`, { registries: registries.map(registryBody) }).then(mapKey)
   }
 
   /** Revoke a key. It stops authenticating immediately. */
@@ -884,6 +904,15 @@ type KeyJSON = {
     egress_kbps?: number
     max_connections?: number
   }
+  registries?: { server: string; username?: string }[]
+}
+
+function registryBody(r: RegistryCredential): Record<string, string> {
+  const body: Record<string, string> = { server: r.server }
+  if (r.username) body.username = r.username
+  if (r.password) body.password = r.password
+  if (r.identityToken) body.identity_token = r.identityToken
+  return body
 }
 
 function mapKey(raw: KeyJSON): KeyInfo {
@@ -905,6 +934,7 @@ function mapKey(raw: KeyJSON): KeyInfo {
       egressKbps: network.egress_kbps,
       maxConnections: network.max_connections,
     },
+    registries: raw.registries ?? [],
   }
 }
 

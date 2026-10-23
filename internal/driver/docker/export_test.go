@@ -12,7 +12,7 @@ func TestExportFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := cli.ExportFilesystem(context.Background(), "alpine:3.20")
+	body, err := cli.ExportFilesystem(context.Background(), "alpine:3.20", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

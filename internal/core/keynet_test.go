@@ -68,7 +68,7 @@ func TestWarmClaimRespectsKeyNetwork(t *testing.T) {
 	st := openStore(t)
 	mgr := New(cfg, st, map[string]driver.Driver{"docker": fake.New("docker")}, discard())
 	ctx := context.Background()
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "net", Image: "alpine:3.20", Network: "full", Warm: 1}); err != nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "net", Image: "alpine:3.20", Network: "full", Warm: 1}); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := st.ListPool(ctx, "net")

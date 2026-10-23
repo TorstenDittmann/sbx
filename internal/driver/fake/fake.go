@@ -42,6 +42,16 @@ type Driver struct {
 	BuildErr error
 	builds   []driver.BuildSpec
 	images   map[string]struct{}
+	// Registry, when set, stands in for the registry on every pull: a forced
+	// pull, a build's base, and PullImage. A nil return lets the pull through.
+	Registry func(ref string, auth *driver.RegistryAuth) error
+	pulls    []PullCall
+}
+
+// PullCall is one pull that reached the fake registry.
+type PullCall struct {
+	Ref  string
+	Auth *driver.RegistryAuth
 }
 
 type proc struct {
@@ -133,7 +143,7 @@ func (d *Driver) EnsureImage(context.Context, string) error { return nil }
 
 var _ driver.Builder = (*Driver)(nil)
 
-// HasImage reports whether BuildImage produced ref.
+// HasImage reports whether BuildImage produced ref or a pull fetched it.
 func (d *Driver) HasImage(_ context.Context, ref string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -149,8 +159,36 @@ func (d *Driver) BuildImage(_ context.Context, spec driver.BuildSpec) error {
 	if d.BuildErr != nil {
 		return d.BuildErr
 	}
+	if err := d.pullLocked(spec.Base, spec.Registry); err != nil {
+		return err
+	}
 	d.images[spec.Tag] = struct{}{}
 	return nil
+}
+
+// PullImage asks the fake registry for ref.
+func (d *Driver) PullImage(_ context.Context, ref string, auth *driver.RegistryAuth) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.pullLocked(ref, auth)
+}
+
+func (d *Driver) pullLocked(ref string, auth *driver.RegistryAuth) error {
+	d.pulls = append(d.pulls, PullCall{Ref: ref, Auth: auth})
+	if d.Registry != nil {
+		if err := d.Registry(ref, auth); err != nil {
+			return fmt.Errorf("%w: %s", driver.ErrImage, err.Error())
+		}
+	}
+	d.images[ref] = struct{}{}
+	return nil
+}
+
+// Pulls returns every pull that reached the fake registry.
+func (d *Driver) Pulls() []PullCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]PullCall(nil), d.pulls...)
 }
 
 // Builds returns every BuildImage call so far.
@@ -165,6 +203,11 @@ func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Hand
 	defer d.mu.Unlock()
 	if d.CreateErr != nil {
 		return driver.Handle{}, d.CreateErr
+	}
+	if spec.ForcePull || spec.Registry != nil {
+		if err := d.pullLocked(spec.Image, spec.Registry); err != nil {
+			return driver.Handle{}, err
+		}
 	}
 	d.boxes[spec.ID] = &box{spec: spec, state: driver.StateRunning, image: spec.Image}
 	if d.files[spec.ID] == nil {

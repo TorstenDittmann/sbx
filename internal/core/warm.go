@@ -84,7 +84,7 @@ func (m *Manager) createWarm(ctx context.Context, tpl store.Template, backend st
 	if err := m.checkResources(cpu, mem, disk, pids, ttl, 0); err != nil {
 		return err
 	}
-	image, _, err := m.buildImage(ctx, backend, tpl.Image, tpl.Steps)
+	image, access, _, err := m.buildImage(ctx, Actor{}, backend, tpl.Image, tpl.Steps)
 	if err != nil {
 		return err
 	}
@@ -102,6 +102,7 @@ func (m *Manager) createWarm(ctx context.Context, tpl store.Template, backend st
 	handle, err := d.Create(ctx, driver.SandboxSpec{
 		ID: sb.ID, Image: sb.Image, CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids,
 		Env: sb.Env, Network: network, Policy: policy, Labels: sb.Labels, Workdir: "/workspace",
+		Registry: access.auth, ForcePull: access.force,
 	})
 	if err != nil {
 		_ = m.failWarm(ctx, sb, err.Error())

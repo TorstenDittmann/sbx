@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -275,8 +276,8 @@ func escapeRef(ref string) string {
 }
 
 // ImagePull pulls ref if the daemon does not already have it. The caller
-// decides whether to inspect first.
-func (c *Client) ImagePull(ctx context.Context, ref string) error {
+// decides whether to inspect first. auth may be nil for an anonymous pull.
+func (c *Client) ImagePull(ctx context.Context, ref string, auth *driver.RegistryAuth) error {
 	if err := c.ensure(); err != nil {
 		return err
 	}
@@ -289,6 +290,13 @@ func (c *Client) ImagePull(ctx context.Context, ref string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+c.path("/images/create")+"?"+q.Encode(), nil)
 	if err != nil {
 		return err
+	}
+	if auth != nil {
+		header, err := registryAuthHeader(*auth)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-Registry-Auth", header)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -317,6 +325,24 @@ func (c *Client) ImagePull(ctx context.Context, ref string) error {
 			return fmt.Errorf("pull %s: %s", ref, msg.Error)
 		}
 	}
+}
+
+// registryAuthHeader encodes auth the way the daemon reads X-Registry-Auth.
+func registryAuthHeader(auth driver.RegistryAuth) (string, error) {
+	server := auth.Server
+	if server == driver.DockerHub {
+		server = "https://index.docker.io/v1/"
+	}
+	raw, err := json.Marshal(struct {
+		Username      string `json:"username,omitempty"`
+		Password      string `json:"password,omitempty"`
+		IdentityToken string `json:"identitytoken,omitempty"`
+		ServerAddress string `json:"serveraddress"`
+	}{auth.Username, auth.Password, auth.IdentityToken, server})
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(raw), nil
 }
 
 func (c *Client) ContainerCreate(ctx context.Context, name string, body createRequest) (string, error) {

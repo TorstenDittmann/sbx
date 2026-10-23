@@ -230,7 +230,10 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 		return driver.Handle{}, err
 	}
 	disk := filepath.Join(dir, "rootfs.ext4")
-	if err := d.buildRoot(ctx, RootSpec{Image: spec.Image, Agent: d.opt.AgentBin, Dest: disk, DiskMB: spec.DiskMB, Guest: rawGuest}); err != nil {
+	if err := d.buildRoot(ctx, RootSpec{
+		Image: spec.Image, Agent: d.opt.AgentBin, Dest: disk, DiskMB: spec.DiskMB, Guest: rawGuest,
+		Registry: spec.Registry, ForcePull: spec.ForcePull,
+	}); err != nil {
 		_ = os.RemoveAll(dir)
 		return driver.Handle{}, err
 	}

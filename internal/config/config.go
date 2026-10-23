@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/TorstenDittmann/sbx/internal/driver"
 )
 
 // Config is the resolved server configuration.
@@ -25,6 +27,18 @@ type Config struct {
 	Auth        AuthConfig
 	Network     NetworkConfig
 	Builds      BuildConfig
+	// Registries are image registry credentials used for every key. A key's
+	// own credential for the same server takes precedence.
+	Registries []Registry
+}
+
+// Registry is a credential for one image registry. Set Username and
+// Password, or IdentityToken.
+type Registry struct {
+	Server        string
+	Username      string
+	Password      string
+	IdentityToken string
 }
 
 // DockerConfig controls the engine socket and sandbox hardening.
@@ -210,6 +224,37 @@ type fileConfig struct {
 	Auth        *fileAuth        `yaml:"auth"`
 	Network     *fileNetwork     `yaml:"network"`
 	Builds      *fileBuilds      `yaml:"builds"`
+	Registries  []fileRegistry   `yaml:"registries"`
+}
+
+// fileRegistry can read the secret from the environment or a file, so it
+// does not have to sit in sbx.yaml.
+type fileRegistry struct {
+	Server        string `yaml:"server"`
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	PasswordEnv   string `yaml:"password_env"`
+	PasswordFile  string `yaml:"password_file"`
+	IdentityToken string `yaml:"identity_token"`
+}
+
+func (r fileRegistry) resolve() (Registry, error) {
+	out := Registry{Server: driver.NormalizeRegistry(r.Server), Username: r.Username, Password: r.Password, IdentityToken: r.IdentityToken}
+	switch {
+	case r.PasswordEnv != "":
+		v, ok := os.LookupEnv(r.PasswordEnv)
+		if !ok {
+			return Registry{}, fmt.Errorf("registries: %s: %s is not set", r.Server, r.PasswordEnv)
+		}
+		out.Password = v
+	case r.PasswordFile != "":
+		raw, err := os.ReadFile(r.PasswordFile)
+		if err != nil {
+			return Registry{}, fmt.Errorf("registries: %s: %w", r.Server, err)
+		}
+		out.Password = strings.TrimRight(string(raw), "\r\n")
+	}
+	return out, nil
 }
 
 type fileBuilds struct {
@@ -300,6 +345,13 @@ func Load(path string) (Config, error) {
 			return Config{}, fmt.Errorf("parse config: %w", err)
 		}
 		file.apply(&cfg)
+		for _, r := range file.Registries {
+			reg, err := r.resolve()
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.Registries = append(cfg.Registries, reg)
+		}
 	}
 	applyEnv(&cfg)
 	if err := cfg.Validate(); err != nil {
@@ -531,7 +583,30 @@ func (c Config) Validate() error {
 	if err := validateRules("egress_deny", c.Network.EgressDeny, false); err != nil {
 		return err
 	}
+	seen := map[string]bool{}
+	for _, r := range c.Registries {
+		if r.Server == "" {
+			return fmt.Errorf("registries: server is required")
+		}
+		if seen[r.Server] {
+			return fmt.Errorf("registries: %s is listed twice", r.Server)
+		}
+		seen[r.Server] = true
+		if r.IdentityToken == "" && (r.Username == "" || r.Password == "") {
+			return fmt.Errorf("registries: %s needs username and password, or identity_token", r.Server)
+		}
+	}
 	return nil
+}
+
+// Registry returns the server-wide credential for host, if one is configured.
+func (c Config) Registry(host string) (Registry, bool) {
+	for _, r := range c.Registries {
+		if r.Server == host {
+			return r, true
+		}
+	}
+	return Registry{}, false
 }
 
 func validateRules(name string, items []string, cidrOnly bool) error {

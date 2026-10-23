@@ -61,6 +61,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/keys", s.auth("admin", s.listKeys))
 	mux.HandleFunc("GET /v1/keys/{id}", s.auth("admin", s.getKey))
 	mux.HandleFunc("DELETE /v1/keys/{id}", s.auth("admin", s.revokeKey))
+	mux.HandleFunc("PUT /v1/keys/{id}/registries", s.auth("admin", s.setKeyRegistries))
 
 	mux.HandleFunc("GET /v1/backends", s.auth("sandbox", s.listBackends))
 	mux.HandleFunc("GET /v1/templates", s.auth("sandbox", s.listTemplates))
@@ -275,9 +276,15 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 			EgressKbps int       `json:"egress_kbps"`
 			MaxConns   int       `json:"max_connections"`
 		} `json:"network"`
+		Registries []registryBody `json:"registries"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
+		return
+	}
+	registries, err := core.NormalizeRegistries(registryCreds(body.Registries))
+	if err != nil {
+		writeManager(w, err)
 		return
 	}
 	if body.Name == "" || len(body.Name) > 64 {
@@ -335,7 +342,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	plain, hash, prefix := id.Key()
 	key := store.APIKey{
 		ID: id.RecordID(), Name: body.Name, Hash: hash, Prefix: prefix,
-		Scopes: body.Scopes, Network: network, CreatedAt: now, ExpiresAt: expires,
+		Scopes: body.Scopes, Network: network, Registries: registries, CreatedAt: now, ExpiresAt: expires,
 	}
 	if err := s.mgr.Store().CreateKey(r.Context(), key); err != nil {
 		s.log.Error("create key", "err", err)
@@ -361,6 +368,16 @@ func keyJSON(key store.APIKey, secret string) map[string]any {
 			"max_connections": key.Network.MaxConns,
 		},
 	}
+	// Registry secrets are write-only.
+	regs := make([]map[string]any, 0, len(key.Registries))
+	for _, reg := range key.Registries {
+		entry := map[string]any{"server": reg.Server}
+		if reg.Username != "" {
+			entry["username"] = reg.Username
+		}
+		regs = append(regs, entry)
+	}
+	body["registries"] = regs
 	if secret != "" {
 		body["key"] = secret
 	}
@@ -374,6 +391,52 @@ func keyJSON(key store.APIKey, secret string) map[string]any {
 		body["revoked_at"] = key.RevokedAt
 	}
 	return body
+}
+
+type registryBody struct {
+	Server        string `json:"server"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	IdentityToken string `json:"identity_token"`
+}
+
+func registryCreds(in []registryBody) []store.RegistryCred {
+	out := make([]store.RegistryCred, 0, len(in))
+	for _, r := range in {
+		out = append(out, store.RegistryCred{Server: r.Server, Username: r.Username, Password: r.Password, IdentityToken: r.IdentityToken})
+	}
+	return out
+}
+
+// setKeyRegistries replaces a key's registry credentials. An empty list
+// removes them.
+func (s *Server) setKeyRegistries(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Registries []registryBody `json:"registries"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	registries, err := core.NormalizeRegistries(registryCreds(body.Registries))
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	st := s.mgr.Store()
+	if err := st.SetKeyRegistries(r.Context(), r.PathValue("id"), registries); errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not update key")
+		return
+	}
+	key, err := st.KeyByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not load key")
+		return
+	}
+	writeJSON(w, http.StatusOK, keyJSON(key, ""))
 }
 
 func (s *Server) getKey(w http.ResponseWriter, r *http.Request) {
@@ -496,7 +559,7 @@ func (s *Server) createTemplate(w http.ResponseWriter, r *http.Request) {
 		writeDecodeErr(w, err)
 		return
 	}
-	t, err := s.mgr.CreateTemplate(r.Context(), core.TemplateInput{
+	t, err := s.mgr.CreateTemplate(r.Context(), actor(r), core.TemplateInput{
 		Name: body.Name, Image: body.Image, Description: body.Description,
 		CPU: body.CPU, MemoryMB: body.MemoryMB, DiskMB: body.DiskMB, Env: body.Env,
 		Backend: body.Backend, Network: body.Network, Setup: body.Setup, SetupTimeout: body.SetupTimeout, Warm: body.Warm,

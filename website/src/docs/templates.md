@@ -129,6 +129,10 @@ Creating from a template whose image is already built needs no build permission.
 
 `sbx_image_builds_total` on `/metrics` counts builds that missed the cache.
 
+### Private images
+
+A template's `image`, a create's `image`, and a build's base can come from a private registry. sbx pulls them with the caller key's [registry credentials](/docs/api-keys/#private-registries), or else the server's [`registries`](/docs/configuration/#registries). The base is pulled before the build starts, so the builder never fetches it anonymously. A template on an image only some keys can pull works for those keys; others get an image error. Its warm pool needs a server credential.
+
 ## In the SDK
 
 `Sandbox.template()` is a builder for steps. Every method returns a new template, so one base can branch into variants:
