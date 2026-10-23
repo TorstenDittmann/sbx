@@ -96,6 +96,16 @@ func TestIntegrationLifecycle(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Name != "hello.txt" || entries[0].Type != driver.FileFile {
 		t.Fatalf("%+v %v", entries, err)
 	}
+	stats, err := d.Stats(ctx, h.ID, true)
+	if err != nil || stats.CPUSeconds <= 0 || stats.CPUPercent == nil || stats.MemoryBytes <= 0 || stats.PIDs < 1 {
+		t.Fatalf("stats %+v %v", stats, err)
+	}
+	if stats.DiskUsedBytes <= 0 || stats.DiskTotalBytes != 32<<20 {
+		t.Fatalf("disk stats %+v", stats)
+	}
+	if stats, err = d.Stats(ctx, h.ID, false); err != nil || stats.CPUSeconds <= 0 || stats.DiskUsedBytes != -1 {
+		t.Fatalf("cheap stats %+v %v", stats, err)
+	}
 	var streamed bytes.Buffer
 	res, err = d.ExecStream(ctx, h.ID, driver.ExecRequest{Cmd: []string{"echo", "streamed"}, TimeoutSeconds: 20}, func(chunk driver.ExecChunk) error {
 		if chunk.Kind == driver.StreamStdout {

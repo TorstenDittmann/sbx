@@ -278,3 +278,25 @@ type ImageCollector interface {
 	// ErrImageInUse.
 	RemoveImage(ctx context.Context, ref string) error
 }
+
+// Stats is a point-in-time resource sample for one sandbox. CPUPercent is
+// nil when the driver could not take two samples. DiskUsedBytes and
+// DiskTotalBytes describe /workspace and are -1 when unknown.
+type Stats struct {
+	CPUSeconds       float64
+	CPUPercent       *float64
+	MemoryBytes      int64
+	MemoryLimitBytes int64
+	DiskUsedBytes    int64
+	DiskTotalBytes   int64
+	NetRxBytes       int64
+	NetTxBytes       int64
+	PIDs             int64
+}
+
+// StatsReader is implemented by drivers that can report resource usage.
+// full asks for the slower fields: a sampled CPU percentage and disk usage.
+// A cheap sample (full=false) is what /metrics takes on every scrape.
+type StatsReader interface {
+	Stats(ctx context.Context, id string, full bool) (Stats, error)
+}

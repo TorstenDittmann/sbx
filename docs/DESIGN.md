@@ -90,6 +90,7 @@ DELETE /v1/sandboxes/{id}                 idempotent stop
 POST   /v1/sandboxes/{id}/timeout         {"ttl_seconds": 600}
 POST   /v1/sandboxes/{id}/pause
 POST   /v1/sandboxes/{id}/resume
+GET    /v1/sandboxes/{id}/stats           cpu, memory, /workspace disk, network, pids
 POST   /v1/sandboxes/{id}/exec            wait
 POST   /v1/sandboxes/{id}/exec?stream=1   SSE: stdout, stderr, exit, error
 POST   /v1/sandboxes/{id}/processes      background command; timeout 0 means none

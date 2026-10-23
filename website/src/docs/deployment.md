@@ -119,6 +119,8 @@ These proxies pass `Host` as is, so leave `network.trust_forwarded_host` off. Tu
 
 Metrics include `sbx_info`, `sbx_sandboxes` (by status), `sbx_sandbox_creates_total`, `sbx_sandbox_deletes_total`, `sbx_sandbox_reaped_total`, `sbx_execs_total`, `sbx_exec_errors_total`, `sbx_file_ops_total`, `sbx_image_builds_total`, and `sbx_image_gc_removed_total`.
 
+Each running or paused sandbox also gets series labeled `sandbox` and `backend`: `sbx_sandbox_cpu_seconds_total`, `sbx_sandbox_cpu_limit_cores`, `sbx_sandbox_memory_bytes`, `sbx_sandbox_memory_limit_bytes`, `sbx_sandbox_network_receive_bytes_total`, `sbx_sandbox_network_transmit_bytes_total`, and `sbx_sandbox_pids`. A scrape samples up to 8 sandboxes at a time with a 2 second limit each, and leaves out any sandbox that fails. Disk is not scraped because it needs an exec per sandbox. Use `GET /v1/sandboxes/{id}/stats` for it. Firecracker sandboxes have no per-sandbox series yet. For CPU use as a share of the limit, graph `rate(sbx_sandbox_cpu_seconds_total[1m]) / sbx_sandbox_cpu_limit_cores`.
+
 `/metrics` is unauthenticated. If the API is public, block it at the proxy or scrape it on a private address.
 
 ## Backups and upgrades

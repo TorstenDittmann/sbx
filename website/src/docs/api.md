@@ -140,6 +140,24 @@ See [Network](/docs/network/) for how these combine.
 | `PUT /v1/sandboxes/{id}/secrets` | `{"secrets": {"NAME": "value"}}` | Sandbox. Replaces the whole map. |
 | `POST /v1/sandboxes/{id}/pause` | | Paused Sandbox |
 | `POST /v1/sandboxes/{id}/resume` | | Running Sandbox |
+| `GET /v1/sandboxes/{id}/stats` | | Resource sample, see below |
+
+`GET /v1/sandboxes/{id}/stats` samples a running or paused sandbox:
+
+```json
+{
+  "sandbox_id": "sbx_...",
+  "status": "running",
+  "sampled_at": "2026-10-23T22:10:00Z",
+  "cpu": {"usage_seconds": 12.4, "percent": 37.5, "limit_cores": 1},
+  "memory": {"used_bytes": 41943040, "limit_bytes": 536870912},
+  "disk": {"used_bytes": 2097152, "total_bytes": 1073741824, "limit_bytes": 1073741824},
+  "network": {"rx_bytes": 10240, "tx_bytes": 2048},
+  "pids": {"current": 4, "limit": 256}
+}
+```
+
+`cpu.percent` is measured over about one second, so the call takes that long. 100 means one full core. `disk` covers `/workspace` and comes from `df` inside the sandbox. Its `used_bytes` and `total_bytes` are null when that fails, for example while the sandbox is paused. `/workspace` is a tmpfs unless a volume is mounted there, so its contents also count toward `memory.used_bytes`. Reading stats does not reset the idle timeout. Firecracker sandboxes return 400 `unsupported`.
 
 ## Exec
 
