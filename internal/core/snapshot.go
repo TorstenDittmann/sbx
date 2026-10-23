@@ -72,6 +72,10 @@ func (m *Manager) Snapshot(ctx context.Context, actor Actor, sandboxID string, i
 		return SnapshotResult{}, m.asDriver(err)
 	}
 	m.touch(ctx, sb)
+	mu := m.buildLock(tag)
+	mu.Lock()
+	m.touchImage(ctx, tag)
+	mu.Unlock()
 	res := SnapshotResult{
 		ID: snapID, Image: tag, SandboxID: sb.ID, Base: sb.Image, Workspace: workspace,
 		Duration: m.now().Sub(start),

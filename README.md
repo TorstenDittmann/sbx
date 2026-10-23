@@ -110,6 +110,7 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes. A key can carry `expires_at`, and `DELETE /v1/keys/{id}` (or `sbx keys revoke --id`) revokes it at once. The API refuses to revoke the last admin key.
 - `secrets` on create, and `PUT /v1/sandboxes/{id}/secrets`. Names come back as `secret_keys`. Values are not returned by get or list. They are injected into the sandbox and into later commands. A secret name cannot also be set in `env`.
 - A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
+- A web dashboard at `/ui/` (see [Dashboard](#dashboard)).
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
 - A node-wide sandbox cap (`max_sandboxes`, default 100) on top of the per-key quota, a per-key request rate limit, and a request body size limit.
 - Secure defaults: no network, all capabilities dropped, non-root, read-only rootfs, memory without swap, PID limit. `disk_mb` is the size of the writable `/workspace` tmpfs. Firecracker uses an ext4 rootfs of that size, with `sbx-agent` as init.
@@ -118,6 +119,10 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 `network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
 When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Firecracker always needs the agent: it is the guest init. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md). Kata setup is [docs/kata.md](docs/kata.md). Firecracker setup is [docs/firecracker.md](docs/firecracker.md).
+
+## Dashboard
+
+`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
 
 ## Deploying the website with Dokploy
 

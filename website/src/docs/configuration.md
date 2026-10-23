@@ -41,6 +41,7 @@ builds:
 | `data_dir` | `SBX_DATA_DIR` | `data` | Holds `sbx.db`, `initial_api_key`, and Firecracker files. |
 | `backend` | `SBX_BACKEND` | `docker` | Default backend: `docker`, `gvisor`, `kata`, or `firecracker`. |
 | `log_level` | `SBX_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`. |
+| `dashboard` | `SBX_DASHBOARD` | `true` | Serve the [web dashboard](/docs/dashboard) at `/ui/`. |
 | `auth.bootstrap_key` | `SBX_BOOTSTRAP_KEY` | empty | Admin key to create on first boot instead of generating one. |
 
 ## Docker
@@ -128,6 +129,7 @@ List values in environment variables are comma-separated.
 |---|---|---|---|
 | `builds.allow_sandbox_keys` | `SBX_BUILDS_ALLOW_SANDBOX_KEYS` | `false` | Let sandbox keys run [build steps](/docs/templates/#builds-and-permissions). |
 | `builds.timeout_seconds` | `SBX_BUILD_TIMEOUT_SECONDS` | `1200` | Longest a single image build may take. |
+| `builds.retain_unused_seconds` | `SBX_BUILD_RETAIN_UNUSED_SECONDS` | `604800` | How long a built image no template or live sandbox needs is kept after its last use. `0` keeps images forever; otherwise at least 3600. See [cleanup](/docs/templates/#cleanup). |
 
 ## Flags
 

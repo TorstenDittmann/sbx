@@ -134,6 +134,8 @@ func snapshotConfig(base ImageMeta, ctn ContainerState, seed string) commitConfi
 		}
 	}
 	labels[labelSnapshotWorkspace] = seed
+	// Image collection only looks at images with the build label.
+	labels["sbx.build"] = "1"
 	return commitConfig{
 		Env: append(env, blank...), Labels: labels, Entrypoint: base.Entrypoint, Cmd: base.Cmd,
 		User: base.User, WorkingDir: base.WorkingDir,

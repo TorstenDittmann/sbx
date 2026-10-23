@@ -123,6 +123,8 @@ func TestValidateEdges(t *testing.T) {
 		func(c *Config) { c.Limits.MaxOutputBytes = 1 },
 		func(c *Config) { c.Limits.ReaperIntervalSeconds = 0 },
 		func(c *Config) { c.LogLevel = "verbose" },
+		func(c *Config) { c.Builds.RetainUnusedSeconds = 60 },
+		func(c *Config) { c.Builds.RetainUnusedSeconds = -1 },
 	}
 	for i, mutate := range cases {
 		cfg := Default()

@@ -129,6 +129,10 @@ Creating from a template whose image is already built needs no build permission.
 
 `sbx_image_builds_total` on `/metrics` counts builds that missed the cache.
 
+### Cleanup
+
+Built images are garbage collected. Once an hour sbx removes `sbx-template` images that no template needs and no live sandbox uses, once nothing has created from or built them for `builds.retain_unused_seconds` (`SBX_BUILD_RETAIN_UNUSED_SECONDS`, default 604800, seven days). A template's own image is kept for as long as the template exists. Set it to `0` to keep every image forever. A removed image is rebuilt the next time something asks for it. `sbx_image_gc_removed_total` on `/metrics` counts removals.
+
 ## Snapshots
 
 A snapshot turns a running sandbox into an image, so an environment you prepared by hand (cloned a repo, installed dependencies, warmed a cache) can be forked into new sandboxes.
@@ -166,7 +170,7 @@ The sandbox must be running, not paused; it is paused for the moment of the comm
 
 The copy uses `docker exec` with `/bin/sh`, `tar`, and `cp` from the image, so unlike the rest of sbx, snapshots need an image with a shell and those tools. A snapshot of a sandbox that was itself started from a snapshot replaces the parent's copy, so files deleted from `/workspace` are no longer in the new image's filesystem (its lower layers still hold them, as with any Docker image).
 
-Deleting a template does not delete its image, same as for built images.
+Snapshot images are collected like built images (see [Cleanup](#cleanup)), except that one cannot be rebuilt once removed. A template saved from a snapshot keeps its image for as long as the template exists; a snapshot without a template is removed after `builds.retain_unused_seconds` with no create from it.
 
 ## In the SDK
 

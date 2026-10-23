@@ -32,7 +32,7 @@ func TestSnapshotConfigDropsSandboxState(t *testing.T) {
 	}
 	wantLabels := map[string]string{
 		"org.opencontainers.image.title": "node", labelManaged: "", labelID: "", "team": "",
-		labelSnapshotWorkspace: "/var/lib/sbx-snapshot/snap_1",
+		labelSnapshotWorkspace: "/var/lib/sbx-snapshot/snap_1", "sbx.build": "1",
 	}
 	if !reflect.DeepEqual(cfg.Labels, wantLabels) {
 		t.Fatalf("labels %v", cfg.Labels)
