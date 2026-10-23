@@ -100,6 +100,8 @@ sbx rm $id
 
 `sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
 
+A running sandbox can be committed to an image with `POST /v1/sandboxes/{id}/snapshot`, so a prepared environment can be forked. `/workspace` and root filesystem changes are kept, secrets are not, and `{"template": "name"}` also saves it as a template. Docker backend only; see [Snapshots](website/src/docs/templates.md#snapshots).
+
 ### Compose
 
 ```bash

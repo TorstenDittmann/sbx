@@ -35,9 +35,22 @@ func TestRenderDockerfileRejectsBadBase(t *testing.T) {
 	}
 }
 
+func TestReadBuildStreamStepImages(t *testing.T) {
+	stream := `{"stream":"Step 1/2 : FROM alpine"}` + "\n" + `{"stream":" ---\u003e 0123456789ab\n"}` + "\n" +
+		`{"stream":" ---\u003e Running in abc\n"}` + "\n" + `{"stream":" ---\u003e Using cache\n"}` + "\n" +
+		`{"stream":" ---\u003e ba9876543210\n"}` + "\n"
+	var ids []string
+	if err := readBuildStream(strings.NewReader(stream), func(id string) { ids = append(ids, id) }); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "0123456789ab,ba9876543210" {
+		t.Fatalf("%q", ids)
+	}
+}
+
 func TestReadBuildStream(t *testing.T) {
 	ok := `{"stream":"Step 1/2"}` + "\n" + `{"aux":{"ID":"sha256:x"}}` + "\n"
-	if err := readBuildStream(strings.NewReader(ok)); err != nil {
+	if err := readBuildStream(strings.NewReader(ok), nil); err != nil {
 		t.Fatal(err)
 	}
 	bad := `{"stream":"Step 3/4 : RUN [\"/bin/sh\"]\n"}` + "\n" +
@@ -45,7 +58,7 @@ func TestReadBuildStream(t *testing.T) {
 		`{"stream":" ---\u003e Running in abc\n"}` + "\n" +
 		`{"stream":"\u001b[91mapk: not found\n\u001b[0m"}` + "\n" +
 		`{"error":"The command '/bin/sh -c apk add jq' returned a non-zero code: 127"}` + "\n"
-	err := readBuildStream(strings.NewReader(bad))
+	err := readBuildStream(strings.NewReader(bad), nil)
 	if err == nil || err.Error() != "build step exited with code 127:\napk: not found" {
 		t.Fatalf("err = %q", err)
 	}

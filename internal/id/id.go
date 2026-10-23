@@ -45,6 +45,12 @@ func Volume() string {
 	return "vol_" + hex.EncodeToString(random(8))
 }
 
+// Snapshot is an id of the form snap_<16 hex chars>. It doubles as the
+// image tag, so it stays within Docker's tag alphabet.
+func Snapshot() string {
+	return "snap_" + hex.EncodeToString(random(8))
+}
+
 // Hash is the sha256 hex digest of an API key.
 func Hash(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))

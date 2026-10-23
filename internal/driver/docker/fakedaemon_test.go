@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"archive/tar"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -38,7 +39,22 @@ type fakeDaemon struct {
 	volumes    map[string]map[string]string
 	archives   map[string][]byte
 	onAttach   func(stdin io.Reader, stdout io.Writer)
+	// imageLabels are returned by image inspect.
+	imageLabels map[string]map[string]string
+	commits     []fakeCommit
+	builds      map[string][]string
+	execCmds    [][]string
+	workspace   []byte
+	// buildSteps are step image ids /build reports, and buildErr fails it.
+	buildSteps []string
+	buildErr   string
+	removed    []string
 	statsQuery string
+}
+
+type fakeCommit struct {
+	query url.Values
+	cfg   commitConfig
 }
 
 type fakeContainer struct {
@@ -56,6 +72,7 @@ func startFakeDaemon(t *testing.T) (*fakeDaemon, string) {
 		runtimes:   map[string]bool{"runc": true},
 		volumes:    map[string]map[string]string{},
 		archives:   map[string][]byte{},
+		builds:     map[string][]string{},
 	}
 	ln, err := net.Listen("unix", t.TempDir()+"/docker.sock")
 	if err != nil {
@@ -145,6 +162,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(p, "/v1.44/images/"):
 		ref := imageRefFromPath(p)
 		f.mu.Lock()
+		f.removed = append(f.removed, ref)
 		ok := f.images[ref]
 		used := false
 		for _, ctn := range f.containers {
@@ -171,7 +189,57 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + ref})
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"Config": map[string]any{"Env": []string{"PATH=/usr/bin:/bin"}}})
+		f.mu.Lock()
+		labels := f.imageLabels[ref]
+		f.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"Config": map[string]any{"Env": []string{"PATH=/usr/bin:/bin"}, "Labels": labels}})
+	case r.Method == http.MethodPost && p == "/v1.44/commit":
+		var cfg commitConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		q := r.URL.Query()
+		f.mu.Lock()
+		f.commits = append(f.commits, fakeCommit{query: q, cfg: cfg})
+		if q.Get("repo") != "" {
+			f.images[q.Get("repo")+":"+q.Get("tag")] = true
+		}
+		f.mu.Unlock()
+		writeJSON(w, http.StatusCreated, map[string]string{"Id": "sha256:commit"})
+	case r.Method == http.MethodPost && p == "/v1.44/build":
+		tr := tar.NewReader(r.Body)
+		var names []string
+		for {
+			hdr, err := tr.Next()
+			if err != nil {
+				break
+			}
+			body, _ := io.ReadAll(tr)
+			if hdr.Name == "Dockerfile" {
+				names = append(names, "Dockerfile:"+string(body))
+				continue
+			}
+			names = append(names, hdr.Name)
+		}
+		tag := r.URL.Query().Get("t")
+		f.mu.Lock()
+		f.builds[tag] = names
+		steps, fail := f.buildSteps, f.buildErr
+		if fail == "" {
+			f.images[tag] = true
+		}
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		for _, id := range steps {
+			_ = enc.Encode(map[string]string{"stream": " ---> " + id + "\n"})
+		}
+		if fail != "" {
+			_ = enc.Encode(map[string]string{"error": fail})
+			return
+		}
+		_ = enc.Encode(map[string]string{"stream": "Successfully built\n"})
 	case r.Method == http.MethodPost && p == "/v1.44/images/create":
 		f.mu.Lock()
 		fail, ghost := f.failPull, f.pullGhost
@@ -291,6 +359,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.execs[id] = containerID(p)
 		f.lastCmd = body.Cmd
+		f.execCmds = append(f.execCmds, body.Cmd)
 		f.mu.Unlock()
 		writeJSON(w, http.StatusCreated, map[string]string{"Id": id})
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/v1.44/exec/") && strings.HasSuffix(p, "/start"):
@@ -316,6 +385,13 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		stdout := "hello\n"
+		f.mu.Lock()
+		ws := f.workspace
+		f.mu.Unlock()
+		if strings.Contains(cmd, "tar -C /workspace") {
+			writeFrame(conn, 1, string(ws))
+			return
+		}
 		if strings.Contains(cmd, "stat -c") {
 			stdout = "regular file|5|1700000000|81a4|/workspace/a.txt\n" +
 				"directory|0|1700000000|41ed|/workspace/sub\n" +

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/driver"
@@ -104,6 +105,11 @@ func (m *Manager) referencedImages(ctx context.Context) (map[string]bool, error)
 		return nil, err
 	}
 	for _, tpl := range tpls {
+		// A template saved from a snapshot names its image directly, and
+		// a snapshot cannot be rebuilt.
+		if strings.HasPrefix(tpl.Image, buildImageRepo+":") {
+			keep[tpl.Image] = true
+		}
 		if scripts := renderSteps(tpl.Steps); len(scripts) > 0 {
 			keep[buildTag(tpl.Image, scripts)] = true
 		}

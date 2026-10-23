@@ -113,3 +113,36 @@ func has(t *testing.T, fd *fake.Driver, ref string) bool {
 	}
 	return ok
 }
+
+func TestCollectImagesKeepsSnapshotTemplates(t *testing.T) {
+	cfg := config.Default()
+	st := openStore(t)
+	fd := fake.New("docker")
+	mgr := New(cfg, st, map[string]driver.Driver{"docker": fd}, discard())
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mgr.SetClock(func() time.Time { return now })
+	ctx := context.Background()
+	admin := Actor{KeyID: coreActor(t, st).KeyID, Admin: true}
+	sb, err := mgr.Create(ctx, admin, CreateInput{Image: "alpine:3.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, err := mgr.Snapshot(ctx, admin, sb.ID, SnapshotInput{Template: "prepared"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loose, err := mgr.Snapshot(ctx, admin, sb.ID, SnapshotInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Delete(ctx, admin, sb.ID); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Duration(cfg.Builds.RetainUnusedSeconds+60) * time.Second)
+	if n, err := mgr.CollectImages(ctx); err != nil || n != 1 {
+		t.Fatalf("removed %d, err %v", n, err)
+	}
+	if !has(t, fd, named.Image) || has(t, fd, loose.Image) {
+		t.Fatal("the template's snapshot must stay and the loose one go")
+	}
+}

@@ -257,6 +257,43 @@ test("listBackends returns the ladder", async () => {
   await server.close()
 })
 
+test("snapshot posts options and maps the template", async () => {
+  let body = ""
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on("data", (chunk) => chunks.push(chunk))
+    req.on("end", () => {
+      if (req.method === "POST" && req.url === "/v1/sandboxes/sbx_test/snapshot") {
+        body = Buffer.concat(chunks).toString("utf8")
+        res.writeHead(201, { "content-type": "application/json" })
+        res.end(JSON.stringify({
+          id: "snap_0123456789abcdef", image: "sbx-template:snap_0123456789abcdef", sandbox_id: "sbx_test",
+          base: "alpine:3.20", workspace: true, duration_ms: 12,
+          template: {
+            name: "prepared", image: "sbx-template:snap_0123456789abcdef", cpu: 0.5, memory_mb: 64, disk_mb: 32,
+            env: {}, network: "none", warm: 0, builtin: false, created_at: "2026-10-18T19:55:00Z",
+          },
+        }))
+        return
+      }
+      res.writeHead(404)
+      res.end()
+    })
+  })
+  await listen(server)
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("no port")
+  const client = new SbxClient({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "sbx_testkey" })
+  const snap = await client.snapshot("sbx_test", { template: "prepared" })
+  assert.deepEqual(JSON.parse(body), { template: "prepared" })
+  assert.equal(snap.sandboxId, "sbx_test")
+  assert.equal(snap.workspace, true)
+  assert.equal(snap.durationMs, 12)
+  assert.equal(snap.template?.name, "prepared")
+  assert.equal(snap.template?.image, snap.image)
+  await server.close()
+})
+
 async function listen(server: Server): Promise<void> {
   server.listen(0, "127.0.0.1")
   await once(server, "listening")

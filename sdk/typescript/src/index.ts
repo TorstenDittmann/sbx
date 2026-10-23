@@ -34,6 +34,25 @@ export type BuildInfo = {
   durationMs: number
 }
 
+export type SnapshotInfo = {
+  // id is snap_<16 hex chars>, and image is sbx-template:<id>.
+  id: string
+  image: string
+  sandboxId: string
+  base: string
+  // workspace is false when a volume was mounted at /workspace.
+  workspace: boolean
+  template: TemplateInfo | null
+  durationMs: number
+}
+
+export type SnapshotOptions = {
+  // template also saves the image as a template with this name. It needs an
+  // admin key.
+  template?: string
+  description?: string
+}
+
 export type BuildOptions = {
   backend?: "docker" | "gvisor" | "kata" | "firecracker"
 }
@@ -414,6 +433,28 @@ function mapBuild(raw: BuildJSON): BuildInfo {
   }
 }
 
+type SnapshotJSON = {
+  id: string
+  image: string
+  sandbox_id: string
+  base: string
+  workspace: boolean
+  template: TemplateJSON | null
+  duration_ms: number
+}
+
+function mapSnapshot(raw: SnapshotJSON): SnapshotInfo {
+  return {
+    id: raw.id,
+    image: raw.image,
+    sandboxId: raw.sandbox_id,
+    base: raw.base,
+    workspace: raw.workspace,
+    template: raw.template ? mapTemplate(raw.template) : null,
+    durationMs: raw.duration_ms,
+  }
+}
+
 function mapTemplate(raw: TemplateJSON): TemplateInfo {
   return {
     name: raw.name,
@@ -685,6 +726,15 @@ export class SbxClient {
 
   resume(id: string): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/resume`).then(mapSandbox)
+  }
+
+  // snapshot commits a running sandbox to an image, /workspace included, so
+  // later creates can start from it.
+  snapshot(id: string, options: SnapshotOptions = {}): Promise<SnapshotInfo> {
+    const body: Record<string, unknown> = {}
+    if (options.template) body.template = options.template
+    if (options.description) body.description = options.description
+    return this.requestJSON<SnapshotJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/snapshot`, body).then(mapSnapshot)
   }
 
   exec(id: string, cmd: string | string[], options?: ExecOptions): Promise<ExecResult> {
@@ -1278,6 +1328,10 @@ export class Sandbox {
     const info = await this.#client.resume(this.id)
     this.apply(info)
     return info
+  }
+
+  snapshot(options?: SnapshotOptions): Promise<SnapshotInfo> {
+    return this.#client.snapshot(this.id, options)
   }
 
   startProcess(cmd: string | string[], options?: ExecOptions): Promise<ProcessInfo> {

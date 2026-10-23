@@ -89,6 +89,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/secrets", s.auth("sandbox", s.setSecrets))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
+	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.auth("sandbox", s.snapshotSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.auth("sandbox", s.sandboxStats))
 
@@ -618,6 +619,32 @@ func (s *Server) createBuild(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{
 		"id": res.ID, "image": res.Image, "base": res.Base, "steps": stepsJSON(res.Steps),
 		"cached": res.Cached, "duration_ms": res.Duration.Milliseconds(),
+	})
+}
+
+func (s *Server) snapshotSandbox(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Template    string `json:"template"`
+		Description string `json:"description"`
+	}
+	if err := decodeOptionalJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	res, err := s.mgr.Snapshot(r.Context(), actor(r), r.PathValue("id"), core.SnapshotInput{
+		Template: body.Template, Description: body.Description,
+	})
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	var tpl any
+	if res.Template != nil {
+		tpl = templateJSON(*res.Template)
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id": res.ID, "image": res.Image, "sandbox_id": res.SandboxID, "base": res.Base,
+		"workspace": res.Workspace, "template": tpl, "duration_ms": res.Duration.Milliseconds(),
 	})
 }
 
@@ -1174,6 +1201,15 @@ func decodeJSON(r *http.Request, max int64, dst any) error {
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, max))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	return nil
+}
+
+// decodeOptionalJSON is decodeJSON for endpoints where every field is
+// optional, so an empty body means the defaults.
+func decodeOptionalJSON(r *http.Request, max int64, dst any) error {
+	if err := decodeJSON(r, max, dst); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	return nil

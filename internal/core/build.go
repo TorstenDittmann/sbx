@@ -137,7 +137,14 @@ func (m *Manager) buildImage(ctx context.Context, actor Actor, backend, base str
 	if err != nil {
 		return "", imageAccess{}, false, err
 	}
-	if acc.force {
+	private := acc.force
+	if !private && driver.Repository(base) == driver.Repository(buildImageRepo) {
+		// A built or snapshot base on a private image passes that on.
+		if _, private, err = m.store.PrivateImage(ctx, base); err != nil {
+			return "", imageAccess{}, false, err
+		}
+	}
+	if private {
 		// Recorded first, so the tag cannot be named directly by a caller
 		// who could not pull the base.
 		if err := m.store.MarkPrivateImage(ctx, tag, base, m.now()); err != nil {

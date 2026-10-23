@@ -140,6 +140,7 @@ See [Network](/docs/network/) for how these combine.
 | `PUT /v1/sandboxes/{id}/secrets` | `{"secrets": {"NAME": "value"}}` | Sandbox. Replaces the whole map. |
 | `POST /v1/sandboxes/{id}/pause` | | Paused Sandbox |
 | `POST /v1/sandboxes/{id}/resume` | | Running Sandbox |
+| `POST /v1/sandboxes/{id}/snapshot` | `{"template": "name", "description": "..."}`, both optional | Snapshot: `id`, `image`, `sandbox_id`, `base`, `workspace`, `template` (or `null`), `duration_ms`. See [Snapshots](/docs/templates/#snapshots). |
 | `GET /v1/sandboxes/{id}/stats` | | Resource sample, see below |
 
 `GET /v1/sandboxes/{id}/stats` samples a running or paused sandbox:

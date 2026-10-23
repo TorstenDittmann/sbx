@@ -12,7 +12,8 @@ import (
 
 const maxKeyRegistries = 16
 
-var builtTagRE = regexp.MustCompile(`^` + buildImageRepo + `:[0-9a-f]{32}$`)
+// builtTagRE matches a build's content hash or a snapshot id.
+var builtTagRE = regexp.MustCompile(`^` + buildImageRepo + `:([0-9a-f]{32}|snap_[0-9a-f]{16})$`)
 
 // imageAccess is how a backend fetches one image: with which credential,
 // and whether it must ask the registry even when the daemon has a copy.

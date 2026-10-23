@@ -44,7 +44,12 @@ type Driver struct {
 	BuildErr error
 	builds   []driver.BuildSpec
 	images   map[string]time.Time
-	events   chan driver.Event
+	// SnapshotErr fails Snapshot when set.
+	SnapshotErr error
+	snapshots   []driver.SnapshotSpec
+	// seeds holds the /workspace files a snapshot image starts with.
+	seeds  map[string]map[string][]byte
+	events chan driver.Event
 	// Registry, when set, stands in for the registry on every pull: a forced
 	// pull, a build's base, and PullImage. A nil return lets the pull through.
 	Registry func(ref string, auth *driver.RegistryAuth) error
@@ -93,7 +98,7 @@ func New(name string) *Driver {
 	return &Driver{
 		name: name,
 		caps: driver.Caps{
-			Pause: true, NetPolicy: true, IsolationLevel: level,
+			Pause: true, Snapshot: name != "gvisor", NetPolicy: true, IsolationLevel: level,
 			Exec: true, Files: true, PTY: true, Watch: true, Preview: true,
 			Networks:     []driver.NetMode{driver.NetNone, driver.NetFull},
 			Requirements: []string{"docker"},
@@ -105,6 +110,7 @@ func New(name string) *Driver {
 		watchers: map[string][]*watch{},
 		volumes:  map[string]struct{}{},
 		images:   map[string]time.Time{},
+		seeds:    map[string]map[string][]byte{},
 		events:   make(chan driver.Event, 16),
 	}
 }
@@ -289,7 +295,44 @@ func (d *Driver) Create(_ context.Context, spec driver.SandboxSpec) (driver.Hand
 	if d.files[spec.ID] == nil {
 		d.files[spec.ID] = map[string][]byte{}
 	}
+	for p, content := range d.seeds[spec.Image] {
+		d.files[spec.ID][p] = append([]byte(nil), content...)
+	}
 	return driver.Handle{ID: spec.ID, RuntimeName: d.name}, nil
+}
+
+var _ driver.Snapshotter = (*Driver)(nil)
+
+// Snapshot records spec, marks its tag as present, and keeps the sandbox's
+// /workspace files for sandboxes created from the tag.
+func (d *Driver) Snapshot(_ context.Context, id string, spec driver.SnapshotSpec) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.snapshots = append(d.snapshots, spec)
+	if d.SnapshotErr != nil {
+		return d.SnapshotErr
+	}
+	if _, ok := d.boxes[id]; !ok {
+		return driver.ErrNotFound
+	}
+	seed := map[string][]byte{}
+	if spec.Workspace {
+		for p, content := range d.files[id] {
+			if strings.HasPrefix(p, "/workspace/") {
+				seed[p] = append([]byte(nil), content...)
+			}
+		}
+	}
+	d.seeds[spec.Tag] = seed
+	d.images[spec.Tag] = time.Now().UTC()
+	return nil
+}
+
+// Snapshots returns every Snapshot call so far.
+func (d *Driver) Snapshots() []driver.SnapshotSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]driver.SnapshotSpec(nil), d.snapshots...)
 }
 
 // CreateVolume records a named volume.

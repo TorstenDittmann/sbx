@@ -211,3 +211,51 @@ func TestWarmClaimChecksCallerCredential(t *testing.T) {
 		t.Fatal(sb.Image)
 	}
 }
+
+func TestSnapshotOfPrivateBaseStaysPrivate(t *testing.T) {
+	st := openStore(t)
+	fd := fake.New("docker")
+	fd.Registry = privateRegistry
+	mgr := New(config.Default(), st, map[string]driver.Driver{"docker": fd}, discard())
+	ctx := context.Background()
+	owner := registryKey(t, st, store.RegistryCred{Server: "ghcr.io", Username: "bot", Password: "s3cret"})
+	other := registryKey(t, st)
+
+	sb, err := mgr.Create(ctx, owner, CreateInput{Image: "ghcr.io/acme/app:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, err := mgr.Snapshot(ctx, owner, sb.ID, SnapshotInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, other, CreateInput{Image: snap.Image}); err == nil {
+		t.Fatal("forked a private snapshot without registry access")
+	}
+	if _, err := mgr.Create(ctx, owner, CreateInput{Image: snap.Image}); err != nil {
+		t.Fatal(err)
+	}
+	// So does an image built on top of it.
+	built, err := mgr.Build(ctx, owner, BuildInput{Image: snap.Image, Steps: []store.BuildStep{{Run: "true"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, other, CreateInput{Image: built.Image}); err == nil {
+		t.Fatal("used a build on a private snapshot without registry access")
+	}
+	if _, err := mgr.Create(ctx, owner, CreateInput{Image: built.Image}); err != nil {
+		t.Fatal(err)
+	}
+
+	pub, err := mgr.Create(ctx, owner, CreateInput{Image: "alpine:3.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := mgr.Snapshot(ctx, owner, pub.ID, SnapshotInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, other, CreateInput{Image: open.Image}); err != nil {
+		t.Fatal(err)
+	}
+}

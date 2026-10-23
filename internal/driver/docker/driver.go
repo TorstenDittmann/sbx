@@ -165,7 +165,8 @@ func (d *Driver) Capabilities() driver.Caps {
 	}
 	guest := d.GuestEnabled()
 	return driver.Caps{
-		Pause: true, NetPolicy: true, IsolationLevel: level,
+		// gVisor keeps rootfs writes inside the sandbox, where commit cannot see them.
+		Pause: true, Snapshot: d.runtime == "", NetPolicy: true, IsolationLevel: level,
 		Exec: true, Files: true, PTY: guest, Watch: guest, Preview: guest,
 		Networks:     []driver.NetMode{driver.NetNone, driver.NetFull},
 		Requirements: reqs,
@@ -281,6 +282,12 @@ func (d *Driver) Create(ctx context.Context, spec driver.SandboxSpec) (driver.Ha
 	}
 	if err != nil {
 		return driver.Handle{}, err
+	}
+	if seed := meta.Labels[labelSnapshotWorkspace]; seed != "" && !mountsWorkspace(spec.Mounts) {
+		if err := d.seedWorkspace(ctx, id, seed); err != nil {
+			_ = d.client.ContainerRemove(context.Background(), id)
+			return driver.Handle{}, fmt.Errorf("%w: restore snapshot workspace: %s", driver.ErrImage, err.Error())
+		}
 	}
 	if token != "" {
 		d.rememberToken(id, token)

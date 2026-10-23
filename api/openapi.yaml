@@ -522,6 +522,47 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/snapshot:
+    post:
+      operationId: snapshotSandbox
+      summary: Commit a running sandbox to an image
+      description: >
+        Commits the sandbox to sbx-template:<id> so a prepared environment
+        can be forked. Root filesystem changes and the contents of
+        /workspace are kept (/workspace is skipped when a volume is mounted
+        there). Secrets are not: env keys the sandbox added on top of the
+        base image are kept with empty values, because Docker cannot unset
+        them. Pass the image to a create, or set template to also save it as
+        a template that copies the sandbox's cpu, memory, disk, env,
+        backend, and network. Needs the same rights as a build; saving a
+        template needs an admin key. The sandbox must be running. Supported
+        on the docker backend only, and needs /bin/sh, tar, and cp in the image.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                template: {type: string, description: Also save the image as a template with this name.}
+                description: {type: string, description: Description of that template.}
+      responses:
+        "201":
+          description: Snapshot taken
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Snapshot"}
+        "400":
+          description: The backend cannot snapshot
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "403":
+          description: Snapshots need build rights, and templates an admin key
+        "409":
+          description: The sandbox is not running, or the template exists
   /v1/sandboxes/{id}/resume:
     post:
       operationId: resumeSandbox
@@ -1253,6 +1294,21 @@ components:
           type: array
           items: {$ref: "#/components/schemas/BuildStep"}
         cached: {type: boolean}
+        duration_ms: {type: integer}
+    Snapshot:
+      type: object
+      required: [id, image, sandbox_id, base, workspace, template, duration_ms]
+      properties:
+        id: {type: string, description: snap_<16 hex chars>.}
+        image: {type: string, description: Image sandboxes start from, sbx-template:<id>.}
+        sandbox_id: {type: string}
+        base: {type: string, description: Image the sandbox was started from.}
+        workspace: {type: boolean, description: Whether /workspace was copied into the image.}
+        template:
+          description: The template saved from the snapshot, or null.
+          oneOf:
+            - $ref: "#/components/schemas/Template"
+            - type: "null"
         duration_ms: {type: integer}
     Network:
       type: object
