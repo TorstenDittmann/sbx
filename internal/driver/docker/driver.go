@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/agent"
@@ -78,6 +79,9 @@ type Driver struct {
 
 	polMu    sync.Mutex
 	policies map[string]appliedNet
+
+	// lastEvent is the daemon time of the last runtime event WatchEvents saw.
+	lastEvent atomic.Int64
 }
 
 type appliedNet struct {
@@ -317,9 +321,18 @@ func (d *Driver) Inspect(ctx context.Context, id string) (driver.Status, error) 
 
 // WatchEvents reports oom and die events for sbx containers. Every
 // Docker-backed driver shares the daemon, so each sees every sbx container;
-// the caller keeps the events whose sandbox belongs to this backend.
+// the caller keeps the events whose sandbox belongs to this backend. A
+// reconnect resumes just after the last event seen, so an oom in the gap,
+// which no later sweep could recover, is still reported.
 func (d *Driver) WatchEvents(ctx context.Context, emit func(driver.Event)) error {
-	return d.client.Events(ctx, func(ev EngineEvent) {
+	since := d.lastEvent.Load()
+	if since > 0 {
+		since++
+	}
+	return d.client.Events(ctx, since, func(ev EngineEvent) {
+		if ev.TimeNano > d.lastEvent.Load() {
+			d.lastEvent.Store(ev.TimeNano)
+		}
 		out := driver.Event{ID: ev.ID, SandboxID: ev.Attributes[labelID]}
 		switch ev.Action {
 		case "oom":

@@ -256,7 +256,7 @@ func (m *Manager) sandboxDied(ctx context.Context, sb store.Sandbox, d driver.Dr
 
 // WatchDrivers follows runtime events from every backend that pushes them,
 // reconnecting with backoff, until ctx ends. The reaper's liveness check
-// still runs, so a missed event only delays detection to the next sweep.
+// still runs, so a missed exit only delays detection to the next sweep.
 func (m *Manager) WatchDrivers(ctx context.Context) {
 	for name, d := range m.drivers {
 		src, ok := d.(driver.EventSource)

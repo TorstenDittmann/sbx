@@ -328,3 +328,23 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestReconcileLostEventInspects(t *testing.T) {
+	st := openStore(t)
+	fd := fake.New("docker")
+	mgr := New(config.Default(), st, map[string]driver.Driver{"docker": fd}, discard())
+	ctx := context.Background()
+	actor := coreActor(t, st)
+	sb, err := mgr.Create(ctx, actor, CreateInput{Image: "alpine:3.20"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd.Crash(sb.ContainerID, true, 137)
+	if err := mgr.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ev := lastEvent(t, st, sb.ID)
+	if ev.Type != EventLost || ev.Data["reason"] != "exited" || ev.Data["exit_code"] != float64(137) || ev.Data["oom_killed"] != true {
+		t.Fatalf("reconcile lost event %+v", ev)
+	}
+}

@@ -13,16 +13,17 @@ import (
 )
 
 func TestWatchEvents(t *testing.T) {
-	var filters string
+	var filters, since string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/version", func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `{"ApiVersion":"1.44"}`)
 	})
 	mux.HandleFunc("/v1.44/events", func(w http.ResponseWriter, r *http.Request) {
 		filters = r.URL.Query().Get("filters")
-		fmt.Fprintln(w, `{"Type":"container","Action":"oom","Actor":{"ID":"c1","Attributes":{"sbx.id":"sbx_a"}}}`)
+		since = r.URL.Query().Get("since")
+		fmt.Fprintln(w, `{"Type":"container","Action":"oom","timeNano":1700000000000000001,"Actor":{"ID":"c1","Attributes":{"sbx.id":"sbx_a"}}}`)
 		fmt.Fprintln(w, `{"Type":"container","Action":"start","Actor":{"ID":"c1","Attributes":{"sbx.id":"sbx_a"}}}`)
-		fmt.Fprintln(w, `{"Type":"container","Action":"die","Actor":{"ID":"c1","Attributes":{"sbx.id":"sbx_a","exitCode":"137"}}}`)
+		fmt.Fprintln(w, `{"Type":"container","Action":"die","timeNano":1700000000000000005,"Actor":{"ID":"c1","Attributes":{"sbx.id":"sbx_a","exitCode":"137"}}}`)
 	})
 	ln, err := net.Listen("unix", t.TempDir()+"/docker.sock")
 	if err != nil {
@@ -47,6 +48,14 @@ func TestWatchEvents(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("events %+v", got)
+	}
+	if since != "" {
+		t.Fatalf("first connect sent since=%q", since)
+	}
+	// A reconnect resumes just after the last event seen.
+	_ = d.WatchEvents(context.Background(), func(driver.Event) {})
+	if since != "1700000000.000000006" {
+		t.Fatalf("reconnect since=%q", since)
 	}
 	if f, _ := url.QueryUnescape(filters); !strings.Contains(f, `"oom","die"`) || !strings.Contains(f, labelManaged+"=true") {
 		t.Fatalf("filters %q", filters)

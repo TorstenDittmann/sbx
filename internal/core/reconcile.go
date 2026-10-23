@@ -56,11 +56,15 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		hit, ok := bySandbox[sb.ID]
 		if !ok || hit.st.State == driver.StateStopped || hit.st.State == driver.StateUnknown {
-			reason := "missing"
+			data := map[string]any{"reason": "missing"}
 			if ok {
-				reason = "exited"
+				data["reason"] = "exited"
+				if st, err := hit.d.Inspect(ctx, hit.st.ID); err == nil && st.State == driver.StateStopped {
+					data["exit_code"] = st.ExitCode
+					data["oom_killed"] = st.OOMKilled
+				}
 			}
-			m.markLost(ctx, sb, reason)
+			m.markLost(ctx, sb, data)
 			continue
 		}
 		next := "running"
@@ -96,7 +100,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	return first
 }
 
-func (m *Manager) markLost(ctx context.Context, sb store.Sandbox, reason string) {
+func (m *Manager) markLost(ctx context.Context, sb store.Sandbox, data map[string]any) {
 	sb.Status = "stopped"
 	sb.Error = "lost"
 	finished := m.now()
@@ -106,5 +110,5 @@ func (m *Manager) markLost(ctx context.Context, sb store.Sandbox, reason string)
 		return
 	}
 	m.log.Info("sandbox lost", "id", sb.ID)
-	m.emit(ctx, EventLost, sb, map[string]any{"reason": reason})
+	m.emit(ctx, EventLost, sb, data)
 }

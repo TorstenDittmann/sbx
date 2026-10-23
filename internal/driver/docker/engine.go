@@ -437,20 +437,26 @@ func (c *Client) ContainerList(ctx context.Context) ([]ContainerState, error) {
 	return out, nil
 }
 
-// EngineEvent is one container event from GET /events.
+// EngineEvent is one container event from GET /events. TimeNano is when
+// the daemon recorded it.
 type EngineEvent struct {
 	Action     string
 	ID         string
 	Attributes map[string]string
+	TimeNano   int64
 }
 
 // Events streams oom and die events for sbx containers until ctx ends or the
-// daemon closes the stream.
-func (c *Client) Events(ctx context.Context, fn func(EngineEvent)) error {
+// daemon closes the stream. A nonzero sinceNano also replays the events the
+// daemon recorded after that time, so a reconnect does not drop any.
+func (c *Client) Events(ctx context.Context, sinceNano int64, fn func(EngineEvent)) error {
 	if err := c.ensure(); err != nil {
 		return err
 	}
 	filters := url.Values{}
+	if sinceNano > 0 {
+		filters.Set("since", fmt.Sprintf("%d.%09d", sinceNano/1e9, sinceNano%1e9))
+	}
 	filters.Set("filters", `{"type":["container"],"event":["oom","die"],"label":["`+labelManaged+`=true"]}`)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker"+c.path("/events?"+filters.Encode()), nil)
 	if err != nil {
@@ -468,8 +474,9 @@ func (c *Client) Events(ctx context.Context, fn func(EngineEvent)) error {
 	dec := json.NewDecoder(resp.Body)
 	for {
 		var raw struct {
-			Action string `json:"Action"`
-			Actor  struct {
+			Action   string `json:"Action"`
+			TimeNano int64  `json:"timeNano"`
+			Actor    struct {
 				ID         string            `json:"ID"`
 				Attributes map[string]string `json:"Attributes"`
 			} `json:"Actor"`
@@ -480,7 +487,7 @@ func (c *Client) Events(ctx context.Context, fn func(EngineEvent)) error {
 			}
 			return err
 		}
-		fn(EngineEvent{Action: raw.Action, ID: raw.Actor.ID, Attributes: raw.Actor.Attributes})
+		fn(EngineEvent{Action: raw.Action, ID: raw.Actor.ID, Attributes: raw.Actor.Attributes, TimeNano: raw.TimeNano})
 	}
 }
 
