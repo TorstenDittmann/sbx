@@ -25,6 +25,9 @@ var ErrRuntimeUnavailable = errors.New("runtime unavailable")
 // ErrImage means the backend could not resolve or pull an image.
 var ErrImage = errors.New("image unavailable")
 
+// ErrImageInUse means a container still uses the image, so it was kept.
+var ErrImageInUse = errors.New("image in use")
+
 // State is the lifecycle state reported by a driver.
 type State string
 
@@ -256,6 +259,24 @@ type BuildSpec struct {
 type Builder interface {
 	HasImage(ctx context.Context, ref string) (bool, error)
 	BuildImage(ctx context.Context, spec BuildSpec) error
+}
+
+// BuiltImage is an image a Builder made. Ref is its repo:tag.
+type BuiltImage struct {
+	Ref     string
+	Created time.Time
+	Size    int64
+}
+
+// ImageCollector is implemented by Builders that can list and remove the
+// images they built, so unused ones can be garbage collected.
+type ImageCollector interface {
+	// ListBuiltImages returns every tag in repo that a build produced.
+	ListBuiltImages(ctx context.Context, repo string) ([]BuiltImage, error)
+	// RemoveImage untags ref and deletes its layers if nothing else uses
+	// them. A missing image is success; one a container uses returns
+	// ErrImageInUse.
+	RemoveImage(ctx context.Context, ref string) error
 }
 
 // Stats is a point-in-time resource sample for one sandbox. CPUPercent is

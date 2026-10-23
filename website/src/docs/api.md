@@ -44,7 +44,8 @@ These routes need no key.
 
 | Route | Returns |
 |---|---|
-| `GET /` | `{"name", "version", "health", "openapi"}` |
+| `GET /` | `{"name", "version", "health", "openapi", "dashboard"}`. A browser (`Accept: text/html`) is redirected to `/ui/`. |
+| `GET /ui/` | The [dashboard](/docs/dashboard). Static files; sign-in uses an API key. |
 | `GET /healthz` | `{"status", "version", "backend", "docker"}`. `503` when the backend does not answer. |
 | `GET /readyz` | Same body. `503` until startup reconcile finishes. |
 | `GET /metrics` | Prometheus text. |
