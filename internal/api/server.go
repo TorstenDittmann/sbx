@@ -854,11 +854,9 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadArchive(w http.ResponseWriter, r *http.Request) {
-	body, ok := readRequestBody(w, r, s.archiveLimit())
-	if !ok {
-		return
-	}
-	if err := s.mgr.WriteArchive(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), body); err != nil {
+	// The manager streams the body and enforces max_archive_bytes itself;
+	// limitBody already refused a Content-Length over it.
+	if err := s.mgr.WriteArchive(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), r.Body); err != nil {
 		writeManager(w, err)
 		return
 	}
