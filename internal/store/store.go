@@ -326,6 +326,11 @@ CREATE TABLE IF NOT EXISTS previews (
     UNIQUE(sandbox_id, port)
 );
 
+CREATE TABLE IF NOT EXISTS built_images (
+    ref TEXT PRIMARY KEY,
+    last_used_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     type TEXT NOT NULL,

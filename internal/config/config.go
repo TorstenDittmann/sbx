@@ -14,10 +14,13 @@ import (
 
 // Config is the resolved server configuration.
 type Config struct {
-	Addr        string
-	DataDir     string
-	Backend     string
-	LogLevel    string
+	Addr     string
+	DataDir  string
+	Backend  string
+	LogLevel string
+	// Dashboard serves the web UI at /ui/. It only holds static files; every
+	// action still goes through the API with the visitor's key.
+	Dashboard   bool
 	Docker      DockerConfig
 	Kata        KataConfig
 	Firecracker FirecrackerConfig
@@ -94,10 +97,13 @@ type Limits struct {
 
 // BuildConfig controls template image builds. A build runs its steps as root
 // in Docker's builder, with the daemon's default network, so only admin keys
-// may request one unless AllowSandboxKeys is set.
+// may request one unless AllowSandboxKeys is set. Built images that no
+// template or live sandbox references are removed once unused for
+// RetainUnusedSeconds; 0 keeps them forever.
 type BuildConfig struct {
-	AllowSandboxKeys bool
-	TimeoutSeconds   int
+	AllowSandboxKeys    bool
+	TimeoutSeconds      int
+	RetainUnusedSeconds int
 }
 
 // AuthConfig optionally pins the first API key.
@@ -131,10 +137,11 @@ type NetworkConfig struct {
 // Default is the secure single-node configuration.
 func Default() Config {
 	return Config{
-		Addr:     "127.0.0.1:8080",
-		DataDir:  "data",
-		Backend:  "docker",
-		LogLevel: "info",
+		Addr:      "127.0.0.1:8080",
+		DataDir:   "data",
+		Backend:   "docker",
+		LogLevel:  "info",
+		Dashboard: true,
 		Docker: DockerConfig{
 			Host:           "/var/run/docker.sock",
 			GVisorRuntime:  "runsc",
@@ -183,7 +190,8 @@ func Default() Config {
 			PreviewMaxStreams:   64,
 		},
 		Builds: BuildConfig{
-			TimeoutSeconds: 1200,
+			TimeoutSeconds:      1200,
+			RetainUnusedSeconds: 7 * 86400,
 		},
 	}
 }
@@ -203,6 +211,7 @@ type fileConfig struct {
 	DataDir     *string          `yaml:"data_dir"`
 	Backend     *string          `yaml:"backend"`
 	LogLevel    *string          `yaml:"log_level"`
+	Dashboard   *bool            `yaml:"dashboard"`
 	Docker      *fileDocker      `yaml:"docker"`
 	Kata        *fileKata        `yaml:"kata"`
 	Firecracker *fileFirecracker `yaml:"firecracker"`
@@ -213,8 +222,9 @@ type fileConfig struct {
 }
 
 type fileBuilds struct {
-	AllowSandboxKeys *bool `yaml:"allow_sandbox_keys"`
-	TimeoutSeconds   *int  `yaml:"timeout_seconds"`
+	AllowSandboxKeys    *bool `yaml:"allow_sandbox_keys"`
+	TimeoutSeconds      *int  `yaml:"timeout_seconds"`
+	RetainUnusedSeconds *int  `yaml:"retain_unused_seconds"`
 }
 
 type fileDocker struct {
@@ -313,6 +323,7 @@ func (f fileConfig) apply(cfg *Config) {
 	setString(&cfg.DataDir, f.DataDir)
 	setString(&cfg.Backend, f.Backend)
 	setString(&cfg.LogLevel, f.LogLevel)
+	setBool(&cfg.Dashboard, f.Dashboard)
 	if d := f.Docker; d != nil {
 		setString(&cfg.Docker.Host, d.Host)
 		setString(&cfg.Docker.GVisorRuntime, d.GVisorRuntime)
@@ -359,6 +370,7 @@ func (f fileConfig) apply(cfg *Config) {
 	if b := f.Builds; b != nil {
 		setBool(&cfg.Builds.AllowSandboxKeys, b.AllowSandboxKeys)
 		setInt(&cfg.Builds.TimeoutSeconds, b.TimeoutSeconds)
+		setInt(&cfg.Builds.RetainUnusedSeconds, b.RetainUnusedSeconds)
 	}
 	if a := f.Auth; a != nil {
 		setString(&cfg.Auth.BootstrapKey, a.BootstrapKey)
@@ -395,6 +407,7 @@ func applyEnv(cfg *Config) {
 	envString(&cfg.DataDir, "SBX_DATA_DIR")
 	envString(&cfg.Backend, "SBX_BACKEND")
 	envString(&cfg.LogLevel, "SBX_LOG_LEVEL")
+	envBool(&cfg.Dashboard, "SBX_DASHBOARD")
 	envString(&cfg.Docker.Host, "SBX_DOCKER_HOST")
 	envString(&cfg.Docker.GVisorRuntime, "SBX_GVISOR_RUNTIME")
 	envBool(&cfg.Docker.ReadOnlyRootfs, "SBX_READ_ONLY_ROOTFS")
@@ -435,6 +448,7 @@ func applyEnv(cfg *Config) {
 	envInt(&cfg.Network.PreviewMaxStreams, "SBX_PREVIEW_MAX_STREAMS")
 	envBool(&cfg.Builds.AllowSandboxKeys, "SBX_BUILDS_ALLOW_SANDBOX_KEYS")
 	envInt(&cfg.Builds.TimeoutSeconds, "SBX_BUILD_TIMEOUT_SECONDS")
+	envInt(&cfg.Builds.RetainUnusedSeconds, "SBX_BUILD_RETAIN_UNUSED_SECONDS")
 }
 
 // Validate checks the resolved configuration.
@@ -515,6 +529,9 @@ func (c Config) Validate() error {
 	}
 	if c.Builds.TimeoutSeconds < 1 {
 		return fmt.Errorf("builds.timeout_seconds must be >= 1")
+	}
+	if c.Builds.RetainUnusedSeconds != 0 && c.Builds.RetainUnusedSeconds < 3600 {
+		return fmt.Errorf("builds.retain_unused_seconds must be 0 (keep forever) or >= 3600")
 	}
 	if c.Network.PreviewMaxStreams < 1 {
 		return fmt.Errorf("preview_max_streams must be >= 1")

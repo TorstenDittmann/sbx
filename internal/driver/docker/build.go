@@ -155,3 +155,57 @@ var (
 	exitRE = regexp.MustCompile(`returned a non-zero code: (\d+)`)
 	ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
 )
+
+// ListBuiltImages returns the tags in repo on images this driver built.
+func (d *Driver) ListBuiltImages(ctx context.Context, repo string) ([]driver.BuiltImage, error) {
+	return d.client.ImageListBuilt(ctx, repo)
+}
+
+// RemoveImage deletes ref without force, so the daemon keeps an image that
+// a container still uses.
+func (d *Driver) RemoveImage(ctx context.Context, ref string) error {
+	return d.client.ImageRemove(ctx, ref)
+}
+
+// ImageListBuilt lists images carrying the build label, one entry per tag
+// in repo.
+func (c *Client) ImageListBuilt(ctx context.Context, repo string) ([]driver.BuiltImage, error) {
+	filters, err := json.Marshal(map[string][]string{
+		"label":     {"sbx.build=1"},
+		"reference": {repo},
+	})
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		RepoTags []string `json:"RepoTags"`
+		Created  int64    `json:"Created"`
+		Size     int64    `json:"Size"`
+	}
+	if err := c.DoJSON(ctx, http.MethodGet, "/images/json?filters="+url.QueryEscape(string(filters)), nil, &raw); err != nil {
+		return nil, err
+	}
+	var out []driver.BuiltImage
+	for _, img := range raw {
+		for _, tag := range img.RepoTags {
+			if strings.HasPrefix(tag, repo+":") {
+				out = append(out, driver.BuiltImage{Ref: tag, Created: time.Unix(img.Created, 0).UTC(), Size: img.Size})
+			}
+		}
+	}
+	return out, nil
+}
+
+// ImageRemove deletes ref. A missing image is success. The daemon answers
+// 409 when a container uses the image.
+func (c *Client) ImageRemove(ctx context.Context, ref string) error {
+	err := c.DoJSON(ctx, http.MethodDelete, "/images/"+escapeRef(ref), nil, nil)
+	if err == nil || errors.Is(err, driver.ErrNotFound) {
+		return nil
+	}
+	var se *StatusError
+	if errors.As(err, &se) && se.Status == http.StatusConflict {
+		return fmt.Errorf("%w: %s", driver.ErrImageInUse, se.Message)
+	}
+	return err
+}
