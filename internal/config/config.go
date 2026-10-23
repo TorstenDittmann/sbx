@@ -14,10 +14,13 @@ import (
 
 // Config is the resolved server configuration.
 type Config struct {
-	Addr        string
-	DataDir     string
-	Backend     string
-	LogLevel    string
+	Addr     string
+	DataDir  string
+	Backend  string
+	LogLevel string
+	// Dashboard serves the web UI at /ui/. It only holds static files; every
+	// action still goes through the API with the visitor's key.
+	Dashboard   bool
 	Docker      DockerConfig
 	Kata        KataConfig
 	Firecracker FirecrackerConfig
@@ -131,10 +134,11 @@ type NetworkConfig struct {
 // Default is the secure single-node configuration.
 func Default() Config {
 	return Config{
-		Addr:     "127.0.0.1:8080",
-		DataDir:  "data",
-		Backend:  "docker",
-		LogLevel: "info",
+		Addr:      "127.0.0.1:8080",
+		DataDir:   "data",
+		Backend:   "docker",
+		LogLevel:  "info",
+		Dashboard: true,
 		Docker: DockerConfig{
 			Host:           "/var/run/docker.sock",
 			GVisorRuntime:  "runsc",
@@ -203,6 +207,7 @@ type fileConfig struct {
 	DataDir     *string          `yaml:"data_dir"`
 	Backend     *string          `yaml:"backend"`
 	LogLevel    *string          `yaml:"log_level"`
+	Dashboard   *bool            `yaml:"dashboard"`
 	Docker      *fileDocker      `yaml:"docker"`
 	Kata        *fileKata        `yaml:"kata"`
 	Firecracker *fileFirecracker `yaml:"firecracker"`
@@ -313,6 +318,7 @@ func (f fileConfig) apply(cfg *Config) {
 	setString(&cfg.DataDir, f.DataDir)
 	setString(&cfg.Backend, f.Backend)
 	setString(&cfg.LogLevel, f.LogLevel)
+	setBool(&cfg.Dashboard, f.Dashboard)
 	if d := f.Docker; d != nil {
 		setString(&cfg.Docker.Host, d.Host)
 		setString(&cfg.Docker.GVisorRuntime, d.GVisorRuntime)
@@ -395,6 +401,7 @@ func applyEnv(cfg *Config) {
 	envString(&cfg.DataDir, "SBX_DATA_DIR")
 	envString(&cfg.Backend, "SBX_BACKEND")
 	envString(&cfg.LogLevel, "SBX_LOG_LEVEL")
+	envBool(&cfg.Dashboard, "SBX_DASHBOARD")
 	envString(&cfg.Docker.Host, "SBX_DOCKER_HOST")
 	envString(&cfg.Docker.GVisorRuntime, "SBX_GVISOR_RUNTIME")
 	envBool(&cfg.Docker.ReadOnlyRootfs, "SBX_READ_ONLY_ROOTFS")

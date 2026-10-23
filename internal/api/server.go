@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/core"
+	"github.com/TorstenDittmann/sbx/internal/dashboard"
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/id"
 	"github.com/TorstenDittmann/sbx/internal/store"
@@ -56,6 +57,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("GET /metrics", s.metrics)
 	mux.HandleFunc("GET /openapi.yaml", s.openapi)
+	if s.mgr.Config().Dashboard {
+		mux.Handle("GET "+dashboard.Prefix, dashboard.Handler())
+		mux.Handle("GET /ui", http.RedirectHandler(dashboard.Prefix, http.StatusMovedPermanently))
+	}
 
 	mux.HandleFunc("POST /v1/keys", s.auth("admin", s.createKey))
 	mux.HandleFunc("GET /v1/keys", s.auth("admin", s.listKeys))
@@ -117,14 +122,24 @@ func (s *Server) Handler() http.Handler {
 	return s.recover(s.logRequests(s.limitBody(s.routePreviewHost(mux))))
 }
 
-func (s *Server) root(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
+func (s *Server) root(w http.ResponseWriter, r *http.Request) {
+	dash := s.mgr.Config().Dashboard
+	// A browser landing on / wants the dashboard; API clients keep the JSON.
+	if dash && strings.Contains(r.Header.Get("Accept"), "text/html") {
+		http.Redirect(w, r, dashboard.Prefix, http.StatusFound)
+		return
+	}
+	body := map[string]string{
 		"name":    "sbx",
 		"version": version.Version,
 		"health":  "/healthz",
 		"openapi": "/openapi.yaml",
 		"docs":    "https://github.com/TorstenDittmann/sbx",
-	})
+	}
+	if dash {
+		body["dashboard"] = dashboard.Prefix
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

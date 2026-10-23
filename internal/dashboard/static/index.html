@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>sbx dashboard</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top" id="top" hidden>
+  <a class="brand" href="#/sandboxes"><span class="mark">sbx</span><span class="ver" id="version"></span></a>
+  <nav>
+    <a href="#/sandboxes" data-nav="sandboxes">Sandboxes</a>
+    <a href="#/keys" data-nav="keys" id="nav-keys" hidden>API keys</a>
+  </nav>
+  <span class="who" id="who"></span>
+  <button class="ghost" id="signout" type="button">Sign out</button>
+</header>
+<main id="app"></main>
+<div class="toast" id="toast" role="status" hidden></div>
+<script src="vendor/xterm.js"></script>
+<script src="vendor/addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
