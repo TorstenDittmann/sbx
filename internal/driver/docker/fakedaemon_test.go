@@ -24,6 +24,7 @@ type fakeDaemon struct {
 	created    createRequest
 	creates    []createRequest
 	pulls      []string
+	pullAuth   []string
 	network    bool
 	netStatus  int
 	netCreates int
@@ -190,6 +191,7 @@ func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.images[ref] = true
 		f.pulls = append(f.pulls, ref)
+		f.pullAuth = append(f.pullAuth, r.Header.Get("X-Registry-Auth"))
 		f.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]string{"status": "pulled"})
 	case r.Method == http.MethodPost && p == "/v1.44/containers/create":

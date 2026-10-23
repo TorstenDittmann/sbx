@@ -156,6 +156,36 @@ paths:
         "204": {description: Revoked}
         "404": {description: Not found}
         "409": {description: This is the last usable admin key}
+  /v1/keys/{id}/registries:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    put:
+      operationId: setKeyRegistries
+      summary: Replace a key's private registry credentials
+      description: An empty list removes them. Secrets are write-only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registries]
+              properties:
+                registries:
+                  type: array
+                  maxItems: 16
+                  items: {$ref: "#/components/schemas/RegistryCredential"}
+      responses:
+        "200":
+          description: The updated key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APIKey"}
+        "400": {description: Invalid credential}
+        "404": {description: Not found}
   /v1/backends:
     get:
       operationId: listBackends
@@ -1044,6 +1074,14 @@ components:
         expires_at: {type: string, format: date-time}
         revoked_at: {type: string, format: date-time}
         network: {$ref: "#/components/schemas/KeyNetwork"}
+        registries:
+          type: array
+          description: Registries the key has credentials for. Secrets are never returned.
+          items:
+            type: object
+            properties:
+              server: {type: string}
+              username: {type: string}
     CreateKey:
       type: object
       required: [name]
@@ -1057,6 +1095,24 @@ components:
           format: date-time
           description: Optional. Must be in the future. The key stops authenticating at this time.
         network: {$ref: "#/components/schemas/KeyNetwork"}
+        registries:
+          type: array
+          maxItems: 16
+          description: >
+            Private registry credentials for images and build bases this key
+            uses. They take precedence over the server's registries.
+          items: {$ref: "#/components/schemas/RegistryCredential"}
+    RegistryCredential:
+      type: object
+      required: [server]
+      description: Set username and password, or identity_token.
+      properties:
+        server:
+          type: string
+          description: Registry host, such as ghcr.io. docker.io covers unqualified image names.
+        username: {type: string}
+        password: {type: string, writeOnly: true}
+        identity_token: {type: string, writeOnly: true}
     KeyNetwork:
       type: object
       description: >

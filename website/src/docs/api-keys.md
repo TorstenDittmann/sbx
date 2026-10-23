@@ -91,6 +91,33 @@ A key can carry a network policy for the sandboxes it creates:
 
 `mode` and `allow` are defaults that a sandbox may override. Add `max_mode` to make them a ceiling: a sandbox that asks for a looser mode gets `403`, and with `max_mode: allow` every allow entry on a sandbox must be one of the key's hostnames or inside one of its CIDRs. `deny` is always added to the server's deny list. See [Network](/docs/network/#inheritance) for the full rules.
 
+## Private registries
+
+A key can carry credentials for private image registries. sbx uses them when the key creates a sandbox, a template, or a [build](/docs/templates/#build-steps) whose image or base lives on that registry. They take precedence over the server's [`registries`](/docs/configuration/#registries) for the same server.
+
+```json
+{
+  "name": "team-a",
+  "registries": [
+    {"server": "ghcr.io", "username": "team-a-bot", "password": "ghp_..."},
+    {"server": "registry.example.com", "identity_token": "..."}
+  ]
+}
+```
+
+Send `registries` on create, or replace the list later. An empty list removes them:
+
+```bash
+curl -s -X PUT $SBX_URL/v1/keys/$KEY_ID/registries \
+  -H "Authorization: Bearer $SBX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"registries":[{"server":"ghcr.io","username":"team-a-bot","password":"ghp_..."}]}'
+```
+
+Passwords and tokens are write-only. Key responses list each registry's `server` and `username` only. They are stored in the server's SQLite database as given, like sandbox secrets, so protect the data directory.
+
+Docker keeps one image cache for every caller. So that one key's pull does not hand the image to everyone, sbx records a repository the first time a key's own credential fetches it. After that, every use of the repository, by tag or by digest, asks the registry again with the caller's credential, and a key without access gets an image error instead of the cached copy. The same check runs before a cached [build](/docs/templates/#build-steps) on that base is reused, and when a built `sbx-template:` image is named directly. While such images exist, a bare image ID is refused, because it cannot be checked. Warm pools belong to no key, so they only use the server's credentials.
+
 ## Quotas
 
 Each key can have at most `max_sandboxes_per_key` live sandboxes (default 20) and `requests_per_minute` requests (default 1200). Both return `429`.

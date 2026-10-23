@@ -82,7 +82,7 @@ func (m *Manager) Build(ctx context.Context, actor Actor, in BuildInput) (BuildR
 		return BuildResult{}, invalid("unknown backend " + backend)
 	}
 	start := m.now()
-	image, cached, err := m.buildImage(ctx, backend, base, steps)
+	image, _, cached, err := m.buildImage(ctx, actor, backend, base, steps)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -113,9 +113,14 @@ func (m *Manager) canBuild(actor Actor) error {
 	return forbidden("building an image needs an admin key unless builds.allow_sandbox_keys is set")
 }
 
-// buildImage returns the image for base plus steps, building it on first use.
-// Steps that render no commands (only env or workdir) leave base as is.
-func (m *Manager) buildImage(ctx context.Context, backend, base string, steps []store.BuildStep) (string, bool, error) {
+// buildImage returns the image for base plus steps, building it on first use,
+// and how a backend fetches that image. Steps that render no commands (only
+// env or workdir) leave base as is.
+func (m *Manager) buildImage(ctx context.Context, actor Actor, backend, base string, steps []store.BuildStep) (string, imageAccess, bool, error) {
+	acc, err := m.resolveImage(ctx, actor, backend, base)
+	if err != nil {
+		return "", imageAccess{}, false, err
+	}
 	scripts := renderSteps(steps)
 	if len(scripts) == 0 {
 		// A create that names a built tag directly still counts as a use.
@@ -125,35 +130,46 @@ func (m *Manager) buildImage(ctx context.Context, backend, base string, steps []
 			m.touchImage(ctx, base)
 			mu.Unlock()
 		}
-		return base, true, nil
+		return base, acc, true, nil
 	}
 	tag := buildTag(base, scripts)
 	b, err := m.builder(backend)
 	if err != nil {
-		return "", false, err
+		return "", imageAccess{}, false, err
+	}
+	if acc.force {
+		// Recorded first, so the tag cannot be named directly by a caller
+		// who could not pull the base.
+		if err := m.store.MarkPrivateImage(ctx, tag, base, m.now()); err != nil {
+			return "", imageAccess{}, false, err
+		}
 	}
 	mu := m.buildLock(tag)
 	mu.Lock()
 	defer mu.Unlock()
 	ok, err := b.HasImage(ctx, tag)
 	if err != nil {
-		return "", false, m.asDriver(err)
+		return "", imageAccess{}, false, m.asDriver(err)
 	}
 	if ok {
+		if err := m.verifyImage(ctx, backend, base, acc); err != nil {
+			return "", imageAccess{}, false, err
+		}
 		m.touchImage(ctx, tag)
-		return tag, true, nil
+		return tag, imageAccess{}, true, nil
 	}
 	m.log.Info("building template image", "image", tag, "base", base, "steps", len(scripts))
 	// A client that disconnects should not cancel a build other creates wait on.
 	err = b.BuildImage(context.WithoutCancel(ctx), driver.BuildSpec{
 		Tag: tag, Base: base, Run: scripts, TimeoutSeconds: m.cfg.Builds.TimeoutSeconds,
+		Registry: acc.auth, ForcePull: acc.force,
 	})
 	if err != nil {
-		return "", false, m.asDriver(err)
+		return "", imageAccess{}, false, m.asDriver(err)
 	}
 	m.Counts.Builds.Add(1)
 	m.touchImage(ctx, tag)
-	return tag, false, nil
+	return tag, imageAccess{}, false, nil
 }
 
 // touchImage records a use of tag so image collection keeps it for

@@ -35,12 +35,15 @@ type KeyNetwork struct {
 
 // APIKey is a stored credential. Hash is the sha256 hex of the secret.
 type APIKey struct {
-	ID         string
-	Name       string
-	Hash       string
-	Prefix     string
-	Scopes     []string
-	Network    KeyNetwork
+	ID      string
+	Name    string
+	Hash    string
+	Prefix  string
+	Scopes  []string
+	Network KeyNetwork
+	// Registries are image registry credentials for sandboxes and builds
+	// made with this key. They are stored as given and never returned.
+	Registries []RegistryCred
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	// ExpiresAt, when set, is when the key stops authenticating.
@@ -48,6 +51,24 @@ type APIKey struct {
 	// RevokedAt is set once the key has been revoked. A revoked key never
 	// authenticates again.
 	RevokedAt *time.Time
+}
+
+// RegistryCred is one registry credential. Server is a normalized host.
+type RegistryCred struct {
+	Server        string `json:"server"`
+	Username      string `json:"username,omitempty"`
+	Password      string `json:"password,omitempty"`
+	IdentityToken string `json:"identity_token,omitempty"`
+}
+
+// Registry returns the key's credential for host, if it has one.
+func (k APIKey) Registry(host string) (RegistryCred, bool) {
+	for _, r := range k.Registries {
+		if r.Server == host {
+			return r, true
+		}
+	}
+	return RegistryCred{}, false
 }
 
 // Usable reports whether the key may still authenticate at now.
@@ -207,6 +228,7 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
 		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at INTEGER`},
 		{"api_keys", "revoked_at", `ALTER TABLE api_keys ADD COLUMN revoked_at INTEGER`},
+		{"api_keys", "registries_json", `ALTER TABLE api_keys ADD COLUMN registries_json TEXT NOT NULL DEFAULT '[]'`},
 		{"templates", "setup_json", `ALTER TABLE templates ADD COLUMN setup_json TEXT NOT NULL DEFAULT '[]'`},
 		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
@@ -342,6 +364,11 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
+CREATE TABLE IF NOT EXISTS private_images (
+    ref TEXT PRIMARY KEY,
+    base TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_status ON sandboxes(status);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_expires ON sandboxes(expires_at);
 `
@@ -357,10 +384,62 @@ func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), millis(k.CreatedAt), nullMillis(k.ExpiresAt))
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), registriesJSON(k.Registries), millis(k.CreatedAt), nullMillis(k.ExpiresAt))
 	return err
+}
+
+// SetKeyRegistries replaces a key's registry credentials.
+func (s *Store) SetKeyRegistries(ctx context.Context, id string, regs []RegistryCred) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET registries_json = ? WHERE id = ?`, registriesJSON(regs), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func registriesJSON(regs []RegistryCred) string {
+	if regs == nil {
+		regs = []RegistryCred{}
+	}
+	return mustJSON(regs)
+}
+
+// MarkPrivateImage records that ref was fetched with a key's own registry
+// credential, so later uses must ask the registry again. ref is a repository
+// (driver.Repository) or a built tag; base is the built tag's base image.
+func (s *Store) MarkPrivateImage(ctx context.Context, ref, base string, at time.Time) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO private_images (ref, base, created_at) VALUES (?, ?, ?)
+		ON CONFLICT(ref) DO NOTHING`, ref, base, millis(at))
+	return err
+}
+
+// PrivateImage reports whether ref was marked, and the base it was built from.
+func (s *Store) PrivateImage(ctx context.Context, ref string) (base string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT base FROM private_images WHERE ref = ?`, ref).Scan(&base)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return base, true, nil
+}
+
+// HasPrivateImages reports whether any image was marked private.
+func (s *Store) HasPrivateImages(ctx context.Context) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM private_images LIMIT 1)`).Scan(&n)
+	return n > 0, err
 }
 
 // CountKeys returns how many keys exist.
@@ -373,7 +452,7 @@ func (s *Store) CountKeys(ctx context.Context) (int, error) {
 // KeyByHash looks up a key by the digest of its secret.
 func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys WHERE key_hash = ?`, hash)
 	return scanKey(row)
 }
@@ -381,7 +460,7 @@ func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 // KeyByID loads one key. The secret is not included.
 func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys WHERE id = ?`, id)
 	return scanKey(row)
 }
@@ -389,7 +468,7 @@ func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 // ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
 func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
 		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -725,10 +804,10 @@ type scanner interface {
 
 func scanKey(row scanner) (APIKey, error) {
 	var k APIKey
-	var scopes, network string
+	var scopes, network, registries string
 	var created int64
 	var last, expires, revoked sql.NullInt64
-	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &created, &last, &expires, &revoked)
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &registries, &created, &last, &expires, &revoked)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
 	}
@@ -740,6 +819,11 @@ func scanKey(row scanner) (APIKey, error) {
 	}
 	if network != "" && network != "{}" {
 		if err := json.Unmarshal([]byte(network), &k.Network); err != nil {
+			return APIKey{}, err
+		}
+	}
+	if registries != "" && registries != "[]" {
+		if err := json.Unmarshal([]byte(registries), &k.Registries); err != nil {
 			return APIKey{}, err
 		}
 	}

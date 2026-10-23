@@ -7,16 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/TorstenDittmann/sbx/internal/driver"
 )
 
-// ExportFilesystem returns a tar archive of image's root filesystem.
+// ExportFilesystem returns a tar archive of image's root filesystem, pulling
+// it with auth when the daemon does not have it.
 // The caller must Close the reader, which also deletes the temporary container.
-func (c *Client) ExportFilesystem(ctx context.Context, ref string) (io.ReadCloser, error) {
+func (c *Client) ExportFilesystem(ctx context.Context, ref string, auth *driver.RegistryAuth) (io.ReadCloser, error) {
 	if err := c.ensure(); err != nil {
 		return nil, err
 	}
 	if _, err := c.ImageInspect(ctx, ref); err != nil {
-		if pullErr := c.ImagePull(ctx, ref); pullErr != nil {
+		if pullErr := c.ImagePull(ctx, ref, auth); pullErr != nil {
 			return nil, fmt.Errorf("pull %s: %w", ref, pullErr)
 		}
 	}

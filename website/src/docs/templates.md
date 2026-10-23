@@ -129,6 +129,10 @@ Creating from a template whose image is already built needs no build permission.
 
 `sbx_image_builds_total` on `/metrics` counts builds that missed the cache.
 
+### Private images
+
+A template's `image`, a create's `image`, and a build's base can come from a private registry. sbx pulls them with the caller key's [registry credentials](/docs/api-keys/#private-registries), or else the server's [`registries`](/docs/configuration/#registries). The base is pulled before the build starts, so the builder never fetches it anonymously. A template on an image only some keys can pull works for those keys; others get an image error. Its warm pool needs a server credential.
+
 ### Cleanup
 
 Built images are garbage collected. Once an hour sbx removes `sbx-template` images that no template needs and no live sandbox uses, once nothing has created from or built them for `builds.retain_unused_seconds` (`SBX_BUILD_RETAIN_UNUSED_SECONDS`, default 604800, seven days). A template's own image is kept for as long as the template exists. Set it to `0` to keep every image forever. A removed image is rebuilt the next time something asks for it. `sbx_image_gc_removed_total` on `/metrics` counts removals.

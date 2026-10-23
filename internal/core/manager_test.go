@@ -241,7 +241,7 @@ func TestFilesTemplatesDeleteAndReaper(t *testing.T) {
 	if err := mgr.RemoveFile(ctx, actor, sb.ID, "/workspace/note.txt"); err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "tiny", Image: "alpine:3.20", Description: "small"})
+	tpl, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "tiny", Image: "alpine:3.20", Description: "small"})
 	if err != nil || tpl.Name != "tiny" {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestFilesTemplatesDeleteAndReaper(t *testing.T) {
 	if err != nil || len(templates) < 2 {
 		t.Fatalf("%d %v", len(templates), err)
 	}
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "tiny", Image: "alpine:3.20"}); err == nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "tiny", Image: "alpine:3.20"}); err == nil {
 		t.Fatal("expected duplicate template")
 	}
 	if err := mgr.DeleteTemplate(ctx, "base"); err == nil {

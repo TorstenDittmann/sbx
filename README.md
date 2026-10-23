@@ -110,6 +110,8 @@ The server listens on container port 8080 (`SBX_ADDR=:8080`). `./data` on the ho
 
 `sbx doctor` reports whether Docker answers, whether the `runsc` runtime is registered, whether `/dev/kvm` is writable, whether the Kata runtime class is registered, and whether the Firecracker binary and guest kernel are installed. Select a backend per sandbox with `"backend": "gvisor"`, `"backend": "kata"`, or `"backend": "firecracker"`. A missing runtime is an error, not a silent fallback to runc. `sbx setup gvisor`, `sbx setup kata`, and `sbx setup firecracker` print the host steps; add `--apply` to download pinned binaries and, for gVisor and Kata, register a Docker runtime. `GET /v1/backends` returns the same picture to API clients. A template's `backend` field is the default for sandboxes created from it.
 
+Private images work for sandboxes, templates, and build bases. Put server-wide credentials under `registries` in `sbx.yaml`, or give a key its own with `"registries"` on `POST /v1/keys` (or `PUT /v1/keys/{id}/registries`). A key's credential wins for its server. An image first pulled with a key's credential is pulled again for every later caller, so the shared Docker cache does not leak it to keys without access.
+
 Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment variables, which override the file.
 
 ## What you get

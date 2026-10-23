@@ -309,3 +309,50 @@ func openTest(t *testing.T) *Store {
 	t.Cleanup(func() { st.Close() })
 	return st
 }
+
+func TestKeyRegistriesAndPrivateImages(t *testing.T) {
+	st := openTest(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	key := APIKey{ID: "key_reg", Name: "reg", Hash: "h-reg", Prefix: "p", Scopes: []string{"sandbox"}, CreatedAt: now,
+		Registries: []RegistryCred{{Server: "ghcr.io", Username: "bot", Password: "s3cret"}}}
+	if err := st.CreateKey(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.KeyByID(ctx, key.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, ok := got.Registry("ghcr.io"); !ok || r.Password != "s3cret" {
+		t.Fatalf("%+v", got.Registries)
+	}
+	if err := st.SetKeyRegistries(ctx, key.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = st.KeyByID(ctx, key.ID); len(got.Registries) != 0 {
+		t.Fatalf("%+v", got.Registries)
+	}
+	if err := st.SetKeyRegistries(ctx, "key_missing", nil); err != ErrNotFound {
+		t.Fatal(err)
+	}
+
+	if has, err := st.HasPrivateImages(ctx); err != nil || has {
+		t.Fatal(has, err)
+	}
+	if err := st.MarkPrivateImage(ctx, "sbx-template:abc", "ghcr.io/acme/app:1", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkPrivateImage(ctx, "sbx-template:abc", "other", now); err != nil {
+		t.Fatal(err)
+	}
+	base, ok, err := st.PrivateImage(ctx, "sbx-template:abc")
+	if err != nil || !ok || base != "ghcr.io/acme/app:1" {
+		t.Fatal(base, ok, err)
+	}
+	if _, ok, _ := st.PrivateImage(ctx, "docker.io/library/alpine"); ok {
+		t.Fatal("unmarked image reported private")
+	}
+	if has, _ := st.HasPrivateImages(ctx); !has {
+		t.Fatal("expected private images")
+	}
+}

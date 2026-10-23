@@ -83,3 +83,15 @@ builds:
   allow_sandbox_keys: false
   timeout_seconds: 1200
   retain_unused_seconds: 604800
+
+# Credentials for private image registries, used for sandbox images and
+# template bases for every key. A key's own credential for the same server
+# (POST /v1/keys "registries") takes precedence. Use password, password_env,
+# or password_file; identity_token replaces username and password.
+# registries:
+#   - server: ghcr.io
+#     username: deploy-bot
+#     password_env: GHCR_TOKEN
+#   - server: docker.io
+#     username: acme
+#     password_file: /run/secrets/dockerhub

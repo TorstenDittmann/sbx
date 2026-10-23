@@ -19,11 +19,11 @@ func TestTemplateBackendAndCatalog(t *testing.T) {
 	if err := mgr.Seed(ctx); err != nil {
 		t.Fatal(err)
 	}
-	tpl, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "vm", Image: "alpine:3.20", Backend: "gvisor"})
+	tpl, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "vm", Image: "alpine:3.20", Backend: "gvisor"})
 	if err != nil || tpl.Backend != "gvisor" {
 		t.Fatalf("%+v %v", tpl, err)
 	}
-	if _, err := mgr.CreateTemplate(ctx, TemplateInput{Name: "nope", Image: "alpine:3.20", Backend: "kata"}); err == nil {
+	if _, err := mgr.CreateTemplate(ctx, Actor{Admin: true}, TemplateInput{Name: "nope", Image: "alpine:3.20", Backend: "kata"}); err == nil {
 		t.Fatal("expected unknown backend")
 	}
 	sb, err := mgr.Create(ctx, actor, CreateInput{Template: "vm"})

@@ -279,11 +279,13 @@ const created = await client.createKey("agent", {
   scopes: ["sandbox"],
   expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
   network: { mode: "allow", maxMode: "allow", allow: ["pypi.org"] },
+  registries: [{ server: "ghcr.io", username: "agent-bot", password: process.env.GHCR_TOKEN }],
 })
 created.key // shown once
 
 await client.listKeys()
 await client.getKey(created.id)
+await client.setKeyRegistries(created.id, []) // replace or remove private registry credentials
 await client.revokeKey(created.id) // stops working immediately
 ```
 
