@@ -257,3 +257,20 @@ type Builder interface {
 	HasImage(ctx context.Context, ref string) (bool, error)
 	BuildImage(ctx context.Context, spec BuildSpec) error
 }
+
+// SnapshotSpec commits a running sandbox to an image. Base is the image the
+// sandbox started from, so the result can drop env the sandbox added on top
+// of it. Workspace copies /workspace into the image; it is false when a
+// volume is mounted there.
+type SnapshotSpec struct {
+	Tag       string
+	Base      string
+	Workspace bool
+}
+
+// Snapshotter is implemented by drivers that can commit a sandbox to an
+// image. A driver that embeds one still reports Caps.Snapshot honestly, so
+// callers check both.
+type Snapshotter interface {
+	Snapshot(ctx context.Context, id string, spec SnapshotSpec) error
+}

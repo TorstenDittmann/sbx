@@ -250,20 +250,33 @@ func (c *Client) Info(ctx context.Context) (Info, error) {
 
 // ImageMeta is the slice of image config this driver needs.
 type ImageMeta struct {
-	Env []string
+	Env        []string
+	Labels     map[string]string
+	Entrypoint []string
+	Cmd        []string
+	User       string
+	WorkingDir string
 }
 
 func (c *Client) ImageInspect(ctx context.Context, ref string) (ImageMeta, error) {
 	var raw struct {
 		Config struct {
-			Env []string `json:"Env"`
+			Env        []string          `json:"Env"`
+			Labels     map[string]string `json:"Labels"`
+			Entrypoint []string          `json:"Entrypoint"`
+			Cmd        []string          `json:"Cmd"`
+			User       string            `json:"User"`
+			WorkingDir string            `json:"WorkingDir"`
 		} `json:"Config"`
 	}
 	err := c.DoJSON(ctx, http.MethodGet, "/images/"+escapeRef(ref)+"/json", nil, &raw)
 	if err != nil {
 		return ImageMeta{}, err
 	}
-	return ImageMeta{Env: raw.Config.Env}, nil
+	return ImageMeta{
+		Env: raw.Config.Env, Labels: raw.Config.Labels, Entrypoint: raw.Config.Entrypoint,
+		Cmd: raw.Config.Cmd, User: raw.Config.User, WorkingDir: raw.Config.WorkingDir,
+	}, nil
 }
 
 func escapeRef(ref string) string {

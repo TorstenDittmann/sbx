@@ -72,9 +72,6 @@ func renderDockerfile(spec driver.BuildSpec) ([]byte, error) {
 
 // ImageBuild sends a context that holds only a Dockerfile and tags the result.
 func (c *Client) ImageBuild(ctx context.Context, tag string, dockerfile []byte) error {
-	if err := c.ensure(); err != nil {
-		return err
-	}
 	var ctxTar bytes.Buffer
 	tw := tar.NewWriter(&ctxTar)
 	if err := tw.WriteHeader(&tar.Header{Name: "Dockerfile", Mode: 0o644, Size: int64(len(dockerfile)), ModTime: time.Unix(0, 0)}); err != nil {
@@ -86,12 +83,21 @@ func (c *Client) ImageBuild(ctx context.Context, tag string, dockerfile []byte) 
 	if err := tw.Close(); err != nil {
 		return err
 	}
+	return c.ImageBuildContext(ctx, tag, &ctxTar)
+}
+
+// ImageBuildContext sends body as the build context and tags the result.
+// body is a tar stream with a Dockerfile at its root.
+func (c *Client) ImageBuildContext(ctx context.Context, tag string, body io.Reader) error {
+	if err := c.ensure(); err != nil {
+		return err
+	}
 	q := url.Values{}
 	q.Set("t", tag)
 	q.Set("rm", "1")
 	q.Set("forcerm", "1")
 	q.Set("labels", `{"sbx.build":"1"}`)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+c.path("/build")+"?"+q.Encode(), &ctxTar)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://docker"+c.path("/build")+"?"+q.Encode(), body)
 	if err != nil {
 		return err
 	}

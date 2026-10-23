@@ -87,6 +87,8 @@ curl -s http://127.0.0.1:8080/v1/sandboxes \
   -d '{"image":"node:22-bookworm-slim","steps":[{"packages":["ffmpeg"]},{"workdir":"/app"},{"run":"npm init -y"}]}'
 ```
 
+A running sandbox can be committed to an image with `POST /v1/sandboxes/{id}/snapshot`, so a prepared environment can be forked. `/workspace` and root filesystem changes are kept, secrets are not, and `{"template": "name"}` also saves it as a template. Docker backend only; see [Snapshots](website/src/docs/templates.md#snapshots).
+
 ### Compose
 
 ```bash

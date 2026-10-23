@@ -129,6 +129,43 @@ Creating from a template whose image is already built needs no build permission.
 
 `sbx_image_builds_total` on `/metrics` counts builds that missed the cache.
 
+## Snapshots
+
+A snapshot turns a running sandbox into an image, so an environment you prepared by hand (cloned a repo, installed dependencies, warmed a cache) can be forked into new sandboxes.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/snapshot \
+  -H "Authorization: Bearer $SBX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"template":"my-app-ready","description":"repo cloned, deps installed"}'
+```
+
+```json
+{
+  "id": "snap_3f9c0a1b2c3d4e5f",
+  "image": "sbx-template:snap_3f9c0a1b2c3d4e5f",
+  "sandbox_id": "sbx_...",
+  "base": "node:22-bookworm-slim",
+  "workspace": true,
+  "template": { "name": "my-app-ready", "image": "sbx-template:snap_3f9c0a1b2c3d4e5f", "...": "..." },
+  "duration_ms": 1840
+}
+```
+
+The image lands in the same `sbx-template` repository as built images. Create from it with `{"image": "sbx-template:snap_..."}`, or pass `template` on the snapshot to also save a template that copies the sandbox's CPU, memory, disk, env, backend, and network (`none` or `full`; an allow list becomes `none`). The body is optional.
+
+What is kept:
+
+- **`/workspace`**. It is a tmpfs, which a Docker commit skips, so sbx copies it into the image and every sandbox started from the image gets it back. When a volume is mounted at `/workspace`, the volume is the source of truth and nothing is copied (`workspace: false`).
+- **Root filesystem changes**, when the root filesystem is writable (`docker.read_only_rootfs: false`).
+- The base image's env, entrypoint, user, and labels.
+
+What is not kept: secrets, the sandbox's labels, its network policy, running processes, `/tmp`, and memory. Docker cannot unset an env var on an image, so a key the sandbox added on top of the base image (including every secret) is in the image with an empty value. Env you want in forks belongs in the template, which the snapshot fills from the sandbox's `env`.
+
+The sandbox must be running, not paused; it is paused for the moment of the commit. Snapshots need the same rights as a build (an admin key unless `builds.allow_sandbox_keys` is set), and saving a template needs an admin key. Only the `docker` backend snapshots (`"snapshot": true` in `GET /v1/backends`). gVisor keeps its writes inside the sandbox, where a commit cannot see them. Firecracker can boot a snapshot image, but it does not restore `/workspace` from it.
+
+Deleting a template does not delete its image, same as for built images.
+
 ## In the SDK
 
 `Sandbox.template()` is a builder for steps. Every method returns a new template, so one base can branch into variants:
@@ -148,3 +185,5 @@ await box.exec("ffmpeg -version")
 ```
 
 `Sandbox.template()` with no argument starts from the `base` template, and `Sandbox.template({ template: "python" })` from another one. Named templates with a warm pool use `client.createTemplate({ name, image, steps, setup, warm })`. See the [SDK reference](/docs/sdk/#templates-and-builds).
+
+`box.snapshot({ template: "my-app-ready" })` takes a snapshot of a sandbox, and `client.snapshot(id, options)` does the same by id.

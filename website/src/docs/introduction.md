@@ -29,7 +29,7 @@ A request flows like this: your client sends `POST /v1/sandboxes` with an API ke
 
 ## What it does not do
 
-sbx is a single-node server. It does not schedule across machines, snapshot or restore sandboxes, or ship a Kubernetes driver. Pause and resume work on every backend.
+sbx is a single-node server. It does not schedule across machines, save or restore a sandbox's memory, or ship a Kubernetes driver. A snapshot keeps the filesystem only. Pause and resume work on every backend.
 
 ## Next steps
 
