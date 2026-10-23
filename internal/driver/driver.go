@@ -163,12 +163,40 @@ type Handle struct {
 	RuntimeName string
 }
 
-// Status is a point-in-time view of one sandbox.
+// Status is a point-in-time view of one sandbox. OOMKilled and ExitCode are
+// only meaningful once State is StateStopped, and only Inspect fills them.
 type Status struct {
 	ID        string
 	SandboxID string
 	State     State
 	Image     string
+	OOMKilled bool
+	ExitCode  int
+}
+
+// EventKind is a runtime event a backend reports on its own.
+type EventKind string
+
+const (
+	// EventOOM means the kernel OOM-killed a process in the sandbox. The
+	// sandbox itself may still be running.
+	EventOOM EventKind = "oom"
+	// EventDie means the sandbox's main process exited.
+	EventDie EventKind = "die"
+)
+
+// Event is one runtime event. ID is the backend handle (container ID).
+type Event struct {
+	Kind      EventKind
+	ID        string
+	SandboxID string
+	ExitCode  int
+}
+
+// EventSource is implemented by backends that push runtime events. Watch
+// blocks until ctx ends or the stream breaks; the caller reconnects.
+type EventSource interface {
+	WatchEvents(ctx context.Context, emit func(Event)) error
 }
 
 // ExecRequest runs a process inside a sandbox. Cmd is an argv, not a shell line.
@@ -288,4 +316,26 @@ type ImageCollector interface {
 	// them. A missing image is success; one a container uses returns
 	// ErrImageInUse.
 	RemoveImage(ctx context.Context, ref string) error
+}
+
+// Stats is a point-in-time resource sample for one sandbox. CPUPercent is
+// nil when the driver could not take two samples. DiskUsedBytes and
+// DiskTotalBytes describe /workspace and are -1 when unknown.
+type Stats struct {
+	CPUSeconds       float64
+	CPUPercent       *float64
+	MemoryBytes      int64
+	MemoryLimitBytes int64
+	DiskUsedBytes    int64
+	DiskTotalBytes   int64
+	NetRxBytes       int64
+	NetTxBytes       int64
+	PIDs             int64
+}
+
+// StatsReader is implemented by drivers that can report resource usage.
+// full asks for the slower fields: a sampled CPU percentage and disk usage.
+// A cheap sample (full=false) is what /metrics takes on every scrape.
+type StatsReader interface {
+	Stats(ctx context.Context, id string, full bool) (Stats, error)
 }

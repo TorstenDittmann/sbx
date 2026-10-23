@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sbx-sdk"
+version = "0.2.1"
+description = "Python client for the sbx sandbox API."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = []
+keywords = ["sbx", "sandbox"]
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+terminal = ["websockets>=13"]
+
+[project.urls]
+Homepage = "https://github.com/TorstenDittmann/sbx/tree/main/sdk/python"
+Repository = "https://github.com/TorstenDittmann/sbx"
+Issues = "https://github.com/TorstenDittmann/sbx/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sbx"]

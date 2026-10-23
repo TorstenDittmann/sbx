@@ -192,6 +192,7 @@ func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl
 	}
 	m.Counts.Creates.Add(1)
 	m.log.Info("claimed warm sandbox", "id", sb.ID, "template", tpl.Name)
+	m.emit(ctx, EventCreated, sb, map[string]any{"warm": true})
 	go m.Replenish(context.Background())
 	return sb, true, nil
 }

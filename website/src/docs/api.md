@@ -36,7 +36,7 @@ Errors have one shape:
 
 ### Streams
 
-Streaming routes use server-sent events. Exec and process streams send `stdout` and `stderr` events with `{"data": "…"}`, then `exit` with `{"exit_code", "duration_ms", "truncated"}`, or `error` with `{"code", "message"}`.
+Streaming routes use server-sent events. [Lifecycle events](#lifecycle-events) have their own format. Exec and process streams send `stdout` and `stderr` events with `{"data": "…"}`, then `exit` with `{"exit_code", "duration_ms", "truncated"}`, or `error` with `{"code", "message"}`.
 
 ## Service
 
@@ -140,6 +140,50 @@ See [Network](/docs/network/) for how these combine.
 | `PUT /v1/sandboxes/{id}/secrets` | `{"secrets": {"NAME": "value"}}` | Sandbox. Replaces the whole map. |
 | `POST /v1/sandboxes/{id}/pause` | | Paused Sandbox |
 | `POST /v1/sandboxes/{id}/resume` | | Running Sandbox |
+| `GET /v1/sandboxes/{id}/stats` | | Resource sample, see below |
+
+`GET /v1/sandboxes/{id}/stats` samples a running or paused sandbox:
+
+```json
+{
+  "sandbox_id": "sbx_...",
+  "status": "running",
+  "sampled_at": "2026-10-23T22:10:00Z",
+  "cpu": {"usage_seconds": 12.4, "percent": 37.5, "limit_cores": 1},
+  "memory": {"used_bytes": 41943040, "limit_bytes": 536870912},
+  "disk": {"used_bytes": 2097152, "total_bytes": 1073741824, "limit_bytes": 1073741824},
+  "network": {"rx_bytes": 10240, "tx_bytes": 2048},
+  "pids": {"current": 4, "limit": 256}
+}
+```
+
+`cpu.percent` is measured over about one second, so the call takes that long. 100 means one full core. `disk` covers `/workspace` and comes from `df` inside the sandbox. Its `used_bytes` and `total_bytes` are null when that fails, for example while the sandbox is paused. `/workspace` is a tmpfs unless a volume is mounted there, so its contents also count toward `memory.used_bytes`. Reading stats does not reset the idle timeout. Firecracker sandboxes return 400 `unsupported`.
+
+### Lifecycle events
+
+`GET /v1/events` streams sandbox lifecycle events as server-sent events, so a client does not poll. A sandbox key sees its own sandboxes and an admin key sees all of them. `?sandbox=<id>` narrows the stream to one sandbox.
+
+```text
+id: 42
+event: sandbox.lost
+data: {"id":42,"type":"sandbox.lost","sandbox_id":"sbx_…","time":"…","data":{"status":"stopped","reason":"exited","exit_code":137,"oom_killed":true,"backend":"docker"}}
+```
+
+| Type | When | `data.reason` |
+|---|---|---|
+| `sandbox.created` | A create returned the sandbox. `data.warm` is true for a warm pool claim. | |
+| `sandbox.failed` | A create failed or timed out, or template setup failed. | `create failed`, `create timed out`, `setup failed` |
+| `sandbox.deleted` | `DELETE /v1/sandboxes/{id}`. | |
+| `sandbox.expired` | The reaper stopped it. | `ttl`, `idle` |
+| `sandbox.paused`, `sandbox.resumed` | Pause and resume. | |
+| `sandbox.oom` | The kernel OOM-killed a process in the sandbox. The sandbox usually keeps running. Docker backends only. | |
+| `sandbox.lost` | It stopped without sbx stopping it. `exit_code` and `oom_killed` are set when the container is still there to inspect. | `exited`, `missing` |
+
+Every event has `data.status` (the sandbox status after the event), `data.backend`, and `data.template` and `data.labels` when set.
+
+Events are stored in SQLite with ids that only grow, across restarts too. Send the last id you saw as `Last-Event-ID` (browsers' `EventSource` does this on reconnect) or `?after=<id>` and the stream resumes without a gap. `?after=0` replays everything still kept; events are pruned after `retain_stopped_seconds`. Without a cursor the stream starts with the next event. It opens with a bare `id:` line holding that starting cursor and sends a `: ping` comment every 15 seconds. A key can hold 16 streams at once.
+
+Docker backends report OOM kills and container exits as they happen. For every backend, the reaper also compares running sandboxes with the backend every `reaper_interval_seconds`, so a missed event is caught on the next sweep.
 
 ## Exec
 

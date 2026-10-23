@@ -79,6 +79,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/volumes/{id}", s.auth("sandbox", s.getVolume))
 	mux.HandleFunc("DELETE /v1/volumes/{id}", s.auth("sandbox", s.deleteVolume))
 
+	mux.HandleFunc("GET /v1/events", s.auth("sandbox", s.streamEvents))
+
 	mux.HandleFunc("POST /v1/sandboxes", s.auth("sandbox", s.createSandbox))
 	mux.HandleFunc("GET /v1/sandboxes", s.auth("sandbox", s.listSandboxes))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("sandbox", s.getSandbox))
@@ -88,6 +90,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.auth("sandbox", s.sandboxStats))
 
 	mux.HandleFunc("POST /v1/sandboxes/{id}/processes", s.auth("sandbox", s.createProcess))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/processes", s.auth("sandbox", s.listProcesses))
@@ -211,6 +214,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_image_builds_total %d\n", c.Builds.Load())
 	b.WriteString("# HELP sbx_image_gc_removed_total Unused template images removed.\n# TYPE sbx_image_gc_removed_total counter\n")
 	fmt.Fprintf(&b, "sbx_image_gc_removed_total %d\n", c.ImagesGCed.Load())
+	s.writeSandboxMetrics(r, &b)
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, b.String())

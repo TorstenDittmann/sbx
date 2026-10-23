@@ -29,7 +29,7 @@ npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -67,11 +67,12 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
   -d '{"cmd":["echo","hello"]}'
 ```
 
-The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@sbx.torsten.work/sbx`; see [Install](#install).
+The same path from the TypeScript SDK (Node 22) or the Python SDK (Python 3.9+) in this repo, with no install step. The published packages are `@sbx.torsten.work/sbx` and `sbx-sdk`; see [Install](#install).
 
 ```bash
 export SBX_URL=http://127.0.0.1:8080
 node --experimental-strip-types examples/quickstart.ts
+python3 examples/quickstart.py
 ```
 
 Built-in templates are `base` (`alpine:3.20`, 0.5 CPU, 128 MiB), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`). Without a template, the server defaults are 1 CPU, 512 MiB, and a 1024 MiB workspace.
@@ -86,6 +87,18 @@ curl -s http://127.0.0.1:8080/v1/sandboxes \
   -H "Content-Type: application/json" \
   -d '{"image":"node:22-bookworm-slim","steps":[{"packages":["ffmpeg"]},{"workdir":"/app"},{"run":"npm init -y"}]}'
 ```
+
+The same flow from the `sbx` CLI, which reads `SBX_URL` and `SBX_API_KEY` (or `data/initial_api_key` on the server host):
+
+```bash
+id=$(sbx create python --ttl 10m)
+sbx exec $id -- python -c 'print(1 + 1)'
+sbx cp ./script.py $id:script.py
+sbx shell $id
+sbx rm $id
+```
+
+`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
 
 ### Compose
 
@@ -109,7 +122,8 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - File list, upload, download, delete, and tar archives.
 - API keys (`admin` and `sandbox` scopes). Sandbox keys cannot see each other's sandboxes. A key can carry `expires_at`, and `DELETE /v1/keys/{id}` (or `sbx keys revoke --id`) revokes it at once. The API refuses to revoke the last admin key.
 - `secrets` on create, and `PUT /v1/sandboxes/{id}/secrets`. Names come back as `secret_keys`. Values are not returned by get or list. They are injected into the sandbox and into later commands. A secret name cannot also be set in `env`.
-- A reaper for TTL, idle timeout, stuck creates, and orphan containers. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
+- `GET /v1/events`: sandbox lifecycle events (`created`, `expired`, `deleted`, `oom`, `lost`, and more) as server-sent events, so clients do not poll. Events are stored and resume from `Last-Event-ID`, across restarts too. The TypeScript SDK has `client.events()`.
+- A reaper for TTL, idle timeout, stuck creates, orphan containers, and containers that exited or vanished behind sbx's back. On startup the server adopts containers that are still running and marks rows whose containers disappeared.
 - A web dashboard at `/ui/` (see [Dashboard](#dashboard)).
 - Prometheus text at `/metrics`. `/healthz` is liveness. `/readyz` stays unavailable until that startup reconcile finishes.
 - A node-wide sandbox cap (`max_sandboxes`, default 100) on top of the per-key quota, a per-key request rate limit, and a request body size limit.
@@ -145,6 +159,7 @@ go test ./...
 SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test/e2e/
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
+(cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -t .)
 ```
 
-Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.
+Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK tests are skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.

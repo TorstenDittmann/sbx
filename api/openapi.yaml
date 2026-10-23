@@ -341,6 +341,54 @@ paths:
         - $ref: "#/components/parameters/VolumeID"
       responses:
         "204": {description: Deleted}
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Stream sandbox lifecycle events
+      description: |
+        Server-Sent Events, so clients do not poll. Each event is
+        `id: <n>`, `event: <type>`, and `data:` holding an `Event` object.
+        Types are `sandbox.created`, `sandbox.failed`, `sandbox.deleted`,
+        `sandbox.expired` (reason `ttl` or `idle`), `sandbox.paused`,
+        `sandbox.resumed`, `sandbox.oom` (a process was OOM-killed; the
+        sandbox usually keeps running), and `sandbox.lost` (the sandbox
+        stopped without sbx stopping it; reason `exited` or `missing`).
+
+        Events are stored, and ids only grow, across restarts too. Send the
+        last id as `Last-Event-ID` or `after` to resume without gaps; `after=0`
+        replays everything still kept (`retain_stopped_seconds`). Without a
+        cursor the stream starts with the next event. The stream opens with a
+        bare `id:` line holding its starting cursor and sends a `: ping`
+        comment every 15 seconds. A sandbox key sees its own sandboxes; an
+        admin key sees every sandbox. At most 16 streams per key.
+      parameters:
+        - in: query
+          name: after
+          schema: {type: integer, minimum: 0}
+          description: Last event id already seen. Overrides Last-Event-ID.
+        - in: header
+          name: Last-Event-ID
+          schema: {type: integer, minimum: 0}
+        - in: query
+          name: sandbox
+          schema: {type: string}
+          description: Only events for this sandbox.
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: {$ref: "#/components/schemas/Event"}
+        "400":
+          description: Invalid cursor
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429":
+          description: Too many event streams for this key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
   /v1/sandboxes:
     get:
       operationId: listSandboxes
@@ -486,6 +534,25 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/stats:
+    get:
+      operationId: getSandboxStats
+      summary: Sample resource usage
+      description: |
+        Samples CPU, memory, `/workspace` disk, network, and process count for
+        a running or paused sandbox. The CPU percentage is measured over about
+        one second. Disk is read with `df` inside the sandbox and is null when
+        that fails, for example while the sandbox is paused. Reading stats does
+        not count as activity for the idle timeout. Returns 409 for a stopped
+        sandbox and 400 `unsupported` when the backend cannot report stats.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      responses:
+        "200":
+          description: Resource sample
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SandboxStats"}
   /v1/sandboxes/{id}/exec:
     post:
       operationId: execSandbox
@@ -944,6 +1011,34 @@ components:
       schema: {type: string}
       description: Absolute path inside the sandbox.
   schemas:
+    Event:
+      type: object
+      required: [id, type, sandbox_id, time, data]
+      properties:
+        id: {type: integer}
+        type:
+          type: string
+          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]
+        sandbox_id: {type: string}
+        time: {type: string, format: date-time}
+        data:
+          type: object
+          description: |
+            `status` is the sandbox status after the event; `backend`,
+            `template`, and `labels` are copied from the sandbox. `reason` is
+            set on expired, failed, and lost events. A lost sandbox whose
+            container exited also has `exit_code` and `oom_killed` (Docker's
+            flag: some process in it was OOM-killed at some point).
+          properties:
+            status: {type: string}
+            backend: {type: string}
+            template: {type: string}
+            labels: {type: object, additionalProperties: {type: string}}
+            reason: {type: string}
+            warm: {type: boolean}
+            exit_code: {type: integer}
+            oom_killed: {type: boolean}
+          additionalProperties: true
     Error:
       type: object
       required: [error]
@@ -1271,6 +1366,40 @@ components:
         name: {type: string}
         backend: {type: string}
         created_at: {type: string, format: date-time}
+    SandboxStats:
+      type: object
+      required: [sandbox_id, status, sampled_at, cpu, memory, disk, network, pids]
+      properties:
+        sandbox_id: {type: string}
+        status: {type: string, enum: [running, paused]}
+        sampled_at: {type: string, format: date-time}
+        cpu:
+          type: object
+          properties:
+            usage_seconds: {type: number, description: Total CPU time since start.}
+            percent: {type: [number, "null"], description: "Share of one core times 100, so 2 busy cores read 200."}
+            limit_cores: {type: number}
+        memory:
+          type: object
+          properties:
+            used_bytes: {type: integer, description: Without reclaimable page cache. Includes tmpfs contents.}
+            limit_bytes: {type: integer}
+        disk:
+          type: object
+          properties:
+            used_bytes: {type: [integer, "null"]}
+            total_bytes: {type: [integer, "null"]}
+            limit_bytes: {type: integer}
+        network:
+          type: object
+          properties:
+            rx_bytes: {type: integer}
+            tx_bytes: {type: integer}
+        pids:
+          type: object
+          properties:
+            current: {type: integer}
+            limit: {type: integer}
     Sandbox:
       type: object
       required: [id, status, backend, image, expires_at, node]

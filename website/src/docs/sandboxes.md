@@ -51,7 +51,7 @@ A create returns `201` with the sandbox once it is running. Sandbox ids look lik
 | `creating` | The server is pulling the image, building steps, or starting the container. |
 | `running` | Ready for exec, files, terminals, and previews. |
 | `paused` | Frozen with `POST /v1/sandboxes/{id}/pause`. Resume with `POST …/resume`. |
-| `stopped` | Deleted by the API or the reaper. The row is kept for a day (`retain_stopped_seconds`), then pruned. |
+| `stopped` | Deleted by the API or the reaper, or lost because its container exited or disappeared. The row is kept for a day (`retain_stopped_seconds`), then pruned. |
 | `error` | Creation failed. |
 | `warm` | Started ahead of time for a template's warm pool. Hidden from normal lists. |
 
@@ -71,6 +71,16 @@ curl -s $SBX_URL/v1/sandboxes/$ID/timeout \
 `ttl_seconds` here is the new remaining lifetime from now, up to `max_ttl_seconds`.
 
 With `idle_timeout_seconds`, the reaper also stops a sandbox that has had no activity for that long. Exec, file operations, and other calls that use the sandbox count as activity.
+
+### Events
+
+Instead of polling `GET /v1/sandboxes/{id}`, follow `GET /v1/events`. It streams `sandbox.created`, `sandbox.expired`, `sandbox.deleted`, `sandbox.oom`, `sandbox.lost`, and the other [lifecycle events](/docs/api/#lifecycle-events), and resumes from the last event id after a disconnect or a server restart.
+
+```bash
+curl -sN $SBX_URL/v1/events -H "Authorization: Bearer $SBX_API_KEY"
+```
+
+The server notices a sandbox whose container exited or was removed behind its back within one reaper interval (Docker backends at once), marks it `stopped`, and sends `sandbox.lost`.
 
 ### Restarts
 

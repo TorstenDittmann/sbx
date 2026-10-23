@@ -90,6 +90,7 @@ DELETE /v1/sandboxes/{id}                 idempotent stop
 POST   /v1/sandboxes/{id}/timeout         {"ttl_seconds": 600}
 POST   /v1/sandboxes/{id}/pause
 POST   /v1/sandboxes/{id}/resume
+GET    /v1/sandboxes/{id}/stats           cpu, memory, /workspace disk, network, pids
 POST   /v1/sandboxes/{id}/exec            wait
 POST   /v1/sandboxes/{id}/exec?stream=1   SSE: stdout, stderr, exit, error
 POST   /v1/sandboxes/{id}/processes      background command; timeout 0 means none
@@ -138,7 +139,9 @@ Defaults: bind `127.0.0.1:8080` (compose sets `SBX_ADDR=:8080`), TTL 300s (max 8
 
 ## 6. SDK
 
-`sdk/typescript` is `@sbx/sdk`. It has no runtime dependencies and uses `fetch` plus the global `WebSocket`. `Sandbox.create` reads `SBX_URL` and `SBX_API_KEY` when `process` exists. Durations such as `"5m"` are converted to seconds in the SDK; the server wants integers. A string command is run as `sh -lc`. The SDK also covers exec streaming, processes, PTY sessions, file watches, and previews. Tests run on Node and Bun. Python and Go SDKs are later.
+`sdk/typescript` is `@sbx/sdk`. It has no runtime dependencies and uses `fetch` plus the global `WebSocket`. `Sandbox.create` reads `SBX_URL` and `SBX_API_KEY` when `process` exists. Durations such as `"5m"` are converted to seconds in the SDK; the server wants integers. A string command is run as `sh -lc`. The SDK also covers exec streaming, processes, PTY sessions, file watches, and previews. Tests run on Node and Bun.
+
+`sdk/python` is `sbx-sdk`, imported as `sbx`. It mirrors the TypeScript API with snake_case names and keyword arguments, is synchronous, and uses only the standard library (`urllib`); streams are iterators. Terminals use the optional `websockets` extra. It runs on Python 3.9+, and its tests use `unittest` against a local HTTP server. A Go SDK is later.
 
 ## 7. Layout
 
@@ -150,7 +153,8 @@ internal/api/            HTTP
 internal/core/           lifecycle, reaper, templates
 internal/store/          SQLite
 internal/driver/         interface, docker, kata, firecracker, fake
-sdk/typescript/          SDK
+sdk/typescript/          TypeScript SDK
+sdk/python/              Python SDK
 examples/quickstart.ts
 website/                 static site + Dockerfile
 deploy/compose/          server compose
@@ -203,7 +207,7 @@ In rough order, none of these are stubbed in the tree:
 
 1. The in-guest agent shipped in v0.2. Firecracker dials that same framed protocol over a vsock Unix socket; the guest listens because `sbx-agent` is init and reads `/opt/sbx/guest.json`. Kata reaches the agent through Docker exec. Archives are packed in the agent when it is configured. Watches use inotify, with a poll fallback when inotify is unavailable. Snapshot/restore of a Firecracker microVM is not implemented.
 2. Egress allow-lists, public preview hosts, and bandwidth limits shipped with the network work. Firecracker enforces allow, deny, and connection limits on its tap and does not enforce bandwidth. Metadata and private-range blocking stay on by default.
-3. Python and Go SDKs. OpenAPI code generation, if it earns its keep.
+3. A Go SDK (the Python SDK shipped in `sdk/python`). OpenAPI code generation, if it earns its keep.
 4. `sbx controller` and `sbx node`, Postgres, and a scheduler. A Kubernetes driver.
 5. Firecracker snapshot/restore. The microVM driver itself is described in [firecracker.md](firecracker.md). Kata is the Docker runtime class described in [kata.md](kata.md).
 

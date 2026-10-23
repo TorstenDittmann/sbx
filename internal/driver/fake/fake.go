@@ -38,10 +38,13 @@ type Driver struct {
 	DialErr error
 	// DropDial accepts a preview connection and closes it without a response.
 	DropDial bool
+	// StatsErr fails Stats when set.
+	StatsErr error
 	// BuildErr fails BuildImage when set.
 	BuildErr error
 	builds   []driver.BuildSpec
 	images   map[string]time.Time
+	events   chan driver.Event
 	// Registry, when set, stands in for the registry on every pull: a forced
 	// pull, a build's base, and PullImage. A nil return lets the pull through.
 	Registry func(ref string, auth *driver.RegistryAuth) error
@@ -74,6 +77,8 @@ type box struct {
 	spec  driver.SandboxSpec
 	state driver.State
 	image string
+	oom   bool
+	exit  int
 }
 
 // New returns a docker-like fake that supports pause.
@@ -100,6 +105,41 @@ func New(name string) *Driver {
 		watchers: map[string][]*watch{},
 		volumes:  map[string]struct{}{},
 		images:   map[string]time.Time{},
+		events:   make(chan driver.Event, 16),
+	}
+}
+
+// Crash stops a container the way a dying main process would. oom marks it
+// OOM-killed.
+func (d *Driver) Crash(id string, oom bool, exitCode int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if b, ok := d.boxes[id]; ok {
+		b.state = driver.StateStopped
+		b.oom = oom
+		b.exit = exitCode
+	}
+}
+
+// Vanish removes a container behind the manager's back.
+func (d *Driver) Vanish(id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.boxes, id)
+}
+
+// Push queues a runtime event for WatchEvents.
+func (d *Driver) Push(ev driver.Event) { d.events <- ev }
+
+// WatchEvents delivers pushed events until ctx ends.
+func (d *Driver) WatchEvents(ctx context.Context, emit func(driver.Event)) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev := <-d.events:
+			emit(ev)
+		}
 	}
 }
 
@@ -326,7 +366,7 @@ func (d *Driver) List(context.Context) ([]driver.Status, error) {
 }
 
 func (d *Driver) status(id string, b *box) driver.Status {
-	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image}
+	return driver.Status{ID: id, SandboxID: b.spec.ID, State: b.state, Image: b.image, OOMKilled: b.oom, ExitCode: b.exit}
 }
 
 func (d *Driver) Pause(_ context.Context, id string) error {
@@ -352,6 +392,41 @@ func (d *Driver) Resume(_ context.Context, id string) error {
 	}
 	b.state = driver.StateRunning
 	return nil
+}
+
+// Stats reports fixed CPU and network numbers. Memory and disk follow the
+// spec limits and the bytes written to the sandbox's files.
+func (d *Driver) Stats(_ context.Context, id string, full bool) (driver.Stats, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.StatsErr != nil {
+		return driver.Stats{}, d.StatsErr
+	}
+	b, ok := d.boxes[id]
+	if !ok {
+		return driver.Stats{}, driver.ErrNotFound
+	}
+	var used int64
+	for _, content := range d.files[id] {
+		used += int64(len(content))
+	}
+	st := driver.Stats{
+		CPUSeconds:       1.5,
+		MemoryBytes:      32 << 20,
+		MemoryLimitBytes: int64(b.spec.MemoryMB) << 20,
+		DiskUsedBytes:    -1,
+		DiskTotalBytes:   -1,
+		NetRxBytes:       1024,
+		NetTxBytes:       2048,
+		PIDs:             3,
+	}
+	if full {
+		pct := 12.5
+		st.CPUPercent = &pct
+		st.DiskUsedBytes = used
+		st.DiskTotalBytes = int64(b.spec.DiskMB) << 20
+	}
+	return st, nil
 }
 
 // ExecCall is one recorded exec.
