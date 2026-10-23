@@ -12,7 +12,7 @@ export const sections: DocSection[] = [
 		pages: [
 			{ slug: "introduction", title: "Introduction", description: "What sbx is and how the pieces fit together." },
 			{ slug: "quickstart", title: "Quickstart", description: "Start the server, create a sandbox, and run a command." },
-			{ slug: "installation", title: "Installation", description: "Install the binaries, the container image, or the npm package." },
+			{ slug: "installation", title: "Installation", description: "Install the binaries, the container image, or an SDK." },
 		],
 	},
 	{
@@ -42,6 +42,7 @@ export const sections: DocSection[] = [
 		pages: [
 			{ slug: "api", title: "HTTP API", description: "Every route, its body, and its errors." },
 			{ slug: "sdk", title: "TypeScript SDK", description: "The @sbx.torsten.work/sbx client for Node and Bun." },
+			{ slug: "python-sdk", title: "Python SDK", description: "The sbx-sdk client for Python 3.9+." },
 		],
 	},
 ];
@@ -67,6 +68,8 @@ const languages: Record<string, string> = {
 	yaml: "yaml",
 	yml: "yaml",
 	json: "json",
+	py: "python",
+	python: "python",
 };
 
 function slugify(text: string): string {
