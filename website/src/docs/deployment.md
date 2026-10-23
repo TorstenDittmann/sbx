@@ -117,7 +117,7 @@ These proxies pass `Host` as is, so leave `network.trust_forwarded_host` off. Tu
 | `GET /metrics` | Prometheus text format. No authentication. |
 | `GET /` | Name and version. |
 
-Metrics include `sbx_info`, `sbx_sandboxes` (by status), `sbx_sandbox_creates_total`, `sbx_sandbox_deletes_total`, `sbx_sandbox_reaped_total`, `sbx_execs_total`, `sbx_exec_errors_total`, `sbx_file_ops_total`, and `sbx_image_builds_total`.
+Metrics include `sbx_info`, `sbx_sandboxes` (by status), `sbx_sandbox_creates_total`, `sbx_sandbox_deletes_total`, `sbx_sandbox_reaped_total`, `sbx_execs_total`, `sbx_exec_errors_total`, `sbx_file_ops_total`, `sbx_image_builds_total`, and `sbx_image_gc_removed_total`.
 
 `/metrics` is unauthenticated. If the API is public, block it at the proxy or scrape it on a private address.
 

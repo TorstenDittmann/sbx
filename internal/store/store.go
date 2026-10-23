@@ -348,6 +348,11 @@ CREATE TABLE IF NOT EXISTS previews (
     UNIQUE(sandbox_id, port)
 );
 
+CREATE TABLE IF NOT EXISTS built_images (
+    ref TEXT PRIMARY KEY,
+    last_used_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sandboxes_owner ON sandboxes(owner_key_id);
 CREATE TABLE IF NOT EXISTS private_images (
     ref TEXT PRIMARY KEY,

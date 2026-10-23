@@ -22,7 +22,12 @@ paths:
       security: []
       operationId: root
       summary: Service identity
+      description: |
+        A request whose Accept header includes text/html is redirected to the
+        dashboard at /ui/ while the dashboard is enabled.
       responses:
+        "302":
+          description: Browser redirect to /ui/
         "200":
           description: Service metadata
           content:
@@ -35,6 +40,7 @@ paths:
                   version: {type: string}
                   health: {type: string}
                   openapi: {type: string}
+                  dashboard: {type: string, description: Present while the dashboard is enabled}
   /healthz:
     get:
       security: []

@@ -1,6 +1,9 @@
 package docker
 
 import (
+	"context"
+	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -45,5 +48,44 @@ func TestReadBuildStream(t *testing.T) {
 	err := readBuildStream(strings.NewReader(bad))
 	if err == nil || err.Error() != "build step exited with code 127:\napk: not found" {
 		t.Fatalf("err = %q", err)
+	}
+}
+
+func TestListAndRemoveBuiltImages(t *testing.T) {
+	fd, sock := startFakeDaemon(t)
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := NewWithClient(Options{Name: "docker"}, cli)
+	ctx := context.Background()
+	fd.mu.Lock()
+	fd.images["sbx-template:aaa"] = true
+	fd.images["sbx-template:bbb"] = true
+	fd.images["alpine:3.20"] = true
+	fd.containers["cid-x"] = &fakeContainer{id: "cid-x", status: "running", body: createRequest{Image: "sbx-template:bbb"}}
+	fd.mu.Unlock()
+
+	list, err := d.ListBuiltImages(ctx, "sbx-template")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Ref < list[j].Ref })
+	if len(list) != 2 || list[0].Ref != "sbx-template:aaa" || list[1].Ref != "sbx-template:bbb" || list[0].Size != 42 || list[0].Created.Unix() != 1700000000 {
+		t.Fatalf("list = %+v", list)
+	}
+	if err := d.RemoveImage(ctx, "sbx-template:aaa"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RemoveImage(ctx, "sbx-template:aaa"); err != nil {
+		t.Fatalf("missing image: %v", err)
+	}
+	if err := d.RemoveImage(ctx, "sbx-template:bbb"); !errors.Is(err, driver.ErrImageInUse) {
+		t.Fatalf("in use: %v", err)
+	}
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	if fd.images["sbx-template:aaa"] || !fd.images["sbx-template:bbb"] || !fd.images["alpine:3.20"] {
+		t.Fatalf("images = %v", fd.images)
 	}
 }

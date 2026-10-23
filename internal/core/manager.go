@@ -93,6 +93,7 @@ type Counters struct {
 	FileOps    atomic.Int64
 	Reaped     atomic.Int64
 	Builds     atomic.Int64
+	ImagesGCed atomic.Int64
 }
 
 // Manager is safe for concurrent use.
@@ -987,6 +988,7 @@ func (m *Manager) RunReaper(ctx context.Context) {
 	interval := time.Duration(m.cfg.Limits.ReaperIntervalSeconds) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
+	var lastGC time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -997,6 +999,12 @@ func (m *Manager) RunReaper(ctx context.Context) {
 				m.log.Error("sweep failed", "err", err)
 			}
 			m.Replenish(ctx)
+			if now := m.now(); now.Sub(lastGC) >= imageGCInterval {
+				lastGC = now
+				if _, err := m.CollectImages(ctx); err != nil {
+					m.log.Error("image collection failed", "err", err)
+				}
+			}
 		}
 	}
 }

@@ -25,6 +25,9 @@ var ErrRuntimeUnavailable = errors.New("runtime unavailable")
 // ErrImage means the backend could not resolve or pull an image.
 var ErrImage = errors.New("image unavailable")
 
+// ErrImageInUse means a container still uses the image, so it was kept.
+var ErrImageInUse = errors.New("image in use")
+
 // State is the lifecycle state reported by a driver.
 type State string
 
@@ -267,4 +270,22 @@ type Builder interface {
 	// PullImage pulls ref with auth even when the daemon has it. It checks
 	// that a caller may still read an image a cached build started from.
 	PullImage(ctx context.Context, ref string, auth *RegistryAuth) error
+}
+
+// BuiltImage is an image a Builder made. Ref is its repo:tag.
+type BuiltImage struct {
+	Ref     string
+	Created time.Time
+	Size    int64
+}
+
+// ImageCollector is implemented by Builders that can list and remove the
+// images they built, so unused ones can be garbage collected.
+type ImageCollector interface {
+	// ListBuiltImages returns every tag in repo that a build produced.
+	ListBuiltImages(ctx context.Context, repo string) ([]BuiltImage, error)
+	// RemoveImage untags ref and deletes its layers if nothing else uses
+	// them. A missing image is success; one a container uses returns
+	// ErrImageInUse.
+	RemoveImage(ctx context.Context, ref string) error
 }

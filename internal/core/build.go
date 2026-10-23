@@ -123,6 +123,13 @@ func (m *Manager) buildImage(ctx context.Context, actor Actor, backend, base str
 	}
 	scripts := renderSteps(steps)
 	if len(scripts) == 0 {
+		// A create that names a built tag directly still counts as a use.
+		if strings.HasPrefix(base, buildImageRepo+":") {
+			mu := m.buildLock(base)
+			mu.Lock()
+			m.touchImage(ctx, base)
+			mu.Unlock()
+		}
 		return base, acc, true, nil
 	}
 	tag := buildTag(base, scripts)
@@ -148,6 +155,7 @@ func (m *Manager) buildImage(ctx context.Context, actor Actor, backend, base str
 		if err := m.verifyImage(ctx, backend, base, acc); err != nil {
 			return "", imageAccess{}, false, err
 		}
+		m.touchImage(ctx, tag)
 		return tag, imageAccess{}, true, nil
 	}
 	m.log.Info("building template image", "image", tag, "base", base, "steps", len(scripts))
@@ -160,7 +168,16 @@ func (m *Manager) buildImage(ctx context.Context, actor Actor, backend, base str
 		return "", imageAccess{}, false, m.asDriver(err)
 	}
 	m.Counts.Builds.Add(1)
+	m.touchImage(ctx, tag)
 	return tag, imageAccess{}, false, nil
+}
+
+// touchImage records a use of tag so image collection keeps it for
+// builds.retain_unused_seconds. The caller holds the tag's build lock.
+func (m *Manager) touchImage(ctx context.Context, tag string) {
+	if err := m.store.TouchImage(context.WithoutCancel(ctx), tag, m.now()); err != nil {
+		m.log.Warn("record image use failed", "image", tag, "err", err)
+	}
 }
 
 // builder prefers the sandbox backend. Firecracker cannot build, but it reads
