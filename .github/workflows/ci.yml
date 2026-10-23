@@ -162,6 +162,36 @@ jobs:
           bun -e 'import { parseDuration, Sandbox, SbxClient } from "./sdk/typescript/dist/index.js"; if (parseDuration("5m") !== 300) process.exit(1); if (typeof Sandbox.create !== "function" || typeof SbxClient !== "function") process.exit(1)'
           bun test --cwd sdk/typescript test
 
+  python-sdk:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: sdk tests
+        working-directory: sdk/python
+        run: PYTHONPATH=src python -m unittest discover -s tests -t . -v
+      - name: example compiles
+        run: python -m py_compile examples/quickstart.py
+      - name: build and install the wheel
+        working-directory: sdk/python
+        run: |
+          python -m pip install build
+          python -m build
+          python -m venv /tmp/wheel-venv
+          /tmp/wheel-venv/bin/pip install dist/*.whl
+          cd /tmp && /tmp/wheel-venv/bin/python -c 'from sbx import Sandbox, SbxClient, parse_duration; assert parse_duration("5m") == 300; assert callable(Sandbox.create) and SbxClient'
+      - name: types
+        if: matrix.python == '3.13'
+        working-directory: sdk/python
+        run: |
+          python -m pip install mypy
+          mypy --strict src/sbx
+
   website:
     runs-on: ubuntu-latest
     steps:

@@ -29,7 +29,7 @@ npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -67,11 +67,12 @@ curl -s http://127.0.0.1:8080/v1/sandboxes/$ID/exec \
   -d '{"cmd":["echo","hello"]}'
 ```
 
-The same path from the TypeScript SDK in this repo (Node 22, no install step). The published package is `@sbx.torsten.work/sbx`; see [Install](#install).
+The same path from the TypeScript SDK (Node 22) or the Python SDK (Python 3.9+) in this repo, with no install step. The published packages are `@sbx.torsten.work/sbx` and `sbx-sdk`; see [Install](#install).
 
 ```bash
 export SBX_URL=http://127.0.0.1:8080
 node --experimental-strip-types examples/quickstart.ts
+python3 examples/quickstart.py
 ```
 
 Built-in templates are `base` (`alpine:3.20`, 0.5 CPU, 128 MiB), `python` (`python:3.12-slim`), and `node` (`node:22-bookworm-slim`). Without a template, the server defaults are 1 CPU, 512 MiB, and a 1024 MiB workspace.
@@ -138,6 +139,7 @@ go test ./...
 SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test/e2e/
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
+(cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -t .)
 ```
 
-Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK test is skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.
+Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK tests are skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.
