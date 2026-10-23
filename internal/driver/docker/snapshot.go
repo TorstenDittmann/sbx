@@ -62,7 +62,11 @@ func (d *Driver) Snapshot(ctx context.Context, id string, spec driver.SnapshotSp
 		seed = snapshotSeedRoot + "/" + tag
 	}
 	cfg := snapshotConfig(base, ctn, seed)
-	if !spec.Workspace {
+	// A sandbox started from a snapshot carries its parent's seed in the
+	// image. It is dropped so files the sandbox deleted from /workspace do
+	// not stay readable there, and so forks of forks do not grow.
+	inherited := base.Labels[labelSnapshotWorkspace] != ""
+	if !spec.Workspace && !inherited {
 		_, err := d.client.Commit(ctx, id, spec.Tag, cfg)
 		return snapshotErr(err)
 	}
@@ -70,7 +74,19 @@ func (d *Driver) Snapshot(ctx context.Context, id string, spec driver.SnapshotSp
 	if err != nil {
 		return snapshotErr(err)
 	}
-	dockerfile := fmt.Sprintf("FROM %s\nCOPY --chown=%d:%d workspace/ %s/\n", imageID, d.opt.UID, d.opt.GID, seed)
+	var df strings.Builder
+	fmt.Fprintf(&df, "FROM %s\n", imageID)
+	if inherited {
+		fmt.Fprintf(&df, "USER root\nRUN rm -rf %s\n", snapshotSeedRoot)
+		if base.User != "" && !strings.ContainsAny(base.User, " \t\r\n") {
+			fmt.Fprintf(&df, "USER %s\n", base.User)
+		}
+	}
+	if !spec.Workspace {
+		return snapshotErr(d.client.ImageBuild(ctx, spec.Tag, []byte(df.String())))
+	}
+	fmt.Fprintf(&df, "COPY --chown=%d:%d workspace/ %s/\n", d.opt.UID, d.opt.GID, seed)
+	dockerfile := df.String()
 	pr, pw := io.Pipe()
 	go func() {
 		pw.CloseWithError(d.writeSnapshotContext(ctx, id, []byte(dockerfile), pw))

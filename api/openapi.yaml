@@ -452,7 +452,7 @@ paths:
         a template that copies the sandbox's cpu, memory, disk, env,
         backend, and network. Needs the same rights as a build; saving a
         template needs an admin key. The sandbox must be running. Supported
-        on the docker backend only.
+        on the docker backend only, and needs /bin/sh, tar, and cp in the image.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
       requestBody:

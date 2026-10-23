@@ -164,6 +164,8 @@ What is not kept: secrets, the sandbox's labels, its network policy, running pro
 
 The sandbox must be running, not paused; it is paused for the moment of the commit. Snapshots need the same rights as a build (an admin key unless `builds.allow_sandbox_keys` is set), and saving a template needs an admin key. Only the `docker` backend snapshots (`"snapshot": true` in `GET /v1/backends`). gVisor keeps its writes inside the sandbox, where a commit cannot see them. Firecracker can boot a snapshot image, but it does not restore `/workspace` from it.
 
+The copy uses `docker exec` with `/bin/sh`, `tar`, and `cp` from the image, so unlike the rest of sbx, snapshots need an image with a shell and those tools. A snapshot of a sandbox that was itself started from a snapshot replaces the parent's copy, so files deleted from `/workspace` are no longer in the new image's filesystem (its lower layers still hold them, as with any Docker image).
+
 Deleting a template does not delete its image, same as for built images.
 
 ## In the SDK

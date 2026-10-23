@@ -159,6 +159,20 @@ func TestSnapshotAgainstFakeDaemon(t *testing.T) {
 		t.Fatalf("untagged err = %v", err)
 	}
 
+	// A snapshot of a fork drops the parent's seed, even without a new copy.
+	fd.mu.Lock()
+	fd.execCode = 0
+	fd.mu.Unlock()
+	if err := d.Snapshot(ctx, h.ID, driver.SnapshotSpec{Tag: tag + "c", Base: tag}); err != nil {
+		t.Fatal(err)
+	}
+	fd.mu.Lock()
+	names = fd.builds[tag+"c"]
+	fd.mu.Unlock()
+	if len(names) != 1 || names[0] != "Dockerfile:FROM sha256:commit\nUSER root\nRUN rm -rf /var/lib/sbx-snapshot\n" {
+		t.Fatalf("context %q", names)
+	}
+
 	gv := NewWithClient(Options{Name: "gvisor", Runtime: "runsc"}, cli)
 	if gv.Capabilities().Snapshot {
 		t.Fatal("gvisor reports snapshot")

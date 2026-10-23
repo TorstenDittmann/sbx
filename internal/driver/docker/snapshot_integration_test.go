@@ -77,8 +77,8 @@ func TestIntegrationSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = d.Delete(context.Background(), again.ID) })
-	res, err = d.Exec(ctx, again.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "cat src/deep/a.txt; ls key 2>/dev/null || echo gone; echo ${TOKEN:-empty}"}, TimeoutSeconds: 20})
-	if err != nil || string(res.Stdout) != "hello\ngone\nempty\n" {
+	res, err = d.Exec(ctx, again.ID, driver.ExecRequest{Cmd: []string{"sh", "-c", "cat src/deep/a.txt; ls key 2>/dev/null || echo gone; echo ${TOKEN:-empty}; ls /var/lib/sbx-snapshot"}, TimeoutSeconds: 20})
+	if err != nil || string(res.Stdout) != "hello\ngone\nempty\n"+strings.TrimPrefix(tag2, "sbx-template:")+"\n" {
 		t.Fatalf("second fork: %q %q %v", res.Stdout, res.Stderr, err)
 	}
 }
