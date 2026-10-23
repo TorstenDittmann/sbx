@@ -210,10 +210,13 @@ func TestDriverEvents(t *testing.T) {
 
 	dock.Crash(sb.ContainerID, true, 137)
 	dock.Push(driver.Event{Kind: driver.EventDie, ID: sb.ContainerID, SandboxID: sb.ID, ExitCode: 137})
+	// The row is updated before the event is written, so wait for the event.
 	waitFor(t, func() bool {
-		row, _ := st.GetSandbox(ctx, sb.ID)
-		return row.Status == "stopped"
+		return lastEvent(t, st, sb.ID).Type == EventLost
 	})
+	if row, _ := st.GetSandbox(ctx, sb.ID); row.Status != "stopped" {
+		t.Fatalf("row %+v", row)
+	}
 	if ev := lastEvent(t, st, sb.ID); ev.Type != EventLost || ev.Data["reason"] != "exited" || ev.Data["oom_killed"] != true {
 		t.Fatalf("lost event %+v", ev)
 	}
