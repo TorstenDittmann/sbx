@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -75,6 +76,12 @@ func Accept(w http.ResponseWriter, r *http.Request) (*Conn, error) {
 
 // Dial opens a client WebSocket. Tests and same-process callers use it.
 func Dial(urlStr string) (*Conn, error) {
+	return DialHeader(urlStr, nil)
+}
+
+// DialHeader opens a client WebSocket and sends extra request headers, such
+// as Authorization. ws and http URLs use TCP; wss and https use TLS.
+func DialHeader(urlStr string, header http.Header) (*Conn, error) {
 	req, err := http.NewRequest(http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, err
@@ -84,11 +91,31 @@ func Dial(urlStr string) (*Conn, error) {
 		return nil, err
 	}
 	encoded := base64.StdEncoding.EncodeToString(key[:])
-	conn, err := net.Dial("tcp", req.URL.Host)
+	secure := req.URL.Scheme == "wss" || req.URL.Scheme == "https"
+	addr := req.URL.Host
+	if req.URL.Port() == "" {
+		port := "80"
+		if secure {
+			port = "443"
+		}
+		addr = net.JoinHostPort(req.URL.Hostname(), port)
+	}
+	var conn net.Conn
+	if secure {
+		conn, err = tls.Dial("tcp", addr, &tls.Config{ServerName: req.URL.Hostname()})
+	} else {
+		conn, err = net.Dial("tcp", addr)
+	}
 	if err != nil {
 		return nil, err
 	}
-	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n\r\n", req.URL.RequestURI(), req.Host, encoded)
+	var extra strings.Builder
+	for name, values := range header {
+		for _, v := range values {
+			fmt.Fprintf(&extra, "%s: %s\r\n", name, v)
+		}
+	}
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%s\r\n", req.URL.RequestURI(), req.Host, encoded, extra.String())
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {

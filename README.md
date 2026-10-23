@@ -87,6 +87,18 @@ curl -s http://127.0.0.1:8080/v1/sandboxes \
   -d '{"image":"node:22-bookworm-slim","steps":[{"packages":["ffmpeg"]},{"workdir":"/app"},{"run":"npm init -y"}]}'
 ```
 
+The same flow from the `sbx` CLI, which reads `SBX_URL` and `SBX_API_KEY` (or `data/initial_api_key` on the server host):
+
+```bash
+id=$(sbx create python --ttl 10m)
+sbx exec $id -- python -c 'print(1 + 1)'
+sbx cp ./script.py $id:script.py
+sbx shell $id
+sbx rm $id
+```
+
+`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
+
 ### Compose
 
 ```bash

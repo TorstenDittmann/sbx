@@ -33,7 +33,7 @@ export const sections: DocSection[] = [
 		pages: [
 			{ slug: "configuration", title: "Configuration", description: "Every setting in sbx.yaml, its environment variable, and its default." },
 			{ slug: "deployment", title: "Deployment", description: "Run sbx with Docker, systemd, and a reverse proxy." },
-			{ slug: "cli", title: "CLI", description: "sbx serve, doctor, setup, keys, and healthcheck." },
+			{ slug: "cli", title: "CLI", description: "Run the server, manage keys, and create, exec into, copy to, and remove sandboxes." },
 		],
 	},
 	{

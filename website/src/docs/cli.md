@@ -1,6 +1,6 @@
 # CLI
 
-The `sbx` binary is both the server and a small operator CLI. Every command that reads configuration accepts `--config sbx.yaml` (or `SBX_CONFIG`) and `--data-dir`.
+The `sbx` binary is the server, a small operator CLI, and a client for a running server. The operator commands read configuration and accept `--config sbx.yaml` (or `SBX_CONFIG`) and `--data-dir`. The [sandbox commands](#sandbox-commands) talk to the API instead.
 
 ```text
 sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor|kata|firecracker]
@@ -11,6 +11,17 @@ sbx keys list [--data-dir ./data]
 sbx keys revoke --id ID [--data-dir ./data]
 sbx healthcheck [--addr 127.0.0.1:8080]
 sbx version
+
+sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full] [--env K=V] [--label K=V] [--json]
+sbx ls [--status S] [--template T] [--label key:value] [-q TEXT] [--quiet] [--json]
+sbx get ID
+sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
+sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
+sbx cp SRC DST
+sbx pause ID
+sbx resume ID
+sbx ttl ID 10m
+sbx rm ID [ID...]
 ```
 
 ## serve
@@ -77,3 +88,27 @@ sbx-agent version
 ```
 
 Prints the version, git commit, and build time stamped into the binary.
+
+## Sandbox commands
+
+These commands call the HTTP API, so the server must be running. They read the server from `SBX_URL` (default `http://127.0.0.1:8080`) and the key from `SBX_API_KEY`, or from `--url` and `--key`. Without a key they read `initial_api_key` from `SBX_DATA_DIR` (default `./data`), so on the server host the first-boot admin key works with no setup.
+
+```bash
+id=$(sbx create node --ttl 30m --network full --label team=web)
+sbx cp ./app $id:app
+sbx exec --cwd app $id -- npm install
+sbx shell $id
+sbx rm $id
+```
+
+`create` prints the new id, or the whole sandbox with `--json`. The positional argument is the template, the same as `--template`. Other flags are `--image`, `--backend`, `--cpu`, `--memory` and `--disk` (MiB), `--idle-timeout`, and the repeatable `--env`, `--label`, `--secret` (all `KEY=VALUE`), and `--volume VOLUME_ID:/path`. Durations are seconds or values such as `5m`.
+
+`ls` prints a table of id, status, template (or image), backend, network, age, expiry, and labels. It takes the same filters as `GET /v1/sandboxes`; `--quiet` prints only ids, so `sbx rm $(sbx ls --quiet --label team:web)` removes a group. `get` prints one sandbox as JSON.
+
+`exec` streams stdout and stderr as the command runs and exits with the command's exit code. Flags go before the id; everything after it is the command, so its own flags are left alone. `-i` sends stdin to the command. A relative `--cwd` is under `/workspace`.
+
+`shell` opens an interactive terminal: bash when the image has it, otherwise sh. It puts the local terminal in raw mode and follows window resizes. Pass a command after `--` to run something else. Terminals need [sbx-agent](/docs/agent/).
+
+`cp` copies files and directories in either direction. One side is `ID:PATH`; a relative path is under `/workspace`. When the destination is an existing directory, the source is copied into it under its own name, like `cp -r`. A directory is sent as a tar archive, so the destination's parent must exist. `-` reads a file from stdin or writes one to stdout.
+
+`pause` and `resume` print the new status. `ttl` sets the expiry to a duration from now. `rm` deletes one or more sandboxes and prints each id it removed.
