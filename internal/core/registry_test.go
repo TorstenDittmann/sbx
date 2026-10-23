@@ -235,6 +235,17 @@ func TestSnapshotOfPrivateBaseStaysPrivate(t *testing.T) {
 	if _, err := mgr.Create(ctx, owner, CreateInput{Image: snap.Image}); err != nil {
 		t.Fatal(err)
 	}
+	// So does an image built on top of it.
+	built, err := mgr.Build(ctx, owner, BuildInput{Image: snap.Image, Steps: []store.BuildStep{{Run: "true"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create(ctx, other, CreateInput{Image: built.Image}); err == nil {
+		t.Fatal("used a build on a private snapshot without registry access")
+	}
+	if _, err := mgr.Create(ctx, owner, CreateInput{Image: built.Image}); err != nil {
+		t.Fatal(err)
+	}
 
 	pub, err := mgr.Create(ctx, owner, CreateInput{Image: "alpine:3.20"})
 	if err != nil {
