@@ -12,7 +12,7 @@ import (
 
 const maxKeyRegistries = 16
 
-var builtTagRE = regexp.MustCompile(`^` + buildImageRepo + `:[A-Za-z0-9_.-]+$`)
+var builtTagRE = regexp.MustCompile(`^` + buildImageRepo + `:[0-9a-f]{32}$`)
 
 // imageAccess is how a backend fetches one image: with which credential,
 // and whether it must ask the registry even when the daemon has a copy.
