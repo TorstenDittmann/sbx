@@ -96,8 +96,13 @@ func TestBodyLimitsNameTheSetting(t *testing.T) {
 		t.Fatal(resp.Status, body)
 	}
 
-	// A chunked body has no Content-Length; the handler enforces the limit.
-	req, err := http.NewRequest(http.MethodPost, h.srv.URL+"/v1/sandboxes/sbx_missing/files/archive?path=/workspace", io.MultiReader(strings.NewReader(strings.Repeat("x", 4096))))
+	// A chunked body has no Content-Length; the manager enforces the limit
+	// while it streams the body into the sandbox.
+	resp = h.do(t, http.MethodPost, "/v1/sandboxes", h.key, map[string]any{"image": "alpine:3.20"})
+	var sb struct{ ID string }
+	decode(t, resp, &sb)
+	resp.Body.Close()
+	req, err := http.NewRequest(http.MethodPost, h.srv.URL+"/v1/sandboxes/"+sb.ID+"/files/archive?path=/workspace", io.MultiReader(strings.NewReader(strings.Repeat("x", 4096))))
 	if err != nil {
 		t.Fatal(err)
 	}
