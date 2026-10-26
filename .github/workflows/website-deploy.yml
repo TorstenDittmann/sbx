@@ -17,7 +17,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: sbx-website-production
+  group: sbx-production
   cancel-in-progress: false
 
 jobs:
@@ -36,5 +36,5 @@ jobs:
         with:
           cluster: ${{ vars.ORCH_CLUSTER }}
           version: ${{ vars.ORCH_VERSION }}
-          app: sbx-website
+          app: sbx
           file: website/orch.pkl

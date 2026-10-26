@@ -4,7 +4,7 @@ amends "https://orch.torsten.work/pkl/v1alpha1/Application.pkl"
 // newer. Build first with `./build.sh`; the deploy workflow is
 // .github/workflows/website-deploy.yml.
 
-name = "sbx-website"
+name = "sbx"
 
 services {
   ["web"] {
