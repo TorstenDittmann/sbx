@@ -1,0 +1,40 @@
+name: Website deploy
+
+# Builds the website and deploys it with orch as a static site. Needs the
+# ORCH_CLUSTER and ORCH_VERSION repository variables and an `orch github
+# trust` for this repository.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - website/**
+      - .github/workflows/website-deploy.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: sbx-website-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - name: Build website
+        working-directory: website
+        run: bun install --frozen-lockfile && ./build.sh
+      - uses: TorstenDittmann/orch@v0.1.15
+        with:
+          cluster: ${{ vars.ORCH_CLUSTER }}
+          version: ${{ vars.ORCH_VERSION }}
+          app: sbx-website
+          file: website/orch.pkl
