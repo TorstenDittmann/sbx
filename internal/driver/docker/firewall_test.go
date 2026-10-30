@@ -30,13 +30,14 @@ func TestDestinationBlocked(t *testing.T) {
 	blocked := []string{
 		"169.254.169.254", "169.254.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255",
 		"192.168.1.1", "100.100.100.200", "::1", "fe80::1", "fd00:ec2::254",
+		"100.64.0.1", "100.101.102.103", "127.0.0.1", "0.0.0.1", "198.18.0.1", "192.0.0.170",
 	}
 	for _, raw := range blocked {
 		if !destinationBlocked(netip.MustParseAddr(raw)) {
 			t.Fatalf("%s should be blocked", raw)
 		}
 	}
-	allowed := []string{"1.1.1.1", "8.8.8.8", "172.15.255.255", "172.32.0.1", "100.100.100.201", "2001:4860:4860::8888"}
+	allowed := []string{"1.1.1.1", "8.8.8.8", "172.15.255.255", "172.32.0.1", "100.128.0.1", "198.20.0.1", "2001:4860:4860::8888"}
 	for _, raw := range allowed {
 		if destinationBlocked(netip.MustParseAddr(raw)) {
 			t.Fatalf("%s should be allowed", raw)

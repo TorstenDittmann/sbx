@@ -47,9 +47,11 @@ firecracker:
 | Pause | Firecracker `Paused` / `Resumed` |
 | Reconcile | VM records live under `data/firecracker/vms/<id>/vm.json`. On startup, a sandbox whose process is gone is marked stopped |
 
-The guest address is a `/30` in `172.31.0.0/16`. Those addresses are inside the blocked private range, so a sandbox cannot route to another sandbox or to the host's other private addresses. The tap gateway is on-link, not a forwarded destination.
+The guest address is a `/30` in `172.31.0.0/16`. Those addresses are inside the blocked private range, so a sandbox cannot route to another sandbox or to the host's other private addresses. The tap gateway is on-link, not a forwarded destination. Packets the guest sends to the host itself, through the gateway or any other host address, go through a per-tap `INPUT` chain that only lets replies in, so services listening on the host are not reachable from the guest.
 
-`ext4:/path/to/root.ext4` skips the OCI export and uses that file as the base image. sbx still copies it and writes `/opt/sbx/guest.json` before boot.
+`ext4:/path/to/root.ext4` skips the OCI export and uses that file as the base image. sbx still copies it and writes `/opt/sbx/guest.json` before boot. The path is a file on the server, so only an admin key may name it, directly or through a template it creates, and a path inside the data directory is refused.
+
+The server builds and edits the rootfs on a loop mount as root. It never follows a symlink from the image while it writes there: an entry under a symlinked directory, or an `/opt/sbx` or `/etc` that is a symlink, fails the create.
 
 ## Guest
 

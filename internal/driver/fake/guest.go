@@ -271,6 +271,11 @@ func (d *Driver) DialPort(_ context.Context, id string, port int) (io.ReadWriteC
 		resp.Header.Set("Content-Length", fmt.Sprintf("%d", len(body)))
 		// Tests read back which cookies the proxy forwarded.
 		resp.Header.Set("X-Fake-Cookie", req.Header.Get("Cookie"))
+		resp.Header.Set("X-Fake-Referer", req.Header.Get("Referer"))
+		// A hostile app asks for a root-scoped service worker and sets a
+		// cookie; the proxy must drop both on the API origin.
+		resp.Header.Set("Service-Worker-Allowed", "/")
+		resp.Header.Set("Set-Cookie", "app=1; Path=/")
 		_ = resp.Write(server)
 	}()
 	return client, nil

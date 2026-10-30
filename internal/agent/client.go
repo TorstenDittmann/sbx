@@ -61,8 +61,18 @@ func (c *Client) Close() error {
 }
 
 // Exec runs a foreground command. emit may be nil. stdin may be nil.
+//
+// The agent runs inside the sandbox, where user code can stand in for it, so
+// MaxOutput and TimeoutSeconds are enforced here as well as there.
 func (c *Client) Exec(ctx context.Context, spec ExecSpec, stdin io.Reader, emit func(kind uint8, data []byte) error) (ExecOutput, error) {
 	spec.Background = false
+	if spec.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(spec.TimeoutSeconds+5)*time.Second)
+		defer cancel()
+	}
+	sent := 0
+	truncated := false
 	s, err := c.mux.Open()
 	if err != nil {
 		return ExecOutput{}, err
@@ -99,8 +109,20 @@ func (c *Client) Exec(ctx context.Context, spec ExecSpec, stdin io.Reader, emit 
 		}
 		switch frame.Type {
 		case MsgStdout, MsgStderr:
+			data := frame.Data
+			if spec.MaxOutput > 0 {
+				if sent >= spec.MaxOutput {
+					truncated = true
+					continue
+				}
+				if sent+len(data) > spec.MaxOutput {
+					data = data[:spec.MaxOutput-sent]
+					truncated = true
+				}
+				sent += len(data)
+			}
 			if emit != nil {
-				if err := emit(frame.Type, frame.Data); err != nil {
+				if err := emit(frame.Type, data); err != nil {
 					_ = s.Send(MsgKill, nil)
 					return out, err
 				}
@@ -111,7 +133,7 @@ func (c *Client) Exec(ctx context.Context, spec ExecSpec, stdin io.Reader, emit 
 				return out, err
 			}
 			out.ExitCode = res.ExitCode
-			out.Truncated = res.Truncated
+			out.Truncated = res.Truncated || truncated
 			out.Duration = res.DurationMs
 			return out, nil
 		case MsgError:
@@ -286,6 +308,9 @@ func (c *Client) ReadFile(ctx context.Context, path string, max int) ([]byte, er
 		switch frame.Type {
 		case MsgData:
 			buf = append(buf, frame.Data...)
+			if max > 0 && len(buf) > max {
+				return nil, fmt.Errorf("file exceeds %d bytes", max)
+			}
 		case MsgOK:
 			return buf, nil
 		case MsgError:

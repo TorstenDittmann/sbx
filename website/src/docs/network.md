@@ -47,6 +47,7 @@ With the defaults, traffic from the bridge is rejected to:
 
 - `169.254.0.0/16` (link-local and cloud metadata) and `100.100.100.200/32` (Alibaba metadata)
 - RFC 1918 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+- other non-public IPv4: carrier-grade NAT `100.64.0.0/10` (Tailscale and many internal networks), `0.0.0.0/8`, `127.0.0.0/8`, `192.0.0.0/24`, and `198.18.0.0/15`
 - IPv6 link-local `fe80::/10`, unique-local `fc00::/7`, and `::1`
 
 These rules run after a sandbox's own rules, so an allow list cannot punch through them. To change them:

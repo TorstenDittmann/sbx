@@ -164,9 +164,13 @@ func MetadataPrefixes() (v4, v6 []netip.Prefix) {
 	return v4, v6
 }
 
-// PrivatePrefixes are RFC1918 and IPv6 unique-local space.
+// PrivatePrefixes are RFC1918, other non-public IPv4 space, and IPv6
+// unique-local space. 100.64.0.0/10 is carrier-grade NAT, which Tailscale and
+// many cloud and ISP internal networks use; 198.18.0.0/15 is benchmarking
+// space some appliances answer on. network.private_allow reopens any of them.
 func PrivatePrefixes() (v4, v6 []netip.Prefix) {
-	v4 = mustPrefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+	v4 = mustPrefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "0.0.0.0/8", "127.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15")
 	v6 = mustPrefixes("fc00::/7")
 	return v4, v6
 }
