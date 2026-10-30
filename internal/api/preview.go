@@ -24,6 +24,9 @@ func (s *Server) proxyPublicPath(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 		return
 	}
+	if refuseKeyInPreviewURL(w, r) {
+		return
+	}
 	prefix := "/p/" + sandboxID + "/" + strconv.Itoa(port)
 	ok, fromQuery := s.previewAllowed(r, pv)
 	if !ok {
@@ -56,6 +59,9 @@ func (s *Server) routePreviewHost(next http.Handler) http.Handler {
 		pv, found := s.mgr.PreviewByPort(sandboxID, port)
 		if !found {
 			writeErr(w, http.StatusNotFound, "not_found", "preview not found")
+			return
+		}
+		if refuseKeyInPreviewURL(w, r) {
 			return
 		}
 		ok, fromQuery := s.previewAllowed(r, pv)

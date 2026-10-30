@@ -317,15 +317,23 @@ func (s *Server) proxyPreview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 		return
 	}
-	// A browser page opened with ?access_token= can read its own URL, so the
-	// sandbox's code would see the API key. Browsers use the preview's token
-	// URL instead; API clients may still send access_token.
-	if r.URL.Query().Get("access_token") != "" && r.Header.Get("Sec-Fetch-Mode") == "navigate" {
-		writeErr(w, http.StatusBadRequest, "invalid", "open a preview in a browser with its url (preview token), not access_token")
+	if refuseKeyInPreviewURL(w, r) {
 		return
 	}
 	prefix := "/v1/sandboxes/" + r.PathValue("id") + "/previews/" + pv.ID
 	s.servePreview(w, r, pv, prefix, true, false)
+}
+
+// refuseKeyInPreviewURL rejects a browser navigation to any preview that
+// carries an API key in ?access_token=. The previewed page can read its own
+// URL, so the sandbox's code would see the key. Browsers use the preview's
+// token URL instead; API clients may still send access_token.
+func refuseKeyInPreviewURL(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Query().Get("access_token") == "" || r.Header.Get("Sec-Fetch-Mode") != "navigate" {
+		return false
+	}
+	writeErr(w, http.StatusBadRequest, "invalid", "open a preview in a browser with its url (preview token), not access_token")
+	return true
 }
 
 func (s *Server) spliceUpgrade(w http.ResponseWriter, upstream io.ReadWriteCloser, resp *http.Response) {

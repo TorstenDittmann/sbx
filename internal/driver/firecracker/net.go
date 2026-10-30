@@ -28,6 +28,7 @@ type NetSpec struct {
 	Mode         driver.NetMode
 	Allow        []string
 	Deny         []string
+	Metadata     []string
 	Blocked      []string
 	PrivateAllow []string
 	AllowList    bool
@@ -59,6 +60,11 @@ func netScript(spec NetSpec) (string, error) {
 	fmt.Fprintf(&b, "iptables -w 5 -A %s -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n", chain)
 	if spec.MaxConns > 0 {
 		fmt.Fprintf(&b, "iptables -w 5 -A %s -m connlimit --connlimit-above %d --connlimit-mask 32 --connlimit-saddr -j REJECT --reject-with icmp-host-prohibited\n", chain, spec.MaxConns)
+	}
+	// Metadata first, so a private_allow range that contains a metadata
+	// address cannot open it.
+	for _, cidr := range spec.Metadata {
+		fmt.Fprintf(&b, "iptables -w 5 -A %s -d %s -j REJECT --reject-with icmp-host-prohibited\n", chain, cidr)
 	}
 	for _, cidr := range spec.PrivateAllow {
 		fmt.Fprintf(&b, "iptables -w 5 -A %s -d %s -j RETURN\n", chain, cidr)
@@ -174,15 +180,24 @@ func resolveAllow(ctx context.Context, hosts []string, policy driver.NetPolicy, 
 }
 
 func blockedPrefixes(policy driver.NetPolicy) []string {
-	var out []string
-	if policy.BlockMetadata {
-		out = append(out, "169.254.0.0/16", "100.100.100.200/32", "fe80::/10", "::1/128")
+	return append(metadataPrefixes(policy), privatePrefixes(policy)...)
+}
+
+func metadataPrefixes(policy driver.NetPolicy) []string {
+	if !policy.BlockMetadata {
+		return nil
 	}
-	if policy.BlockPrivate {
-		v4, v6 := netpolicy.PrivatePrefixes()
-		for _, p := range append(v4, v6...) {
-			out = append(out, p.String())
-		}
+	return []string{"169.254.0.0/16", "100.100.100.200/32", "fe80::/10", "::1/128"}
+}
+
+func privatePrefixes(policy driver.NetPolicy) []string {
+	if !policy.BlockPrivate {
+		return nil
+	}
+	var out []string
+	v4, v6 := netpolicy.PrivatePrefixes()
+	for _, p := range append(v4, v6...) {
+		out = append(out, p.String())
 	}
 	return out
 }
@@ -200,10 +215,6 @@ func ipv4Only(cidrs []string) []string {
 }
 
 func privateAllowV4(raw []string) []string {
-	meta := []netip.Prefix{
-		netip.MustParsePrefix("169.254.0.0/16"),
-		netip.MustParsePrefix("100.100.100.200/32"),
-	}
 	var out []string
 	for _, item := range raw {
 		p, err := netip.ParsePrefix(item)
@@ -217,17 +228,7 @@ func privateAllowV4(raw []string) []string {
 		if !p.Addr().Is4() {
 			continue
 		}
-		p = p.Masked()
-		skip := false
-		for _, m := range meta {
-			if m.Overlaps(p) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			out = append(out, p.String())
-		}
+		out = append(out, p.Masked().String())
 	}
 	return out
 }

@@ -123,3 +123,18 @@ func TestRenderBaselineCheckMirrorsInstall(t *testing.T) {
 		}
 	}
 }
+
+// A private_allow range that contains a metadata address still opens the rest
+// of the range, and metadata stays closed because its reject comes first.
+func TestPrivateAllowAroundMetadata(t *testing.T) {
+	base := Baseline{BlockPrivate: true, BlockMetadata: true, PrivateAllow: mustPrefixes("100.64.0.0/10")}
+	script := RenderBaseline("sbx0", base)
+	meta := strings.Index(script, "-A SBX-EGRESS -d 100.100.100.200/32 -j REJECT")
+	ret := strings.Index(script, "-A SBX-EGRESS -d 100.64.0.0/10 -j RETURN")
+	if meta < 0 || ret < 0 || meta > ret {
+		t.Fatalf("want the metadata reject before the private_allow return\n%s", script)
+	}
+	if Blocked(netip.MustParseAddr("100.64.0.1"), base) || !Blocked(netip.MustParseAddr("100.100.100.200"), base) {
+		t.Fatal("Blocked disagrees with the rendered rules")
+	}
+}

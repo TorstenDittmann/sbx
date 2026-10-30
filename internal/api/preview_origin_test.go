@@ -81,9 +81,16 @@ func TestPathPreviewCannotReachTheAPIOrigin(t *testing.T) {
 	if resp = get(owner, "", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("api client with access_token: %s", resp.Status)
 	}
+	host := "3000-sbx-" + strings.TrimPrefix(created.ID, "sbx_") + ".sbx.example.com"
+	nav := map[string]string{"Sec-Fetch-Mode": "navigate"}
+	if resp = get(path+"?access_token="+h.key, "", nav); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("browser navigation to a path preview with access_token: %s", resp.Status)
+	}
+	if resp = get("/?access_token="+h.key, host, nav); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("browser navigation to a host preview with access_token: %s", resp.Status)
+	}
 
 	// Host previews have their own origin and keep their cookies.
-	host := "3000-sbx-" + strings.TrimPrefix(created.ID, "sbx_") + ".sbx.example.com"
 	resp = get("/sw.js", host, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatal(resp.Status)

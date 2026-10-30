@@ -742,3 +742,20 @@ func TestHostImageOutsideDataDir(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNetScriptMetadataBeforePrivateAllow(t *testing.T) {
+	pol := driver.NetPolicy{BlockMetadata: true, BlockPrivate: true, PrivateAllow: []string{"100.64.0.0/10"}}
+	spec := NetSpec{
+		Tap: "fc0123456789ab", HostCIDR: "172.31.0.1/30", GuestIP: "172.31.0.2", Mode: driver.NetFull,
+		Metadata: ipv4Only(metadataPrefixes(pol)), Blocked: ipv4Only(privatePrefixes(pol)), PrivateAllow: privateAllowV4(pol.PrivateAllow),
+	}
+	script, err := netScript(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := strings.Index(script, "-d 100.100.100.200/32 -j REJECT")
+	ret := strings.Index(script, "-d 100.64.0.0/10 -j RETURN")
+	if meta < 0 || ret < 0 || meta > ret {
+		t.Fatalf("want the metadata reject before the private_allow return\n%s", script)
+	}
+}
