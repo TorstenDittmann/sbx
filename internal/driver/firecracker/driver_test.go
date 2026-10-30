@@ -314,11 +314,15 @@ func TestNetworkAllowAndScripts(t *testing.T) {
 	if err != nil || !strings.Contains(full, "RETURN") {
 		t.Fatal(full, err)
 	}
+	// Traffic to the host itself goes through INPUT, not FORWARD.
+	if !strings.Contains(full, "-I INPUT 1 -i fc0123456789ab -j SBXIfc0123456789ab") || !strings.Contains(full, "-A SBXIfc0123456789ab -j REJECT") {
+		t.Fatal("no INPUT filter for the tap:\n" + full)
+	}
 	if _, err := netScript(NetSpec{Tap: "bad name"}); err == nil {
 		t.Fatal("expected tap error")
 	}
 	down := teardownScript(NetSpec{Tap: "fc0123456789ab", GuestIP: "172.31.0.2"})
-	if !strings.Contains(down, "ip link del") {
+	if !strings.Contains(down, "ip link del") || !strings.Contains(down, "-D INPUT -i fc0123456789ab -j SBXIfc0123456789ab") {
 		t.Fatal(down)
 	}
 	if _, _, _, _, err := subnet(0); err == nil {
@@ -656,5 +660,102 @@ func assertSocketOwner(t *testing.T, path string, uid, gid int) {
 	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok || int(sys.Uid) != uid || int(sys.Gid) != gid {
 		t.Fatalf("owner uid=%d gid=%d stat=%+v", uid, gid, st.Sys())
+	}
+}
+
+func TestExtractAndInjectRefuseSymlinkEscapes(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(dir, "host")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(outside, "bashrc")
+	if err := os.WriteFile(victim, []byte("safe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A file under a directory symlink that points out of the image.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	_ = tw.WriteHeader(&tar.Header{Name: "evil", Typeflag: tar.TypeSymlink, Linkname: outside})
+	_ = tw.WriteHeader(&tar.Header{Name: "evil/bashrc", Typeflag: tar.TypeReg, Mode: 0o644, Size: 5})
+	_, _ = tw.Write([]byte("owned"))
+	_ = tw.Close()
+	if err := extractTar(&buf, filepath.Join(dir, "root1")); err == nil {
+		t.Fatal("extract wrote through a symlinked directory")
+	}
+
+	// guest.json shipped as a symlink to a host file, and /opt/sbx as one.
+	root := filepath.Join(dir, "root2")
+	if err := os.MkdirAll(filepath.Join(root, "opt", "sbx"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victim, filepath.Join(root, "opt", "sbx", "guest.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInRoot(root, "opt/sbx/guest.json", strings.NewReader("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "safe" {
+		t.Fatalf("host file was overwritten: %q", got)
+	}
+	root3 := filepath.Join(dir, "root3")
+	if err := os.MkdirAll(filepath.Join(root3, "opt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root3, "opt", "sbx")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInRoot(root3, "opt/sbx/bashrc", strings.NewReader("owned"), 0o600); err == nil {
+		t.Fatal("write followed a symlinked parent")
+	}
+	if got, _ := os.ReadFile(victim); string(got) != "safe" {
+		t.Fatalf("host file was overwritten: %q", got)
+	}
+}
+
+func TestHostImageOutsideDataDir(t *testing.T) {
+	dir := t.TempDir()
+	d := &Driver{opt: Options{DataDir: filepath.Join(dir, "data")}}
+	inside := filepath.Join(dir, "data", "firecracker", "vms", "sbx_0000000000000000", "rootfs.ext4")
+	if err := os.MkdirAll(filepath.Dir(inside), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(inside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.checkHostImage(inside); err == nil {
+		t.Fatal("allowed another sandbox's disk")
+	}
+	link := filepath.Join(dir, "link.ext4")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.checkHostImage(link); err == nil {
+		t.Fatal("allowed a symlink into the data directory")
+	}
+	ok := filepath.Join(dir, "base.ext4")
+	if err := os.WriteFile(ok, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.checkHostImage(ok); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNetScriptMetadataBeforePrivateAllow(t *testing.T) {
+	pol := driver.NetPolicy{BlockMetadata: true, BlockPrivate: true, PrivateAllow: []string{"100.64.0.0/10"}}
+	spec := NetSpec{
+		Tap: "fc0123456789ab", HostCIDR: "172.31.0.1/30", GuestIP: "172.31.0.2", Mode: driver.NetFull,
+		Metadata: ipv4Only(metadataPrefixes(pol)), Blocked: ipv4Only(privatePrefixes(pol)), PrivateAllow: privateAllowV4(pol.PrivateAllow),
+	}
+	script, err := netScript(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := strings.Index(script, "-d 100.100.100.200/32 -j REJECT")
+	ret := strings.Index(script, "-d 100.64.0.0/10 -j RETURN")
+	if meta < 0 || ret < 0 || meta > ret {
+		t.Fatalf("want the metadata reject before the private_allow return\n%s", script)
 	}
 }

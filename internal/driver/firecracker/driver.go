@@ -461,7 +461,7 @@ func (d *Driver) planNet(ctx context.Context, spec driver.SandboxSpec) (*NetSpec
 	out := &NetSpec{
 		Tap: tap, HostCIDR: host, GuestIP: guestIP, GuestCIDR: guestCIDR, Gateway: gw,
 		Mode: driver.NetFull, Index: n, MaxConns: pol.MaxConns,
-		Blocked: ipv4Only(blockedPrefixes(pol)), PrivateAllow: privateAllowV4(pol.PrivateAllow),
+		Metadata: ipv4Only(metadataPrefixes(pol)), Blocked: ipv4Only(privatePrefixes(pol)), PrivateAllow: privateAllowV4(pol.PrivateAllow),
 	}
 	if len(pol.Deny) > 0 {
 		deny, err := resolveAllow(ctx, pol.Deny, pol, false, d.opt.Lookup)

@@ -60,6 +60,9 @@ func (m *Manager) Build(ctx context.Context, actor Actor, in BuildInput) (BuildR
 			return BuildResult{}, err
 		}
 	}
+	if err := checkHostImage(actor, in.Image); err != nil {
+		return BuildResult{}, err
+	}
 	base := in.Image
 	if base == "" {
 		base = tpl.Image

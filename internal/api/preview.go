@@ -24,6 +24,9 @@ func (s *Server) proxyPublicPath(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "preview not found")
 		return
 	}
+	if refuseKeyInPreviewURL(w, r) {
+		return
+	}
 	prefix := "/p/" + sandboxID + "/" + strconv.Itoa(port)
 	ok, fromQuery := s.previewAllowed(r, pv)
 	if !ok {
@@ -56,6 +59,9 @@ func (s *Server) routePreviewHost(next http.Handler) http.Handler {
 		pv, found := s.mgr.PreviewByPort(sandboxID, port)
 		if !found {
 			writeErr(w, http.StatusNotFound, "not_found", "preview not found")
+			return
+		}
+		if refuseKeyInPreviewURL(w, r) {
 			return
 		}
 		ok, fromQuery := s.previewAllowed(r, pv)
@@ -140,6 +146,14 @@ func filterCookies(header string) string {
 }
 
 func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Preview, prefix string, ownerOnly, forwardCookies bool) {
+	// A path preview runs sandbox code on the API and dashboard origin. A
+	// service worker registered there could take over /ui/ and read every
+	// key typed into it, so path previews may not register one.
+	pathPreview := prefix != ""
+	if pathPreview && r.Header.Get("Service-Worker") != "" {
+		writeErr(w, http.StatusForbidden, "forbidden", "path previews cannot register a service worker; set network.preview_domain to serve previews on their own origin")
+		return
+	}
 	if err := s.mgr.AcquirePreview(pv.SandboxID); err != nil {
 		writeManager(w, err)
 		return
@@ -190,6 +204,10 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Pr
 		out.Header.Set("Cookie", cookies)
 	}
 	out.Header.Del("X-Sbx-Preview-Token")
+	// The browser's Referer and Origin can carry ?access_token= or the API
+	// origin; the sandbox needs neither.
+	out.Header.Del("Referer")
+	out.Header.Del("Origin")
 	if !headerHasToken(r.Header, "Connection", "upgrade") {
 		stripHop(out.Header)
 	}
@@ -209,6 +227,13 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request, pv core.Pr
 	}
 	stripHop(resp.Header)
 	dropPreviewSetCookie(resp.Header)
+	// Never let a sandbox widen a service worker's scope past its preview.
+	resp.Header.Del("Service-Worker-Allowed")
+	if pathPreview {
+		// Path previews never get the browser's cookies back, so a cookie
+		// set here could only reach the API origin and other sandboxes.
+		resp.Header.Del("Set-Cookie")
+	}
 	for k, values := range resp.Header {
 		for _, v := range values {
 			w.Header().Add(k, v)

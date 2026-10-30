@@ -251,7 +251,10 @@ func packDir(w io.Writer, dir, name string) error {
 }
 
 // unpack extracts a gzip tar into dst. Entries and symlink targets that
-// would land outside dst are rejected.
+// would land outside dst are rejected. The archive comes from the sandbox, so
+// symlinks are created only after every file is written, and no file is
+// written through a symlink: a chain such as a -> . and b -> a/.. looks
+// inside dst on paper but resolves outside it.
 func unpack(r io.Reader, dst string) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -261,11 +264,13 @@ func unpack(r io.Reader, dst string) error {
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return err
 	}
+	type link struct{ name, target string }
+	var links []link
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
 			return err
@@ -284,10 +289,16 @@ func unpack(r io.Reader, dst string) error {
 		mode := os.FileMode(hdr.Mode).Perm()
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if isSymlink(target) {
+				return fmt.Errorf("archive entry %q is a symlink in the destination", hdr.Name)
+			}
 			if err := os.MkdirAll(target, mode|0o700); err != nil {
 				return err
 			}
 		case tar.TypeReg:
+			if isSymlink(target) {
+				return fmt.Errorf("archive entry %q is a symlink in the destination", hdr.Name)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -307,15 +318,31 @@ func unpack(r io.Reader, dst string) error {
 			if path.IsAbs(hdr.Linkname) || resolved == ".." || strings.HasPrefix(resolved, "../") {
 				return fmt.Errorf("archive symlink %q points outside the destination", hdr.Name)
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
-			}
+			links = append(links, link{name: name, target: hdr.Linkname})
 		}
 	}
+	for _, l := range links {
+		if throughSymlink(dst, l.name) {
+			return fmt.Errorf("archive entry %q is inside a symlinked directory", l.name)
+		}
+		target := filepath.Join(dst, filepath.FromSlash(l.name))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if st, err := os.Lstat(target); err == nil && st.IsDir() && st.Mode()&os.ModeSymlink == 0 {
+			return fmt.Errorf("archive symlink %q would replace a directory", l.name)
+		}
+		_ = os.Remove(target)
+		if err := os.Symlink(l.target, target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isSymlink(p string) bool {
+	st, err := os.Lstat(p)
+	return err == nil && st.Mode()&os.ModeSymlink != 0
 }
 
 // throughSymlink reports whether a parent directory of name inside dst is a

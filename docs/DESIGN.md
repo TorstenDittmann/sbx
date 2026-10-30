@@ -195,8 +195,9 @@ Docker, gVisor, and Kata sandboxes are created with `CapDrop: ["ALL"]`, `no-new-
 `network: full` and `network: allow` are explicit opt-ins to public egress. Sandboxes on those modes join the `sbx` bridge (`sbx0`, `172.30.0.0/16`, ICC off). IPv6 is added on a new bridge when `network.ipv6` is `on` or `auto` and the daemon has IPv6. sbx keeps an `SBX-EGRESS` chain jumped from `DOCKER-USER` and from `INPUT` for packets that arrive on `sbx0`. Per-sandbox chains run first. The baseline chain rejects:
 
 - `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+- other non-public IPv4: carrier-grade NAT `100.64.0.0/10` (Tailscale and many internal networks), `0.0.0.0/8`, `127.0.0.0/8`, `192.0.0.0/24`, and `198.18.0.0/15`
 - `169.254.0.0/16`, which covers `169.254.169.254`
-- `100.100.100.200/32` (Alibaba Cloud metadata; the rest of `100.64.0.0/10` is left open)
+- `100.100.100.200/32` (Alibaba Cloud metadata, also kept blocked when `100.64.0.0/10` is in `private_allow`)
 - when `ip6tables` has a `DOCKER-USER` chain: `fe80::/10`, `fc00::/7`, and `::1/128`
 
 The baseline is installed once per process, before the first networked container is created. A root server runs `iptables` directly. A non-root server (the usual Compose setup, which only mounts `/var/run/docker.sock`) starts a privileged `alpine:3.20` helper on the host network and host PID namespace and applies the host's `iptables` via `nsenter`. If both paths fail, create returns an error and does not start the container. Operators can set `block_private` and `block_metadata` to false. See [NETWORK.md](NETWORK.md).

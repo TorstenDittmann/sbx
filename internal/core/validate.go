@@ -69,6 +69,16 @@ func validImage(ref string) error {
 	return nil
 }
 
+// checkHostImage keeps ext4: images to admin keys. The reference names a file
+// on the server host, so a sandbox key could otherwise boot any disk image the
+// server can read. A template an admin made may still use one.
+func checkHostImage(actor Actor, ref string) error {
+	if strings.HasPrefix(ref, "ext4:") && !actor.Admin {
+		return forbidden("ext4: images name a file on the server and need an admin key")
+	}
+	return nil
+}
+
 func validTemplateName(name string) error {
 	if !nameRE.MatchString(name) {
 		return invalid("template name must match " + nameRE.String())

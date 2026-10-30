@@ -34,6 +34,10 @@ func Handler() http.Handler {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		// Path previews share this origin. This keeps a preview page that
+		// opens the dashboard from holding a handle to its window, where
+		// the browser supports it.
+		h.Set("Cross-Origin-Opener-Policy", "noopener-allow-popups")
 		if r.URL.Path == Prefix || strings.HasSuffix(r.URL.Path, ".html") {
 			h.Set("Cache-Control", "no-cache")
 		} else {

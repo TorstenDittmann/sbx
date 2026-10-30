@@ -24,7 +24,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/torstendittmann/sbx:latest
 ```
 
-**From source** (Go 1.22 or newer):
+**From source** (Go 1.26 or newer):
 
 ```bash
 git clone https://github.com/TorstenDittmann/sbx

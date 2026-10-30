@@ -28,6 +28,7 @@ type NetSpec struct {
 	Mode         driver.NetMode
 	Allow        []string
 	Deny         []string
+	Metadata     []string
 	Blocked      []string
 	PrivateAllow []string
 	AllowList    bool
@@ -37,6 +38,11 @@ type NetSpec struct {
 }
 
 func chainName(tap string) string { return "SBX" + tap }
+
+// inputChainName filters what the guest sends to the host itself. FORWARD
+// never sees those packets, so without it the guest reaches every service
+// listening on the host through the tap gateway.
+func inputChainName(tap string) string { return "SBXI" + tap }
 
 func netScript(spec NetSpec) (string, error) {
 	if !tapNameRE.MatchString(spec.Tap) {
@@ -54,6 +60,11 @@ func netScript(spec NetSpec) (string, error) {
 	fmt.Fprintf(&b, "iptables -w 5 -A %s -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n", chain)
 	if spec.MaxConns > 0 {
 		fmt.Fprintf(&b, "iptables -w 5 -A %s -m connlimit --connlimit-above %d --connlimit-mask 32 --connlimit-saddr -j REJECT --reject-with icmp-host-prohibited\n", chain, spec.MaxConns)
+	}
+	// Metadata first, so a private_allow range that contains a metadata
+	// address cannot open it.
+	for _, cidr := range spec.Metadata {
+		fmt.Fprintf(&b, "iptables -w 5 -A %s -d %s -j REJECT --reject-with icmp-host-prohibited\n", chain, cidr)
 	}
 	for _, cidr := range spec.PrivateAllow {
 		fmt.Fprintf(&b, "iptables -w 5 -A %s -d %s -j RETURN\n", chain, cidr)
@@ -74,6 +85,12 @@ func netScript(spec NetSpec) (string, error) {
 	}
 	fmt.Fprintf(&b, "iptables -w 5 -C FORWARD -i %s -j %s 2>/dev/null || iptables -w 5 -I FORWARD 1 -i %s -j %s\n", spec.Tap, chain, spec.Tap, chain)
 	fmt.Fprintf(&b, "iptables -t nat -w 5 -C POSTROUTING -s %s/32 -j MASQUERADE 2>/dev/null || iptables -t nat -w 5 -A POSTROUTING -s %s/32 -j MASQUERADE\n", spec.GuestIP, spec.GuestIP)
+	in := inputChainName(spec.Tap)
+	fmt.Fprintf(&b, "iptables -w 5 -N %s 2>/dev/null || true\n", in)
+	fmt.Fprintf(&b, "iptables -w 5 -F %s\n", in)
+	fmt.Fprintf(&b, "iptables -w 5 -A %s -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n", in)
+	fmt.Fprintf(&b, "iptables -w 5 -A %s -j REJECT --reject-with icmp-host-prohibited\n", in)
+	fmt.Fprintf(&b, "iptables -w 5 -C INPUT -i %s -j %s 2>/dev/null || iptables -w 5 -I INPUT 1 -i %s -j %s\n", spec.Tap, in, spec.Tap, in)
 	return b.String(), nil
 }
 
@@ -83,6 +100,10 @@ func teardownScript(spec NetSpec) string {
 	fmt.Fprintf(&b, "iptables -w 5 -D FORWARD -i %s -j %s 2>/dev/null || true\n", spec.Tap, chain)
 	fmt.Fprintf(&b, "iptables -w 5 -F %s 2>/dev/null || true\n", chain)
 	fmt.Fprintf(&b, "iptables -w 5 -X %s 2>/dev/null || true\n", chain)
+	in := inputChainName(spec.Tap)
+	fmt.Fprintf(&b, "iptables -w 5 -D INPUT -i %s -j %s 2>/dev/null || true\n", spec.Tap, in)
+	fmt.Fprintf(&b, "iptables -w 5 -F %s 2>/dev/null || true\n", in)
+	fmt.Fprintf(&b, "iptables -w 5 -X %s 2>/dev/null || true\n", in)
 	fmt.Fprintf(&b, "iptables -t nat -w 5 -D POSTROUTING -s %s/32 -j MASQUERADE 2>/dev/null || true\n", spec.GuestIP)
 	fmt.Fprintf(&b, "ip link del %s 2>/dev/null || true\n", spec.Tap)
 	return b.String()
@@ -159,12 +180,24 @@ func resolveAllow(ctx context.Context, hosts []string, policy driver.NetPolicy, 
 }
 
 func blockedPrefixes(policy driver.NetPolicy) []string {
-	var out []string
-	if policy.BlockMetadata {
-		out = append(out, "169.254.0.0/16", "100.100.100.200/32", "fe80::/10", "::1/128")
+	return append(metadataPrefixes(policy), privatePrefixes(policy)...)
+}
+
+func metadataPrefixes(policy driver.NetPolicy) []string {
+	if !policy.BlockMetadata {
+		return nil
 	}
-	if policy.BlockPrivate {
-		out = append(out, "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+	return []string{"169.254.0.0/16", "100.100.100.200/32", "fe80::/10", "::1/128"}
+}
+
+func privatePrefixes(policy driver.NetPolicy) []string {
+	if !policy.BlockPrivate {
+		return nil
+	}
+	var out []string
+	v4, v6 := netpolicy.PrivatePrefixes()
+	for _, p := range append(v4, v6...) {
+		out = append(out, p.String())
 	}
 	return out
 }
@@ -182,10 +215,6 @@ func ipv4Only(cidrs []string) []string {
 }
 
 func privateAllowV4(raw []string) []string {
-	meta := []netip.Prefix{
-		netip.MustParsePrefix("169.254.0.0/16"),
-		netip.MustParsePrefix("100.100.100.200/32"),
-	}
 	var out []string
 	for _, item := range raw {
 		p, err := netip.ParsePrefix(item)
@@ -199,17 +228,7 @@ func privateAllowV4(raw []string) []string {
 		if !p.Addr().Is4() {
 			continue
 		}
-		p = p.Masked()
-		skip := false
-		for _, m := range meta {
-			if m.Overlaps(p) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			out = append(out, p.String())
-		}
+		out = append(out, p.Masked().String())
 	}
 	return out
 }

@@ -2,6 +2,7 @@ package firecracker
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/TorstenDittmann/sbx/internal/driver"
 	"github.com/TorstenDittmann/sbx/internal/driver/docker"
@@ -29,6 +31,11 @@ type RootSpec struct {
 }
 
 func (d *Driver) buildRoot(ctx context.Context, spec RootSpec) error {
+	if path, ok := strings.CutPrefix(spec.Image, "ext4:"); ok {
+		if err := d.checkHostImage(path); err != nil {
+			return err
+		}
+	}
 	if d.opt.Build != nil {
 		return d.opt.Build(ctx, spec)
 	}
@@ -79,6 +86,34 @@ func buildRootfs(ctx context.Context, dockerHost, cacheDir string, spec RootSpec
 	return inject(ctx, spec.Dest, spec.Guest)
 }
 
+// checkHostImage refuses an ext4: base inside the data directory, where
+// every sandbox's disk and the rootfs cache live. Core already limits ext4:
+// to admin keys; this keeps one sandbox from booting another's disk.
+func (d *Driver) checkHostImage(path string) error {
+	if d.opt.DataDir == "" {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("%w: %s", driver.ErrImage, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("%w: %s", driver.ErrImage, err)
+	}
+	data, err := filepath.EvalSymlinks(d.opt.DataDir)
+	if err != nil {
+		data = d.opt.DataDir
+	}
+	if data, err = filepath.Abs(data); err != nil {
+		return fmt.Errorf("%w: %s", driver.ErrImage, err)
+	}
+	if resolved == data || strings.HasPrefix(resolved, data+string(os.PathSeparator)) {
+		return fmt.Errorf("%w: an ext4: image cannot be inside the data directory", driver.ErrImage)
+	}
+	return nil
+}
+
 func cacheKey(image, agentSum string, diskMB int) string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s\n%s\n%d", image, agentSum, diskMB)))
 	return hex.EncodeToString(h[:])
@@ -122,17 +157,18 @@ func buildOCI(ctx context.Context, dockerHost string, spec RootSpec, dest string
 		if err := extractTar(tf, mnt); err != nil {
 			return err
 		}
-		agentDest := filepath.Join(mnt, "opt", "sbx", "sbx-agent")
-		if err := os.MkdirAll(filepath.Dir(agentDest), 0o755); err != nil {
+		// The image decides what is on this mount, symlinks with absolute
+		// targets included, and the server writes here as root. Every write
+		// below refuses to follow a link, or it would land on the host.
+		agent, err := os.Open(spec.Agent)
+		if err != nil {
 			return err
 		}
-		if err := copyFile(spec.Agent, agentDest); err != nil {
+		defer agent.Close()
+		if err := writeInRoot(mnt, "opt/sbx/sbx-agent", agent, 0o755); err != nil {
 			return err
 		}
-		if err := os.Chmod(agentDest, 0o755); err != nil {
-			return err
-		}
-		return os.MkdirAll(filepath.Join(mnt, "workspace"), 0o755)
+		return mkdirInRoot(mnt, "workspace")
 	})
 }
 
@@ -183,24 +219,88 @@ func inject(ctx context.Context, disk string, guest []byte) error {
 		return nil
 	}
 	return withMount(ctx, disk, func(mnt string) error {
-		dir := filepath.Join(mnt, "opt", "sbx")
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := writeInRoot(mnt, "opt/sbx/guest.json", bytes.NewReader(guest), 0o600); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, "guest.json"), guest, 0o600); err != nil {
-			return err
-		}
-		resolv := filepath.Join(mnt, "etc", "resolv.conf")
-		if err := os.MkdirAll(filepath.Dir(resolv), 0o755); err != nil {
-			return err
-		}
-		// Images often ship this path as a symlink to a runtime file that is not in the export.
-		_ = os.Remove(resolv)
-		return os.WriteFile(resolv, []byte("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0o644)
+		// Images often ship this path as a symlink to a runtime file that is
+		// not in the export. writeInRoot replaces the link, never its target.
+		return writeInRoot(mnt, "etc/resolv.conf", strings.NewReader("nameserver 1.1.1.1\nnameserver 8.8.8.8\n"), 0o644)
 	})
 }
 
+// mkdirInRoot creates rel and its parents under root. It fails instead of
+// following a symlink, so a path the image controls cannot leave root.
+func mkdirInRoot(root, rel string) error {
+	_, err := parentInRoot(root, filepath.Join(rel, "x"))
+	return err
+}
+
+// parentInRoot creates the parent directories of rel under root and returns
+// the full path of rel. A parent that is a symlink or not a directory is an
+// error: on a mounted image it could point anywhere on the host.
+func parentInRoot(root, rel string) (string, error) {
+	rel = filepath.Clean(rel)
+	if rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("%w: path %q leaves the image root", driver.ErrImage, rel)
+	}
+	cur := root
+	dir := filepath.Dir(rel)
+	if dir != "." {
+		for _, part := range strings.Split(dir, string(os.PathSeparator)) {
+			cur = filepath.Join(cur, part)
+			st, err := os.Lstat(cur)
+			if os.IsNotExist(err) {
+				if err := os.Mkdir(cur, 0o755); err != nil {
+					return "", err
+				}
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+			if st.Mode()&os.ModeSymlink != 0 || !st.IsDir() {
+				return "", fmt.Errorf("%w: image path /%s is a symlink or not a directory", driver.ErrImage, strings.TrimPrefix(cur, root+string(os.PathSeparator)))
+			}
+		}
+	}
+	return filepath.Join(root, rel), nil
+}
+
+// writeInRoot writes r to rel under root. An existing symlink at rel is
+// removed rather than followed, and O_NOFOLLOW closes the gap after that.
+func writeInRoot(root, rel string, r io.Reader, mode os.FileMode) error {
+	target, err := parentInRoot(root, rel)
+	if err != nil {
+		return err
+	}
+	if st, err := os.Lstat(target); err == nil && !st.Mode().IsRegular() {
+		if st.IsDir() {
+			return fmt.Errorf("%w: image path /%s is a directory", driver.ErrImage, rel)
+		}
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, r); err != nil {
+		_ = f.Close()
+		return err
+	}
+	// OpenFile applies mode only to a new file.
+	if err := f.Chmod(mode); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 func extractTar(r io.Reader, dest string) error {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
 	tr := tar.NewReader(r)
 	var links [][2]string
 	for {
@@ -215,28 +315,18 @@ func extractTar(r io.Reader, dest string) error {
 		if !ok {
 			continue
 		}
+		rel := strings.TrimPrefix(target, dest+string(os.PathSeparator))
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, os.FileMode(hdr.Mode)|0o755); err != nil {
+			if err := mkdirInRoot(dest, rel); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				_ = f.Close()
-				return err
-			}
-			if err := f.Close(); err != nil {
+			if err := writeInRoot(dest, rel, tr, os.FileMode(hdr.Mode)&0o777); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if _, err := parentInRoot(dest, rel); err != nil {
 				return err
 			}
 			_ = os.Remove(target)
@@ -248,13 +338,24 @@ func extractTar(r io.Reader, dest string) error {
 			if !ok {
 				continue
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if _, err := parentInRoot(dest, rel); err != nil {
 				return err
 			}
 			links = append(links, [2]string{source, target})
 		}
 	}
 	for _, pair := range links {
+		// Check again at link time: a later entry may have swapped a parent
+		// for a symlink.
+		if _, err := parentInRoot(dest, strings.TrimPrefix(pair[0], dest+string(os.PathSeparator))); err != nil {
+			return err
+		}
+		if _, err := parentInRoot(dest, strings.TrimPrefix(pair[1], dest+string(os.PathSeparator))); err != nil {
+			return err
+		}
+		if st, err := os.Lstat(pair[0]); err != nil || !st.Mode().IsRegular() {
+			continue
+		}
 		_ = os.Remove(pair[1])
 		if err := os.Link(pair[0], pair[1]); err != nil {
 			return err

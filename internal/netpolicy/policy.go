@@ -164,25 +164,15 @@ func MetadataPrefixes() (v4, v6 []netip.Prefix) {
 	return v4, v6
 }
 
-// PrivatePrefixes are RFC1918 and IPv6 unique-local space.
+// PrivatePrefixes are RFC1918, other non-public IPv4 space, and IPv6
+// unique-local space. 100.64.0.0/10 is carrier-grade NAT, which Tailscale and
+// many cloud and ISP internal networks use; 198.18.0.0/15 is benchmarking
+// space some appliances answer on. network.private_allow reopens any of them.
 func PrivatePrefixes() (v4, v6 []netip.Prefix) {
-	v4 = mustPrefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
+	v4 = mustPrefixes("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"100.64.0.0/10", "0.0.0.0/8", "127.0.0.0/8", "192.0.0.0/24", "198.18.0.0/15")
 	v6 = mustPrefixes("fc00::/7")
 	return v4, v6
-}
-
-func overlapsMetadata(p netip.Prefix) bool {
-	meta4, meta6 := MetadataPrefixes()
-	metas := meta4
-	if p.Addr().Is6() {
-		metas = meta6
-	}
-	for _, m := range metas {
-		if m.Overlaps(p) {
-			return true
-		}
-	}
-	return false
 }
 
 func mustPrefixes(cidrs ...string) []netip.Prefix {
@@ -390,34 +380,33 @@ func RenderBaselineCheck(bridge string, base Baseline) string {
 	return b.String()
 }
 
-// baselineRules lists the SBX-EGRESS rule specs in order.
+// baselineRules lists the SBX-EGRESS rule specs in order. Metadata rejects
+// come before the private_allow returns, so an allowed range that contains a
+// metadata address (100.64.0.0/10 holds Alibaba's) opens everything else in
+// it and still keeps metadata closed.
 func baselineRules(reject string, base Baseline, v6 bool) []string {
+	family := func(v4, v6p []netip.Prefix) []netip.Prefix {
+		if v6 {
+			return v6p
+		}
+		return v4
+	}
 	var rules []string
+	if base.BlockMetadata {
+		for _, p := range family(MetadataPrefixes()) {
+			rules = append(rules, fmt.Sprintf("-d %s -j REJECT --reject-with %s", p.String(), reject))
+		}
+	}
 	for _, p := range base.PrivateAllow {
-		if p.Addr().Is6() != v6 || overlapsMetadata(p) {
+		if p.Addr().Is6() != v6 {
 			continue
 		}
 		rules = append(rules, fmt.Sprintf("-d %s -j RETURN", p.String()))
 	}
-	var prefixes []netip.Prefix
-	if base.BlockMetadata {
-		v4, v6p := MetadataPrefixes()
-		if v6 {
-			prefixes = append(prefixes, v6p...)
-		} else {
-			prefixes = append(prefixes, v4...)
-		}
-	}
 	if base.BlockPrivate {
-		v4, v6p := PrivatePrefixes()
-		if v6 {
-			prefixes = append(prefixes, v6p...)
-		} else {
-			prefixes = append(prefixes, v4...)
+		for _, p := range family(PrivatePrefixes()) {
+			rules = append(rules, fmt.Sprintf("-d %s -j REJECT --reject-with %s", p.String(), reject))
 		}
-	}
-	for _, p := range prefixes {
-		rules = append(rules, fmt.Sprintf("-d %s -j REJECT --reject-with %s", p.String(), reject))
 	}
 	return append(rules, "-j RETURN")
 }

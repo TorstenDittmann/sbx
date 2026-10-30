@@ -52,7 +52,7 @@ A request to a preview is let through when any of these holds:
 
 Create a public preview with `{"port": 3000, "public": true}`. A token is still returned, so you can keep using it if the operator later disables public previews.
 
-The `token` and `access_token` query parameters are stripped before the request reaches your app.
+The `token` and `access_token` query parameters, and the browser's `Referer` and `Origin` headers, are stripped before the request reaches your app. A browser navigation to the owner route `/v1/sandboxes/{id}/previews/{previewId}/` with `?access_token=` is refused, because the page could read the key from its own URL. Open previews in a browser with the token URL instead.
 
 ### The preview cookie
 
@@ -63,9 +63,9 @@ Browsers load a page's scripts, styles, and XHRs without the `?token=` that was 
 How the app's own cookies are handled depends on the URL form:
 
 - **Host previews** (`preview_domain` set): each preview has its own hostname, so the browser keeps cookies apart. sbx forwards the browser's cookies to the app, minus `sbx_preview`.
-- **Path previews** (`/p/…`): every sandbox shares the API server's origin, so one sandbox's page could read another's cookies. sbx drops all cookies on path previews.
+- **Path previews** (`/p/…`): every sandbox shares the API server's origin, so one sandbox's page could read another's cookies. sbx drops all cookies on path previews, both the browser's and any `Set-Cookie` from the app. A path preview also cannot register a service worker, and `Service-Worker-Allowed` is removed from every preview response.
 
-Use `preview_domain` for apps that need sessions or that you do not trust.
+Use `preview_domain` for apps that need sessions or that you do not trust. A path preview runs the sandbox's scripts on the same origin as the dashboard, so set `preview_domain`, ideally on a registrable domain separate from the API, before you open previews from keys you do not trust in the same browser you use for the dashboard.
 
 ## Preview domains
 

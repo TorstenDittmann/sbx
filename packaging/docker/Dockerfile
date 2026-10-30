@@ -4,7 +4,7 @@
 # linux/<arch>/sbx is always present. sbx-agent is present once
 # cmd/sbx-agent is part of the release. The entrypoint exports SBX_AGENT_BIN
 # only when that binary was copied, which is how injection works out of the box.
-FROM alpine:3.20
+FROM alpine:3.22
 RUN apk add --no-cache ca-certificates
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/sbx /usr/local/bin/sbx

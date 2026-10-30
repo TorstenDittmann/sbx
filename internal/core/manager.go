@@ -226,6 +226,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err := validLabels(in.Labels); err != nil {
 		return store.Sandbox{}, err
 	}
+	if err := checkHostImage(actor, in.Image); err != nil {
+		return store.Sandbox{}, err
+	}
 
 	var tpl store.Template
 	var err error
