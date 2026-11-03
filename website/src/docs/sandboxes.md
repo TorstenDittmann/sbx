@@ -80,6 +80,8 @@ Instead of polling `GET /v1/sandboxes/{id}`, follow `GET /v1/events`. It streams
 curl -sN $SBX_URL/v1/events -H "Authorization: Bearer $SBX_API_KEY"
 ```
 
+To receive them on your own server instead, register a [webhook](/docs/webhooks).
+
 The server notices a sandbox whose container exited or was removed behind its back within one reaper interval (Docker backends at once), marks it `stopped`, and sends `sandbox.lost`.
 
 ### Restarts

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -49,6 +50,17 @@ func Volume() string {
 // image tag, so it stays within Docker's tag alphabet.
 func Snapshot() string {
 	return "snap_" + hex.EncodeToString(random(8))
+}
+
+// Webhook is an id of the form wh_<16 hex chars>.
+func Webhook() string {
+	return "wh_" + hex.EncodeToString(random(8))
+}
+
+// WebhookSecret returns a signing secret in the Standard Webhooks format:
+// "whsec_" followed by base64 of 32 random bytes.
+func WebhookSecret() string {
+	return "whsec_" + base64.StdEncoding.EncodeToString(random(32))
 }
 
 // Hash is the sha256 hex digest of an API key.

@@ -30,6 +30,7 @@ type Config struct {
 	Auth        AuthConfig
 	Network     NetworkConfig
 	Builds      BuildConfig
+	Webhooks    WebhookConfig
 	// Registries are image registry credentials used for every key. A key's
 	// own credential for the same server takes precedence.
 	Registries []Registry
@@ -120,6 +121,18 @@ type BuildConfig struct {
 	RetainUnusedSeconds int
 }
 
+// WebhookConfig controls lifecycle event webhooks. Deliveries come from the
+// sbx server itself, so private and loopback addresses are refused unless
+// AllowPrivate is set; network.private_allow also reopens listed ranges.
+// Cloud metadata and link-local addresses are always refused.
+type WebhookConfig struct {
+	AllowPrivate bool
+	// MaxPerKey caps how many webhooks one API key may register.
+	MaxPerKey int
+	// TimeoutSeconds bounds one delivery attempt.
+	TimeoutSeconds int
+}
+
 // AuthConfig optionally pins the first API key.
 type AuthConfig struct {
 	BootstrapKey string
@@ -207,6 +220,10 @@ func Default() Config {
 			TimeoutSeconds:      1200,
 			RetainUnusedSeconds: 7 * 86400,
 		},
+		Webhooks: WebhookConfig{
+			MaxPerKey:      10,
+			TimeoutSeconds: 10,
+		},
 	}
 }
 
@@ -233,6 +250,7 @@ type fileConfig struct {
 	Auth        *fileAuth        `yaml:"auth"`
 	Network     *fileNetwork     `yaml:"network"`
 	Builds      *fileBuilds      `yaml:"builds"`
+	Webhooks    *fileWebhooks    `yaml:"webhooks"`
 	Registries  []fileRegistry   `yaml:"registries"`
 }
 
@@ -270,6 +288,12 @@ type fileBuilds struct {
 	AllowSandboxKeys    *bool `yaml:"allow_sandbox_keys"`
 	TimeoutSeconds      *int  `yaml:"timeout_seconds"`
 	RetainUnusedSeconds *int  `yaml:"retain_unused_seconds"`
+}
+
+type fileWebhooks struct {
+	AllowPrivate   *bool `yaml:"allow_private"`
+	MaxPerKey      *int  `yaml:"max_per_key"`
+	TimeoutSeconds *int  `yaml:"timeout_seconds"`
 }
 
 type fileDocker struct {
@@ -424,6 +448,11 @@ func (f fileConfig) apply(cfg *Config) {
 		setInt(&cfg.Builds.TimeoutSeconds, b.TimeoutSeconds)
 		setInt(&cfg.Builds.RetainUnusedSeconds, b.RetainUnusedSeconds)
 	}
+	if wh := f.Webhooks; wh != nil {
+		setBool(&cfg.Webhooks.AllowPrivate, wh.AllowPrivate)
+		setInt(&cfg.Webhooks.MaxPerKey, wh.MaxPerKey)
+		setInt(&cfg.Webhooks.TimeoutSeconds, wh.TimeoutSeconds)
+	}
 	if a := f.Auth; a != nil {
 		setString(&cfg.Auth.BootstrapKey, a.BootstrapKey)
 	}
@@ -501,6 +530,9 @@ func applyEnv(cfg *Config) {
 	envBool(&cfg.Builds.AllowSandboxKeys, "SBX_BUILDS_ALLOW_SANDBOX_KEYS")
 	envInt(&cfg.Builds.TimeoutSeconds, "SBX_BUILD_TIMEOUT_SECONDS")
 	envInt(&cfg.Builds.RetainUnusedSeconds, "SBX_BUILD_RETAIN_UNUSED_SECONDS")
+	envBool(&cfg.Webhooks.AllowPrivate, "SBX_WEBHOOKS_ALLOW_PRIVATE")
+	envInt(&cfg.Webhooks.MaxPerKey, "SBX_WEBHOOKS_MAX_PER_KEY")
+	envInt(&cfg.Webhooks.TimeoutSeconds, "SBX_WEBHOOK_TIMEOUT_SECONDS")
 }
 
 // Validate checks the resolved configuration.
@@ -584,6 +616,12 @@ func (c Config) Validate() error {
 	}
 	if c.Builds.RetainUnusedSeconds != 0 && c.Builds.RetainUnusedSeconds < 3600 {
 		return fmt.Errorf("builds.retain_unused_seconds must be 0 (keep forever) or >= 3600")
+	}
+	if c.Webhooks.MaxPerKey < 0 {
+		return fmt.Errorf("webhooks.max_per_key must be >= 0")
+	}
+	if c.Webhooks.TimeoutSeconds < 1 || c.Webhooks.TimeoutSeconds > 60 {
+		return fmt.Errorf("webhooks.timeout_seconds must be between 1 and 60")
 	}
 	if c.Network.PreviewMaxStreams < 1 {
 		return fmt.Errorf("preview_max_streams must be >= 1")

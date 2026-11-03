@@ -117,6 +117,8 @@ type Manager struct {
 	evMu      sync.Mutex
 	evWake    chan struct{}
 	evStreams map[string]int
+	// wh tracks webhook deliveries in flight and retries.
+	wh *webhookState
 }
 
 // New builds a manager. drivers is keyed by backend name ("docker", "gvisor").
@@ -130,6 +132,7 @@ func New(cfg config.Config, st *store.Store, drivers map[string]driver.Driver, l
 		previews:  map[string]Preview{},
 		evWake:    make(chan struct{}),
 		evStreams: map[string]int{},
+		wh:        newWebhookState(),
 	}
 }
 
@@ -1006,6 +1009,7 @@ func (m *Manager) reapOrphans(ctx context.Context) {
 func (m *Manager) RunReaper(ctx context.Context) {
 	m.RestoreNetworks(ctx)
 	m.WatchDrivers(ctx)
+	go m.RunWebhooks(ctx)
 	interval := time.Duration(m.cfg.Limits.ReaperIntervalSeconds) * time.Second
 	t := time.NewTicker(interval)
 	defer t.Stop()
