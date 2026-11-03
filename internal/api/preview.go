@@ -104,7 +104,7 @@ func (s *Server) previewAllowed(r *http.Request, pv core.Preview) (ok bool, from
 	if err != nil || !key.HasScope("sandbox") {
 		return false, ""
 	}
-	_, err = s.mgr.Get(r.Context(), core.Actor{KeyID: key.ID, Admin: key.Admin()}, pv.SandboxID)
+	_, err = s.mgr.Get(r.Context(), actorOf(key), pv.SandboxID)
 	return err == nil, ""
 }
 

@@ -51,6 +51,29 @@ type APIKey struct {
 	// RevokedAt is set once the key has been revoked. A revoked key never
 	// authenticates again.
 	RevokedAt *time.Time
+	// Project, when set, groups the key with every other key of the same
+	// project: each sees and, with the sandbox scope, uses the sandboxes and
+	// volumes the others created. It is fixed when the key is created.
+	Project string
+	// Quota limits what the key's live sandboxes may hold at once.
+	Quota KeyQuota
+}
+
+// KeyQuota caps the sandboxes one key may hold at once. Zero fields fall back
+// to the server: MaxSandboxes to limits.max_sandboxes_per_key, MaxCPU and
+// MaxMemoryMB to no total limit (each sandbox is still capped by the server).
+type KeyQuota struct {
+	MaxSandboxes int     `json:"max_sandboxes,omitempty"`
+	MaxCPU       float64 `json:"max_cpu,omitempty"`
+	MaxMemoryMB  int     `json:"max_memory_mb,omitempty"`
+}
+
+// Usage is what one key's live sandboxes hold: those creating, running,
+// paused, or hibernated, since each keeps its reservation.
+type Usage struct {
+	Sandboxes int
+	CPU       float64
+	MemoryMB  int
 }
 
 // RegistryCred is one registry credential. Server is a normalized host.
@@ -79,10 +102,43 @@ func (k APIKey) Usable(now time.Time) bool {
 	return k.ExpiresAt == nil || now.Before(*k.ExpiresAt)
 }
 
-// HasScope reports whether the key may perform an action. admin implies every scope.
+// Scopes from the most to the least privileged. Each implies the ones after it.
+const (
+	ScopeAdmin   = "admin"
+	ScopeSandbox = "sandbox"
+	ScopeRead    = "read"
+)
+
+var scopeRank = map[string]int{ScopeRead: 1, ScopeSandbox: 2, ScopeAdmin: 3}
+
+// ValidScope reports whether s is a known scope.
+func ValidScope(s string) bool {
+	return scopeRank[s] > 0
+}
+
+// ValidProject accepts 1 to 64 of [A-Za-z0-9._-], starting with a letter or digit.
+func ValidProject(p string) bool {
+	if p == "" || len(p) > 64 {
+		return false
+	}
+	for i, c := range p {
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alnum && (i == 0 || (c != '.' && c != '_' && c != '-')) {
+			return false
+		}
+	}
+	return true
+}
+
+// HasScope reports whether the key may perform an action. admin implies
+// sandbox, and sandbox implies read.
 func (k APIKey) HasScope(scope string) bool {
+	want := scopeRank[scope]
+	if want == 0 {
+		return false
+	}
 	for _, s := range k.Scopes {
-		if s == "admin" || s == scope {
+		if scopeRank[s] >= want {
 			return true
 		}
 	}
@@ -125,7 +181,9 @@ type BuildStep struct {
 // SystemOwner is the owner of warm-pool sandboxes. They do not count toward a key's quota.
 const SystemOwner = "sbx-system"
 
-// Sandbox is one sandbox row. Status is creating, running, paused, stopped, error, or warm.
+// Sandbox is one sandbox row. Status is creating, running, paused,
+// hibernated, stopped, error, or warm. A hibernated sandbox has no container:
+// its state is in SnapshotImage until it is woken.
 type Sandbox struct {
 	ID                 string
 	Template           string
@@ -148,11 +206,18 @@ type Sandbox struct {
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
 	IdleTimeoutSeconds int
-	LastActivityAt     time.Time
-	FinishedAt         *time.Time
-	ContainerID        string
-	Error              string
-	Mounts             []Mount
+	// IdleAction is what the reaper does once IdleTimeoutSeconds pass
+	// without activity: stop (the default), pause, or hibernate.
+	IdleAction     string
+	LastActivityAt time.Time
+	FinishedAt     *time.Time
+	ContainerID    string
+	Error          string
+	Mounts         []Mount
+	// SnapshotImage is the hibernation snapshot the sandbox was saved to.
+	// While hibernated there is no container and a wake starts one from
+	// it; after the wake the container keeps running from it.
+	SnapshotImage string
 }
 
 // Mount records a volume attached to a sandbox.
@@ -179,7 +244,9 @@ type SandboxFilter struct {
 	Template string
 	Query    string
 	OwnerID  string
-	Labels   map[string]string
+	// Project, with OwnerID, also selects sandboxes of every key in the project.
+	Project string
+	Labels  map[string]string
 }
 
 // Store is a process-local SQLite database.
@@ -225,10 +292,14 @@ func migrate(db *sql.DB) error {
 		{"sandboxes", "max_conns", `ALTER TABLE sandboxes ADD COLUMN max_conns INTEGER NOT NULL DEFAULT 0`},
 		{"sandboxes", "mounts_json", `ALTER TABLE sandboxes ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'`},
 		{"sandboxes", "secrets_json", `ALTER TABLE sandboxes ADD COLUMN secrets_json TEXT NOT NULL DEFAULT '{}'`},
+		{"sandboxes", "idle_action", `ALTER TABLE sandboxes ADD COLUMN idle_action TEXT NOT NULL DEFAULT 'stop'`},
+		{"sandboxes", "snapshot_image", `ALTER TABLE sandboxes ADD COLUMN snapshot_image TEXT NOT NULL DEFAULT ''`},
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
 		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at INTEGER`},
 		{"api_keys", "revoked_at", `ALTER TABLE api_keys ADD COLUMN revoked_at INTEGER`},
 		{"api_keys", "registries_json", `ALTER TABLE api_keys ADD COLUMN registries_json TEXT NOT NULL DEFAULT '[]'`},
+		{"api_keys", "project", `ALTER TABLE api_keys ADD COLUMN project TEXT NOT NULL DEFAULT ''`},
+		{"api_keys", "quota_json", `ALTER TABLE api_keys ADD COLUMN quota_json TEXT NOT NULL DEFAULT '{}'`},
 		{"templates", "setup_json", `ALTER TABLE templates ADD COLUMN setup_json TEXT NOT NULL DEFAULT '[]'`},
 		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
@@ -323,7 +394,9 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     container_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
     mounts_json TEXT NOT NULL DEFAULT '[]',
-    secrets_json TEXT NOT NULL DEFAULT '{}'
+    secrets_json TEXT NOT NULL DEFAULT '{}',
+    idle_action TEXT NOT NULL DEFAULT 'stop',
+    snapshot_image TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS volumes (
@@ -402,10 +475,38 @@ func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), registriesJSON(k.Registries), millis(k.CreatedAt), nullMillis(k.ExpiresAt))
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, expires_at, project, quota_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), registriesJSON(k.Registries), millis(k.CreatedAt), nullMillis(k.ExpiresAt),
+		k.Project, mustJSON(k.Quota))
 	return err
+}
+
+// SetKeyQuota replaces a key's quota.
+func (s *Store) SetKeyQuota(ctx context.Context, id string, q KeyQuota) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET quota_json = ? WHERE id = ?`, mustJSON(q), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// KeyProject returns the project of key id, or "" when it has none or does
+// not exist.
+func (s *Store) KeyProject(ctx context.Context, id string) (string, error) {
+	var p string
+	err := s.db.QueryRowContext(ctx, `SELECT project FROM api_keys WHERE id = ?`, id).Scan(&p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return p, err
 }
 
 // SetKeyRegistries replaces a key's registry credentials.
@@ -470,7 +571,7 @@ func (s *Store) CountKeys(ctx context.Context) (int, error) {
 // KeyByHash looks up a key by the digest of its secret.
 func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys WHERE key_hash = ?`, hash)
 	return scanKey(row)
 }
@@ -478,7 +579,7 @@ func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 // KeyByID loads one key. The secret is not included.
 func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys WHERE id = ?`, id)
 	return scanKey(row)
 }
@@ -486,7 +587,7 @@ func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 // ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
 func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -614,12 +715,14 @@ func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
 			id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
 			env_json, network, allow_json, deny_json, egress_kbps, max_conns,
 			labels_json, owner_key_id, created_at, expires_at,
-			idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json,
+			idle_action, snapshot_image
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sb.ID, sb.Template, sb.Image, sb.Backend, sb.Status, sb.CPU, sb.MemoryMB, sb.DiskMB, sb.PIDs,
 		mustJSON(sb.Env), sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns,
 		mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
-		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mountsJSON(sb.Mounts), mustJSON(sb.Secrets))
+		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mountsJSON(sb.Mounts), mustJSON(sb.Secrets),
+		idleAction(sb.IdleAction), sb.SnapshotImage)
 	return err
 }
 
@@ -636,10 +739,10 @@ func (s *Store) UpdateSandboxFrom(ctx context.Context, sb Sandbox, from ...strin
 	q := `
 		UPDATE sandboxes SET
 			status = ?, expires_at = ?, idle_timeout_seconds = ?, last_activity_at = ?,
-			finished_at = ?, container_id = ?, error = ?, labels_json = ?
+			finished_at = ?, container_id = ?, error = ?, labels_json = ?, snapshot_image = ?
 		WHERE id = ?`
 	args := []any{sb.Status, millis(sb.ExpiresAt), sb.IdleTimeoutSeconds, millis(sb.LastActivityAt),
-		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.ID}
+		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.SnapshotImage, sb.ID}
 	if len(from) > 0 {
 		q += ` AND status IN (?` + strings.Repeat(`, ?`, len(from)-1) + `)`
 		for _, st := range from {
@@ -695,8 +798,9 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 		args = append(args, f.Template)
 	}
 	if f.OwnerID != "" {
-		q += ` AND owner_key_id = ?`
-		args = append(args, f.OwnerID)
+		c, a := ownerClause(f.OwnerID, f.Project)
+		q += ` AND ` + c
+		args = append(args, a...)
 	}
 	q += ` ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -732,18 +836,41 @@ func (s *Store) CountActive(ctx context.Context, ownerID string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sandboxes
-		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&n)
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused', 'hibernated')`, ownerID).Scan(&n)
 	return n, err
 }
 
-// ListDue returns sandboxes the reaper should stop.
+// UsageOf sums what an owner's live sandboxes hold. Hibernated sandboxes
+// count too: a wake brings their CPU and memory back without a quota check.
+func (s *Store) UsageOf(ctx context.Context, ownerID string) (Usage, error) {
+	var u Usage
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(cpu), 0), COALESCE(SUM(memory_mb), 0) FROM sandboxes
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused', 'hibernated')`, ownerID).Scan(&u.Sandboxes, &u.CPU, &u.MemoryMB)
+	return u, err
+}
+
+// ownerClause selects rows owned by owner, or by any key of project when
+// project is set.
+func ownerClause(owner, project string) (string, []any) {
+	if project == "" {
+		return `owner_key_id = ?`, []any{owner}
+	}
+	return `(owner_key_id = ? OR owner_key_id IN (SELECT id FROM api_keys WHERE project = ?))`, []any{owner, project}
+}
+
+// ListDue returns sandboxes the reaper should act on: past their TTL, idle,
+// or stuck creating. An idle sandbox whose idle action is pause or hibernate
+// is due only while it is running; once paused or hibernated only its TTL
+// applies.
 func (s *Store) ListDue(ctx context.Context, now time.Time, creatingBefore time.Time) ([]Sandbox, error) {
 	rows, err := s.db.QueryContext(ctx, sandboxSelect+`
 		WHERE (
-			status IN ('running', 'paused') AND (
-				expires_at <= ? OR
-				(idle_timeout_seconds > 0 AND last_activity_at + idle_timeout_seconds * 1000 <= ?)
-			)
+			status IN ('running', 'paused', 'hibernated') AND expires_at <= ?
+		) OR (
+			status IN ('running', 'paused') AND
+			idle_timeout_seconds > 0 AND last_activity_at + idle_timeout_seconds * 1000 <= ? AND
+			(idle_action = 'stop' OR status = 'running')
 		) OR (
 			status = 'creating' AND created_at <= ?
 		)`, millis(now), millis(now), millis(creatingBefore))
@@ -797,7 +924,8 @@ const sandboxSelect = `
 SELECT id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
        env_json, network, allow_json, deny_json, egress_kbps, max_conns,
        labels_json, owner_key_id, created_at, expires_at,
-       idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json
+       idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json,
+       idle_action, snapshot_image
 FROM sandboxes`
 
 // UpdateSecrets replaces the secret map for one sandbox.
@@ -822,10 +950,10 @@ type scanner interface {
 
 func scanKey(row scanner) (APIKey, error) {
 	var k APIKey
-	var scopes, network, registries string
+	var scopes, network, registries, quota string
 	var created int64
 	var last, expires, revoked sql.NullInt64
-	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &registries, &created, &last, &expires, &revoked)
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &registries, &created, &last, &expires, &revoked, &k.Project, &quota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
 	}
@@ -842,6 +970,11 @@ func scanKey(row scanner) (APIKey, error) {
 	}
 	if registries != "" && registries != "[]" {
 		if err := json.Unmarshal([]byte(registries), &k.Registries); err != nil {
+			return APIKey{}, err
+		}
+	}
+	if quota != "" && quota != "{}" {
+		if err := json.Unmarshal([]byte(quota), &k.Quota); err != nil {
 			return APIKey{}, err
 		}
 	}
@@ -923,6 +1056,7 @@ func scanSandbox(row scanner) (Sandbox, error) {
 		&sb.ID, &sb.Template, &sb.Image, &sb.Backend, &sb.Status, &sb.CPU, &sb.MemoryMB, &sb.DiskMB, &sb.PIDs,
 		&env, &sb.Network, &allow, &deny, &sb.EgressKbps, &sb.MaxConns, &labels, &sb.OwnerKeyID, &created, &expires,
 		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error, &mounts, &secrets,
+		&sb.IdleAction, &sb.SnapshotImage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Sandbox{}, ErrNotFound
@@ -1050,4 +1184,53 @@ func ParseLabelQuery(values []string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// idleAction stores the default for an unset idle action.
+func idleAction(a string) string {
+	if a == "" {
+		return "stop"
+	}
+	return a
+}
+
+// HibernateSandbox records that a running sandbox was saved to image and its
+// container is about to be removed. It only applies while the row is still
+// running with the activity time the caller saw, so a request that touched
+// the sandbox during the snapshot keeps it running.
+func (s *Store) HibernateSandbox(ctx context.Context, id, image string, activity time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET status = 'hibernated', container_id = '', snapshot_image = ?
+		WHERE id = ? AND status = 'running' AND last_activity_at = ?`, image, id, millis(activity))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateNetwork replaces the egress policy of a sandbox that is still running
+// or paused. A sandbox that stopped meanwhile returns ErrNotFound.
+func (s *Store) UpdateNetwork(ctx context.Context, sb Sandbox) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET network = ?, allow_json = ?, deny_json = ?, egress_kbps = ?, max_conns = ?
+		WHERE id = ? AND status IN ('running', 'paused')`,
+		sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns, sb.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

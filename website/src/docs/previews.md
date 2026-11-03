@@ -87,6 +87,19 @@ sbx picks the preview from the `Host` header. It ignores `X-Forwarded-Host` unle
 
 Each preview allows up to 64 concurrent streams (`network.preview_max_streams`), tightened by the sandbox's `max_connections`. The proxy also stays under the sandbox's `egress_kbps`. WebSocket upgrades are spliced through; other hop-by-hop headers are stripped.
 
+## From the CLI and the dashboard
+
+```bash
+url=$(sbx preview $ID 3000)          # private: the URL carries the token
+sbx preview $ID 8080 --public
+sbx preview ls $ID
+sbx preview rm $ID prv_0a1b2c3d4e5f6a7b
+```
+
+The URL goes to stdout and the preview id and token to stderr. See [CLI](/docs/cli/#sandbox-commands).
+
+In the [dashboard](/docs/dashboard/), a sandbox's **Previews** tab creates a preview for a port, shows the token URL once with **Copy** and **Open**, lists the sandbox's previews, and deletes them.
+
 ## In the SDK
 
 ```ts
@@ -98,3 +111,13 @@ const response = await box.previewFetch(preview.id, "/index.html")
 ```
 
 `previewFetch` goes through the authenticated `/v1` proxy with your API key.
+
+The Python SDK has the same calls:
+
+```python
+box.start_process(["python", "-m", "http.server", "3000"], timeout=0)
+preview = box.create_preview(3000)
+print(preview.public_url, preview.token)
+
+res = box.preview_fetch(preview.id, "/index.html")
+```

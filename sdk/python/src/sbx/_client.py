@@ -28,6 +28,7 @@ from ._duration import Duration, parse_duration
 from ._terminal import TerminalSession, connect_websocket
 from ._types import (
     Backend,
+    IdleAction,
     BackendInfo,
     BuildInfo,
     BuildStep,
@@ -39,6 +40,7 @@ from ._types import (
     FileList,
     KeyInfo,
     KeyNetworkPolicy,
+    KeyQuota,
     MountArg,
     NetworkArg,
     NetworkPolicy,
@@ -52,6 +54,7 @@ from ._types import (
     TerminalInfo,
     VolumeInfo,
     VolumeMount,
+    WhoAmI,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +95,12 @@ def _to_bytes(content: Content) -> bytes:
     if isinstance(content, str):
         return content.encode("utf-8")
     return bytes(content)
+
+
+def _quota(quota: Union[KeyQuota, Mapping[str, Any]]) -> Dict[str, Any]:
+    if isinstance(quota, KeyQuota):
+        return quota.to_json()
+    return KeyQuota(**quota).to_json()
 
 
 def _network(policy: NetworkArg, cls: Type[NetworkPolicy] = NetworkPolicy) -> Dict[str, Any]:
@@ -139,6 +148,7 @@ def create_body(
     pids: Optional[int] = None,
     ttl: Optional[Duration] = None,
     idle_timeout: Optional[Duration] = None,
+    idle_action: Optional[IdleAction] = None,
     env: Optional[Mapping[str, str]] = None,
     network: Optional[NetworkArg] = None,
     backend: Optional[Backend] = None,
@@ -176,6 +186,8 @@ def create_body(
         body["ttl_seconds"] = parse_duration(ttl)
     if idle_timeout is not None:
         body["idle_timeout_seconds"] = parse_duration(idle_timeout)
+    if idle_action:
+        body["idle_action"] = idle_action
     if env:
         body["env"] = dict(env)
     if network is not None:
@@ -377,7 +389,10 @@ class SbxClient:
         scopes: Optional[Sequence[str]] = None,
         network: Optional[Union[KeyNetworkPolicy, Mapping[str, Any]]] = None,
         expires_at: Optional[Union[datetime, str]] = None,
+        project: Optional[str] = None,
+        quota: Optional[Union[KeyQuota, Mapping[str, Any]]] = None,
     ) -> CreatedKey:
+        """Create a key. scopes is any of "admin", "sandbox", or "read"."""
         body: Dict[str, Any] = {"name": name}
         if scopes is not None:
             body["scopes"] = list(scopes)
@@ -385,7 +400,19 @@ class SbxClient:
             body["network"] = _network(network, KeyNetworkPolicy)
         if expires_at is not None:
             body["expires_at"] = expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at
+        if project:
+            body["project"] = project
+        if quota is not None:
+            body["quota"] = _quota(quota)
         return CreatedKey.from_json(self._json("POST", "/v1/keys", body))
+
+    def set_key_quota(self, id: str, quota: Union[KeyQuota, Mapping[str, Any]]) -> KeyInfo:
+        """Replace a key's quota. Unset fields fall back to the server defaults."""
+        return KeyInfo.from_json(self._json("PUT", f"/v1/keys/{_q(id)}/quota", _quota(quota)))
+
+    def me(self) -> WhoAmI:
+        """Describe the key this client uses, with its limits and current usage."""
+        return WhoAmI.from_json(self._json("GET", "/v1/me"))
 
     def list_keys(self) -> List[KeyInfo]:
         return [KeyInfo.from_json(k) for k in self._json("GET", "/v1/keys")["keys"]]
@@ -439,6 +466,15 @@ class SbxClient:
 
     def set_secrets(self, id: str, secrets: Mapping[str, str]) -> SandboxInfo:
         return SandboxInfo.from_json(self._json("PUT", f"/v1/sandboxes/{_q(id)}/secrets", {"secrets": dict(secrets)}))
+
+    def update_network(self, id: str, policy: NetworkArg) -> SandboxInfo:
+        """Change the egress rules of a running or paused sandbox.
+
+        Omitted fields keep their current value. ``mode="full"`` without
+        ``allow`` drops back to the key or server allow list. Server and key
+        deny rules always stay.
+        """
+        return SandboxInfo.from_json(self._json("PATCH", f"/v1/sandboxes/{_q(id)}/network", _network(policy)))
 
     def set_ttl(self, id: str, ttl: Duration) -> SandboxInfo:
         body = {"ttl_seconds": parse_duration(ttl)}

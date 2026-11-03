@@ -53,13 +53,15 @@ func (s *Store) GetVolumeByName(ctx context.Context, ownerID, name string) (Volu
 	return scanVolume(row)
 }
 
-// ListVolumes returns volumes, optionally limited to one owner. Newest first.
-func (s *Store) ListVolumes(ctx context.Context, ownerID string) ([]Volume, error) {
+// ListVolumes returns volumes, optionally limited to one owner and, when
+// project is set, the other keys of that project. Newest first.
+func (s *Store) ListVolumes(ctx context.Context, ownerID, project string) ([]Volume, error) {
 	q := `SELECT id, name, owner_key_id, backend, docker_name, created_at FROM volumes`
 	var args []any
 	if ownerID != "" {
-		q += ` WHERE owner_key_id = ?`
-		args = append(args, ownerID)
+		c, a := ownerClause(ownerID, project)
+		q += ` WHERE ` + c
+		args = append(args, a...)
 	}
 	q += ` ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -94,10 +96,11 @@ func (s *Store) DeleteVolume(ctx context.Context, id string) error {
 	return nil
 }
 
-// VolumeInUse reports whether a creating, running, or paused sandbox mounts id.
+// VolumeInUse reports whether a creating, running, paused, or hibernated
+// sandbox mounts id.
 func (s *Store) VolumeInUse(ctx context.Context, volumeID string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mounts_json FROM sandboxes WHERE status IN ('creating', 'running', 'paused')`)
+		SELECT mounts_json FROM sandboxes WHERE status IN ('creating', 'running', 'paused', 'hibernated')`)
 	if err != nil {
 		return false, err
 	}

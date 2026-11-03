@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
-SandboxStatus = Literal["creating", "running", "paused", "stopped", "error", "warm"]
+SandboxStatus = Literal["creating", "running", "paused", "hibernated", "stopped", "error", "warm"]
+# What the server does after idle_timeout without activity. A paused or
+# hibernated sandbox wakes on its next exec, file call, or preview request.
+IdleAction = Literal["stop", "pause", "hibernate"]
 NetworkMode = Literal["none", "full", "allow"]
 Backend = Literal["docker", "gvisor", "kata", "firecracker"]
 Signal = Literal["TERM", "KILL", "INT", "HUP", "QUIT"]
@@ -99,6 +102,7 @@ class SandboxInfo:
     labels: Optional[Dict[str, str]] = None
     secret_keys: Optional[List[str]] = None
     idle_timeout_seconds: Optional[int] = None
+    idle_action: Optional[IdleAction] = None
     mounts: Optional[List[VolumeMount]] = None
 
     @classmethod
@@ -123,6 +127,7 @@ class SandboxInfo:
             labels=raw.get("labels"),
             secret_keys=raw.get("secret_keys"),
             idle_timeout_seconds=raw.get("idle_timeout_seconds"),
+            idle_action=raw.get("idle_action"),
             expires_at=raw["expires_at"],
             created_at=raw["created_at"],
             node=raw["node"],
@@ -356,8 +361,52 @@ class PreviewResponse:
 
 
 @dataclass
+class KeyQuota:
+    """Limits on what one key's live sandboxes hold at once.
+
+    None or 0 uses the server: max_sandboxes falls back to
+    limits.max_sandboxes_per_key, and the CPU and memory totals are unlimited.
+    """
+
+    max_sandboxes: Optional[int] = None
+    max_cpu: Optional[float] = None
+    max_memory_mb: Optional[int] = None
+
+    def to_json(self) -> Dict[str, Any]:
+        out: Dict[str, Any] = {}
+        if self.max_sandboxes:
+            out["max_sandboxes"] = self.max_sandboxes
+        if self.max_cpu:
+            out["max_cpu"] = self.max_cpu
+        if self.max_memory_mb:
+            out["max_memory_mb"] = self.max_memory_mb
+        return out
+
+    @classmethod
+    def from_json(cls, raw: Optional[Mapping[str, Any]]) -> "KeyQuota":
+        raw = raw or {}
+        return cls(
+            max_sandboxes=raw.get("max_sandboxes") or None,
+            max_cpu=raw.get("max_cpu") or None,
+            max_memory_mb=raw.get("max_memory_mb") or None,
+        )
+
+
+@dataclass
+class KeyUsage:
+    """What one key's live (creating, running, or paused) sandboxes hold."""
+
+    sandboxes: int = 0
+    cpu: float = 0.0
+    memory_mb: int = 0
+
+
+@dataclass
 class KeyInfo:
-    """An API key without its secret."""
+    """An API key without its secret.
+
+    Keys with the same project see and use each other's sandboxes and volumes.
+    """
 
     id: str
     name: str
@@ -368,6 +417,8 @@ class KeyInfo:
     last_used_at: Optional[str] = None
     expires_at: Optional[str] = None
     revoked_at: Optional[str] = None
+    project: Optional[str] = None
+    quota: KeyQuota = field(default_factory=KeyQuota)
 
     @classmethod
     def from_json(cls, raw: Mapping[str, Any]) -> "KeyInfo":
@@ -385,6 +436,27 @@ class CreatedKey(KeyInfo):
         return cls(**_key_fields(raw), key=raw["key"])
 
 
+@dataclass
+class WhoAmI(KeyInfo):
+    """The calling key, its effective limits, and what it holds now."""
+
+    limits: KeyQuota = field(default_factory=KeyQuota)
+    usage: KeyUsage = field(default_factory=KeyUsage)
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> "WhoAmI":
+        usage = raw.get("usage") or {}
+        return cls(
+            **_key_fields(raw),
+            limits=KeyQuota.from_json(raw.get("limits")),
+            usage=KeyUsage(
+                sandboxes=usage.get("sandboxes", 0),
+                cpu=usage.get("cpu", 0.0),
+                memory_mb=usage.get("memory_mb", 0),
+            ),
+        )
+
+
 def _key_fields(raw: Mapping[str, Any]) -> Dict[str, Any]:
     network = raw.get("network") or {}
     return {
@@ -396,6 +468,8 @@ def _key_fields(raw: Mapping[str, Any]) -> Dict[str, Any]:
         "last_used_at": raw.get("last_used_at"),
         "expires_at": raw.get("expires_at"),
         "revoked_at": raw.get("revoked_at"),
+        "project": raw.get("project") or None,
+        "quota": KeyQuota.from_json(raw.get("quota")),
         "network": KeyNetworkPolicy(
             mode=network.get("mode"),
             max_mode=network.get("max_mode"),

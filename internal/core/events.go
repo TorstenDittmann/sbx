@@ -123,6 +123,7 @@ func (m *Manager) Events(ctx context.Context, actor Actor, in EventsInput, fn fu
 	f := store.EventFilter{SandboxID: in.SandboxID, Limit: 200}
 	if !actor.Admin {
 		f.OwnerID = actor.KeyID
+		f.Project = actor.Project
 	}
 	if in.Ready != nil {
 		in.Ready(cursor)

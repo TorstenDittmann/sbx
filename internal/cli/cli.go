@@ -38,22 +38,29 @@ Usage:
   sbx serve [--config sbx.yaml] [--addr 127.0.0.1:8080] [--data-dir ./data] [--backend docker|gvisor|kata]
   sbx doctor [--config sbx.yaml]
   sbx setup gvisor|kata|firecracker [--apply] [--data-dir ./data]
-  sbx keys create --name NAME [--admin] [--expires 720h] [--data-dir ./data]
+  sbx keys create --name NAME [--admin | --read-only] [--project P] [--max-sandboxes N] [--max-cpu C] [--max-memory-mb M] [--expires 720h] [--data-dir ./data]
   sbx keys list [--data-dir ./data]
   sbx keys revoke --id ID [--data-dir ./data]
   sbx healthcheck
   sbx version
 
 Sandboxes (talk to a running server):
-  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
+  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--idle-timeout 2m --idle-action hibernate]
+             [--network none|full|allow] [--allow RULE] [--deny RULE]
+             [--egress-kbps N] [--max-connections N] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
   sbx ls [--status S] [--template T] [--label key:value] [-q TEXT] [--quiet] [--json]
   sbx get ID
   sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
   sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
   sbx cp SRC DST              one side is ID:PATH; relative paths are under /workspace
+  sbx watch [-r] [-n COUNT] [--json] ID [PATH]   print file changes (default /workspace)
   sbx pause ID | sbx resume ID
   sbx ttl ID 10m
+  sbx network ID [--mode full|allow] [--allow RULE] [--deny RULE] [--clear-allow] [--clear-deny]
+             [--egress-kbps N] [--max-connections N]   show or change egress rules on a running sandbox
   sbx rm ID [ID...]
+  sbx preview ID PORT [--public] [--json]   publish a port and print its URL
+  sbx preview ls ID | sbx preview rm ID PREVIEW_ID
   These read SBX_URL (default http://127.0.0.1:8080) and SBX_API_KEY, or --url and --key.
   Without a key they read initial_api_key from SBX_DATA_DIR (default ./data).
 
@@ -93,12 +100,18 @@ func Run(args []string) error {
 		return shellCmd(args[1:])
 	case "cp":
 		return copyCmd(args[1:])
+	case "watch":
+		return watchCmd(args[1:])
 	case "rm", "delete":
 		return removeCmd(args[1:])
 	case "pause", "resume":
 		return stateCmd(args[0], args[1:])
 	case "ttl":
 		return ttlCmd(args[1:])
+	case "network", "net":
+		return networkCmd(args[1:])
+	case "preview", "previews":
+		return previewCmd(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprint(os.Stdout, version.Format())
 		return nil
@@ -376,7 +389,7 @@ func healthURL(addr string) string {
 	return "http://" + net.JoinHostPort(host, port) + "/healthz"
 }
 
-const keysUsage = "usage: sbx keys create --name NAME [--admin] [--expires 720h] | sbx keys list | sbx keys revoke --id ID"
+const keysUsage = "usage: sbx keys create --name NAME [--admin | --read-only] [--project P] [--max-sandboxes N] [--max-cpu C] [--max-memory-mb M] [--expires 720h] | sbx keys list | sbx keys revoke --id ID"
 
 func keys(args []string) error {
 	if len(args) == 0 {
@@ -391,6 +404,11 @@ func keys(args []string) error {
 	fs.SetOutput(io.Discard)
 	name := fs.String("name", "", "key name")
 	admin := fs.Bool("admin", false, "grant the admin scope")
+	readOnly := fs.Bool("read-only", false, "grant only the read scope")
+	project := fs.String("project", "", "share sandboxes and volumes with other keys of this project")
+	maxSandboxes := fs.Int("max-sandboxes", 0, "live sandbox limit (0 uses limits.max_sandboxes_per_key)")
+	maxCPU := fs.Float64("max-cpu", 0, "total CPUs across live sandboxes (0 means no total limit)")
+	maxMemory := fs.Int("max-memory-mb", 0, "total memory in MB across live sandboxes (0 means no total limit)")
 	expires := fs.Duration("expires", 0, "lifetime of the key, for example 720h (0 means no expiry)")
 	keyID := fs.String("id", "", "key id")
 	dataDir := fs.String("data-dir", "", "data directory")
@@ -405,6 +423,14 @@ func keys(args []string) error {
 		return errors.New("--id is required")
 	case *expires < 0:
 		return errors.New("--expires must be positive")
+	case *admin && *readOnly:
+		return errors.New("--admin and --read-only cannot be combined")
+	case *project != "" && *admin:
+		return errors.New("admin keys see every project and cannot be bound to one")
+	case *project != "" && !store.ValidProject(*project):
+		return errors.New("--project must be 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit")
+	case *maxSandboxes < 0 || *maxCPU < 0 || *maxMemory < 0:
+		return errors.New("quota flags must be >= 0")
 	}
 	cfg, err := load(*configPath)
 	if err != nil {
@@ -437,7 +463,11 @@ func keys(args []string) error {
 			case !k.Usable(now):
 				state = "expired"
 			}
-			fmt.Printf("%s\t%s\t%s\t%s\t%s\n", k.ID, k.Prefix, k.Name, strings.Join(k.Scopes, ","), state)
+			project := k.Project
+			if project == "" {
+				project = "-"
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.Prefix, k.Name, strings.Join(k.Scopes, ","), project, state)
 		}
 		return nil
 	case "revoke":
@@ -452,12 +482,16 @@ func keys(args []string) error {
 		return nil
 	}
 	scopes := []string{"sandbox"}
-	if *admin {
+	switch {
+	case *admin:
 		scopes = []string{"admin"}
+	case *readOnly:
+		scopes = []string{"read"}
 	}
 	plain, hash, prefix := id.Key()
 	key := store.APIKey{
 		ID: id.RecordID(), Name: *name, Hash: hash, Prefix: prefix, Scopes: scopes, CreatedAt: now,
+		Project: *project, Quota: store.KeyQuota{MaxSandboxes: *maxSandboxes, MaxCPU: *maxCPU, MaxMemoryMB: *maxMemory},
 	}
 	if *expires > 0 {
 		t := now.Add(*expires)

@@ -22,6 +22,7 @@ type Event struct {
 type EventFilter struct {
 	After     int64
 	OwnerID   string
+	Project   string
 	SandboxID string
 	Limit     int
 }
@@ -51,8 +52,9 @@ func (s *Store) ListEvents(ctx context.Context, f EventFilter) ([]Event, error) 
 	q := `SELECT seq, type, sandbox_id, owner_key_id, created_at, data_json FROM events WHERE seq > ?`
 	args := []any{f.After}
 	if f.OwnerID != "" {
-		q += ` AND owner_key_id = ?`
-		args = append(args, f.OwnerID)
+		c, a := ownerClause(f.OwnerID, f.Project)
+		q += ` AND ` + c
+		args = append(args, a...)
 	}
 	if f.SandboxID != "" {
 		q += ` AND sandbox_id = ?`

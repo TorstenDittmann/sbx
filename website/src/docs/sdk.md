@@ -69,6 +69,7 @@ const same = await Sandbox.connect(box.id)
 | `pids` | `number` | `pids` |
 | `ttl` | `number \| string` | `ttl_seconds` |
 | `idleTimeout` | `number \| string` | `idle_timeout_seconds` |
+| `idleAction` | `"stop" \| "pause" \| "hibernate"` | `idle_action` |
 | `env` | `Record<string, string>` | `env` |
 | `secrets` | `Record<string, string>` | `secrets` |
 | `labels` | `Record<string, string>` | `labels` |
@@ -78,7 +79,7 @@ const same = await Sandbox.connect(box.id)
 
 Durations accept seconds as a number or a string with a unit: `"500ms"`, `"30s"`, `"5m"`, `"1h"`. They are rounded to whole seconds; anything above 0 and below a second becomes 1. `parseDuration` is exported if you need it.
 
-A `Sandbox` has the fields of the API object in camelCase: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memoryMb`, `diskMb`, `pids`, `network`, `env`, `labels`, `secretKeys`, `idleTimeoutSeconds`, `expiresAt`, `createdAt`, `node`, and `mounts`.
+A `Sandbox` has the fields of the API object in camelCase: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memoryMb`, `diskMb`, `pids`, `network`, `env`, `labels`, `secretKeys`, `idleTimeoutSeconds`, `idleAction`, `expiresAt`, `createdAt`, `node`, and `mounts`.
 
 ### Lifecycle
 
@@ -87,6 +88,7 @@ await box.setTTL("30m")   // new remaining lifetime
 await box.pause()
 await box.resume()
 await box.refresh()       // re-read status and expiry
+await box.updateNetwork({ allow: ["pypi.org"], maxConnections: 32 })  // change egress rules live
 await box.kill()          // delete
 ```
 
@@ -259,6 +261,7 @@ await client.getSandbox(id)
 await client.listSandboxes({ status: "running", template: "python", q: "demo", labels: { project: "demo" } })
 await client.deleteSandbox(id)
 await client.setSecrets(id, { TOKEN: "new" })
+await client.updateNetwork(id, { mode: "full" })
 ```
 
 ### Volumes
@@ -280,13 +283,23 @@ const created = await client.createKey("agent", {
   expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
   network: { mode: "allow", maxMode: "allow", allow: ["pypi.org"] },
   registries: [{ server: "ghcr.io", username: "agent-bot", password: process.env.GHCR_TOKEN }],
+  project: "acme", // share sandboxes with other "acme" keys
+  quota: { maxSandboxes: 50, maxCpu: 16, maxMemoryMb: 32768 },
 })
 created.key // shown once
 
 await client.listKeys()
 await client.getKey(created.id)
 await client.setKeyRegistries(created.id, []) // replace or remove private registry credentials
+await client.setKeyQuota(created.id, { maxSandboxes: 10 })
 await client.revokeKey(created.id) // stops working immediately
+```
+
+Any key can read its own limits and usage:
+
+```ts
+const { limits, usage } = await client.me()
+console.log(`${usage.sandboxes}/${limits.maxSandboxes} sandboxes`)
 ```
 
 ### Backends

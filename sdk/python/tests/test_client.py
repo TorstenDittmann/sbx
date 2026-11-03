@@ -91,6 +91,9 @@ def route(req):
         return ok(sandbox_json(status="paused" if path.endswith("pause") else "running"))
     if method == "PUT" and path == "/v1/sandboxes/sbx_test/secrets":
         return ok(sandbox_json(secret_keys=list(req.json()["secrets"])))
+    if method == "PATCH" and path == "/v1/sandboxes/sbx_test/network":
+        sent = req.json()
+        return ok(sandbox_json(network="allow", egress_allow=sent.get("allow"), egress_deny=sent.get("deny")))
     if method == "GET" and path == "/v1/sandboxes/missing":
         return not_found()
     if method == "GET" and path == "/v1/sandboxes/plain":
@@ -238,6 +241,11 @@ class ClientTest(unittest.TestCase):
         info = box.set_secrets({"TOKEN": "next"})
         self.assertEqual(info.secret_keys, ["TOKEN"])
         self.assertEqual(box.secret_keys, ["TOKEN"])
+        box.update_network(NetworkPolicy(allow=["api.example.com"], deny=[], max_connections=8))
+        self.assertEqual(self.server.last.method, "PATCH")
+        self.assertEqual(self.server.last.json(), {"allow": ["api.example.com"], "deny": [], "max_connections": 8})
+        self.assertEqual(box.network, "allow")
+        self.assertEqual(box.egress_allow, ["api.example.com"])
         box.kill()
         self.assertEqual(box.status, "stopped")
 
@@ -335,6 +343,48 @@ class KeysAndBackendsTest(unittest.TestCase):
             calls = [f"{r.method} {r.path}" for r in server.requests[2:]]
             self.assertEqual(calls, ["GET /v1/keys", "DELETE /v1/keys/key_1", "GET /v1/keys/key_1"])
 
+    def test_key_project_quota_and_me(self) -> None:
+        key = {
+            "id": "key_1",
+            "name": "team",
+            "prefix": "sbx_ab",
+            "scopes": ["read"],
+            "project": "acme",
+            "quota": {"max_sandboxes": 5, "max_cpu": 2, "max_memory_mb": 0},
+        }
+
+        def handler(req):
+            if req.path == "/v1/me":
+                return ok(
+                    {
+                        **key,
+                        "limits": {"max_sandboxes": 5, "max_cpu": 2, "max_memory_mb": 0},
+                        "usage": {"sandboxes": 1, "cpu": 0.5, "memory_mb": 256},
+                    }
+                )
+            if req.method == "POST":
+                return ok({**key, "key": "sbx_new"}, 201)
+            return ok(key)
+
+        from sbx import KeyQuota
+
+        with FakeServer(handler) as server:
+            client = SbxClient(server.url, "sbx_test")
+            created = client.create_key("team", scopes=["read"], project="acme", quota=KeyQuota(max_sandboxes=5, max_cpu=2))
+            self.assertEqual(created.project, "acme")
+            self.assertEqual(created.quota, KeyQuota(max_sandboxes=5, max_cpu=2))
+            self.assertEqual(
+                server.last.json(),
+                {"name": "team", "scopes": ["read"], "project": "acme", "quota": {"max_sandboxes": 5, "max_cpu": 2}},
+            )
+            client.set_key_quota("key_1", {"max_memory_mb": 1024})
+            self.assertEqual(server.last.json(), {"max_memory_mb": 1024})
+            self.assertEqual(server.last.path, "/v1/keys/key_1/quota")
+            me = client.me()
+            self.assertEqual(me.usage.memory_mb, 256)
+            self.assertEqual(me.limits.max_sandboxes, 5)
+            self.assertEqual(me.project, "acme")
+
     def test_backends(self) -> None:
         backend = {
             "name": "docker",
@@ -360,3 +410,20 @@ class KeysAndBackendsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamPingTest(unittest.TestCase):
+    def test_ping_comments_are_skipped(self) -> None:
+        exec_body = ': ping\n\nevent: stdout\ndata: {"data": "hi"}\n\n: ping\n\nevent: exit\ndata: {"exit_code": 0}\n\n'
+        watch_body = 'event: ready\ndata: {"path": "/workspace"}\n\n: ping\n\nevent: change\ndata: {"type": "create", "path": "/workspace/a"}\n\n'
+
+        def handler(req):  # type: ignore[no-untyped-def]
+            body = watch_body if "/files/watch" in req.path else exec_body
+            return 200, "text/event-stream", body
+
+        with FakeServer(handler) as server:
+            client = SbxClient(server.url, "sbx_test")
+            events = list(client.exec_stream("sbx_test", ["echo", "hi"]))
+            changes = list(client.watch("sbx_test", "/workspace"))
+        self.assertEqual([e.type for e in events], ["stdout", "exit"])
+        self.assertEqual([(c.type, c.path) for c in changes], [("create", "/workspace/a")])

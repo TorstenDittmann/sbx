@@ -130,6 +130,27 @@ jobs:
             exit "$code"
           fi
 
+  go-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+      - name: vet
+        working-directory: sdk/go
+        run: go vet ./...
+      - name: unit tests
+        working-directory: sdk/go
+        run: go test -count=1 -race ./...
+      - name: oldest supported Go
+        working-directory: sdk/go
+        run: GOTOOLCHAIN=go1.23.0 go vet ./...
+      - name: against the API handler
+        run: |
+          go work init . ./sdk/go
+          go test -count=1 -race -tags sdkgo ./test/sdkgo/
+
   sdk:
     runs-on: ubuntu-latest
     steps:
@@ -165,7 +186,7 @@ jobs:
           bun test --cwd sdk/typescript test
 
   python-sdk:
-    # setup-python has no 3.9 build for ubuntu 26.04 yet.
+    # ubuntu-latest (26.04) has no Python 3.9 build for setup-python.
     runs-on: ubuntu-24.04
     strategy:
       matrix:

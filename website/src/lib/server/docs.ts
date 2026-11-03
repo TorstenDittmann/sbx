@@ -44,6 +44,7 @@ export const sections: DocSection[] = [
 			{ slug: "api", title: "HTTP API", description: "Every route, its body, and its errors." },
 			{ slug: "sdk", title: "TypeScript SDK", description: "The @sbx.torsten.work/sbx client for Node and Bun." },
 			{ slug: "python-sdk", title: "Python SDK", description: "The sbx-sdk client for Python 3.9+." },
+			{ slug: "go-sdk", title: "Go SDK", description: "The github.com/TorstenDittmann/sbx/sdk/go client for Go 1.23+." },
 		],
 	},
 ];
@@ -71,6 +72,7 @@ const languages: Record<string, string> = {
 	json: "json",
 	py: "python",
 	python: "python",
+	go: "go",
 };
 
 function slugify(text: string): string {

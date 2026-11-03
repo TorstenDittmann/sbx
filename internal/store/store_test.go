@@ -195,7 +195,7 @@ func TestVolumesAndMountMigration(t *testing.T) {
 	if _, err := st.GetVolume(ctx, "vol_missing"); err != ErrNotFound {
 		t.Fatal(err)
 	}
-	listed, err := st.ListVolumes(ctx, "key_a")
+	listed, err := st.ListVolumes(ctx, "key_a", "")
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("%+v %v", listed, err)
 	}
@@ -354,5 +354,22 @@ func TestKeyRegistriesAndPrivateImages(t *testing.T) {
 	}
 	if has, _ := st.HasPrivateImages(ctx); !has {
 		t.Fatal("expected private images")
+	}
+}
+
+func TestScopeHierarchy(t *testing.T) {
+	for _, tc := range []struct {
+		have  string
+		want  string
+		allow bool
+	}{
+		{"admin", "admin", true}, {"admin", "sandbox", true}, {"admin", "read", true},
+		{"sandbox", "admin", false}, {"sandbox", "sandbox", true}, {"sandbox", "read", true},
+		{"read", "admin", false}, {"read", "sandbox", false}, {"read", "read", true},
+		{"read", "bogus", false}, {"bogus", "read", false},
+	} {
+		if got := (APIKey{Scopes: []string{tc.have}}).HasScope(tc.want); got != tc.allow {
+			t.Errorf("%s has %s = %v", tc.have, tc.want, got)
+		}
 	}
 }

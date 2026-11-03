@@ -20,6 +20,12 @@ Inheritance, most specific first:
 
 `allow` with an empty allow list is rejected. Wildcard names such as `*.example.com` are rejected. The packet filter only sees addresses, so list each hostname. Names are resolved when the sandbox is created and refreshed by the reaper.
 
+## Live changes
+
+`PATCH /v1/sandboxes/{id}/network` replaces the allow list, the sandbox deny rules, `egress_kbps`, and `max_connections` of a running or paused sandbox. Omitted fields keep their current value; `[]` clears a list. `mode` switches between `full` and `allow`; `mode: full` without `allow` re-inherits the key or server allow list. Switching to or from `none` is rejected (400 `unsupported`), because the interface is attached at create.
+
+The request is resolved like a create with the owning key, whoever sends it: server and key denies stay, limits take the tightest positive value, and `max_mode` applies. The Docker driver re-renders the sandbox chain in place (same chain, flushed and refilled) and, when the limit drops to 0, removes the `tbf` qdisc it installed earlier. A failed install reapplies the stored policy and leaves the row unchanged. The rule at the head of each chain returns `ESTABLISHED,RELATED`, so open connections are not cut. Each change emits `sandbox.network_updated`. Firecracker does not implement live changes and returns 400 `unsupported`.
+
 ## What stays blocked
 
 With the defaults, traffic from the bridge is rejected to:

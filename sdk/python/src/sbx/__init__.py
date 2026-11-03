@@ -21,8 +21,11 @@ from ._types import (
     FileEntry,
     FileEvent,
     FileList,
+    IdleAction,
     KeyInfo,
     KeyNetworkPolicy,
+    KeyQuota,
+    KeyUsage,
     NetworkMode,
     NetworkPolicy,
     PreviewInfo,
@@ -35,6 +38,7 @@ from ._types import (
     TerminalInfo,
     VolumeInfo,
     VolumeMount,
+    WhoAmI,
 )
 
 __version__ = "0.2.1"
@@ -49,8 +53,11 @@ __all__ = [
     "FileEntry",
     "FileEvent",
     "FileList",
+    "IdleAction",
     "KeyInfo",
     "KeyNetworkPolicy",
+    "KeyQuota",
+    "KeyUsage",
     "NetworkMode",
     "NetworkPolicy",
     "PreviewInfo",
@@ -68,5 +75,6 @@ __all__ = [
     "TerminalSession",
     "VolumeInfo",
     "VolumeMount",
+    "WhoAmI",
     "parse_duration",
 ]

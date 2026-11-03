@@ -33,7 +33,7 @@ const EventWebhookTest = "webhook.test"
 // EventTypes lists every lifecycle event a webhook can subscribe to.
 var EventTypes = []string{
 	EventCreated, EventFailed, EventDeleted, EventExpired,
-	EventPaused, EventResumed, EventOOM, EventLost,
+	EventPaused, EventResumed, EventHibernated, EventNetworkUpdated, EventOOM, EventLost,
 }
 
 const (

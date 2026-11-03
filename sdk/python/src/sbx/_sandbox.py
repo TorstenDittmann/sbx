@@ -9,6 +9,7 @@ from ._template import Template
 from ._terminal import TerminalSession
 from ._types import (
     Backend,
+    IdleAction,
     BuildStep,
     ExecEvent,
     ExecResult,
@@ -122,6 +123,7 @@ class Sandbox:
     labels: Optional[Dict[str, str]]
     secret_keys: Optional[List[str]]
     idle_timeout_seconds: Optional[int]
+    idle_action: Optional[IdleAction]
     expires_at: str
     created_at: str
     node: str
@@ -158,6 +160,7 @@ class Sandbox:
         pids: Optional[int] = None,
         ttl: Optional[Duration] = None,
         idle_timeout: Optional[Duration] = None,
+        idle_action: Optional[IdleAction] = None,
         env: Optional[Mapping[str, str]] = None,
         network: Optional[NetworkArg] = None,
         backend: Optional[Backend] = None,
@@ -181,6 +184,7 @@ class Sandbox:
             pids=pids,
             ttl=ttl,
             idle_timeout=idle_timeout,
+            idle_action=idle_action,
             env=env,
             network=network,
             backend=backend,
@@ -241,6 +245,10 @@ class Sandbox:
 
     def set_secrets(self, secrets: Mapping[str, str]) -> SandboxInfo:
         return self._apply(self.client.set_secrets(self.id, secrets))
+
+    def update_network(self, policy: NetworkArg) -> SandboxInfo:
+        """Change this sandbox's egress rules. See ``Client.update_network``."""
+        return self._apply(self.client.update_network(self.id, policy))
 
     def start_process(
         self,

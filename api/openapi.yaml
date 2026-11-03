@@ -186,6 +186,58 @@ paths:
               schema: {$ref: "#/components/schemas/APIKey"}
         "400": {description: Invalid credential}
         "404": {description: Not found}
+  /v1/keys/{id}/quota:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    put:
+      operationId: setKeyQuota
+      summary: Replace a key's quota
+      description: >
+        Zero or missing fields use the server default. Sandboxes already
+        running are not stopped when a quota shrinks; the key cannot create
+        more until it is back under the limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyQuota"}
+      responses:
+        "200":
+          description: The updated key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APIKey"}
+        "400": {description: A negative value}
+        "404": {description: Not found}
+  /v1/me:
+    get:
+      operationId: me
+      summary: Describe the calling key
+      description: >
+        Any scope may call it. Returns the key without its secret, its
+        effective limits (max_sandboxes resolved against the server default),
+        and what its live sandboxes hold now.
+      responses:
+        "200":
+          description: The calling key with limits and usage
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIKey"
+                  - type: object
+                    properties:
+                      limits: {$ref: "#/components/schemas/KeyQuota"}
+                      usage:
+                        type: object
+                        description: Sandboxes that are creating, running, or paused, and the CPU and memory they hold.
+                        properties:
+                          sandboxes: {type: integer}
+                          cpu: {type: number}
+                          memory_mb: {type: integer}
   /v1/backends:
     get:
       operationId: listBackends
@@ -350,7 +402,10 @@ paths:
         `id: <n>`, `event: <type>`, and `data:` holding an `Event` object.
         Types are `sandbox.created`, `sandbox.failed`, `sandbox.deleted`,
         `sandbox.expired` (reason `ttl` or `idle`), `sandbox.paused`,
-        `sandbox.resumed`, `sandbox.oom` (a process was OOM-killed; the
+        `sandbox.resumed`, `sandbox.hibernated` (an idle sandbox saved to a
+        snapshot), `sandbox.network_updated` (egress rules changed; data
+        holds the new network, allow, deny, egress_kbps, and
+        max_connections), `sandbox.oom` (a process was OOM-killed; the
         sandbox usually keeps running), and `sandbox.lost` (the sandbox
         stopped without sbx stopping it; reason `exited` or `missing`).
 
@@ -647,6 +702,38 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/network:
+    patch:
+      operationId: updateSandboxNetwork
+      summary: Change egress rules on a running sandbox
+      description: >
+        Replaces the allow list, the sandbox deny rules, and the limits of a
+        running or paused sandbox without restarting it. Omitted fields keep
+        their current value. Sending mode full without allow drops back to the
+        API key or server allow list. The new policy goes through the same
+        inheritance as a create, using the API key that owns the sandbox: the
+        server and key deny lists stay, limits cannot go above the server or
+        key limit, and a key max_mode still applies. Switching between none
+        and full or allow is rejected because the interface is attached at
+        create time. Connections that are already open are not cut. Docker,
+        gVisor, and Kata support this; Firecracker returns 400 unsupported.
+        Emits sandbox.network_updated.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Network"}
+      responses:
+        "200":
+          description: Sandbox with the new egress_allow, egress_deny, egress_kbps, and max_connections
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+        "400": {description: Invalid rule, none to full switch, or a backend without live updates}
+        "403": {description: Outside the owning API key's max_mode or allow list}
+        "409": {description: Sandbox is not running}
   /v1/sandboxes/{id}/pause:
     post:
       operationId: pauseSandbox
@@ -738,7 +825,8 @@ paths:
       description: |
         Waits for the process and returns stdout, stderr, and the exit code.
         `?stream=1` switches the response to Server-Sent Events (`stdout`,
-        `stderr`, `exit`, `error`).
+        `stderr`, `exit`, `error`). A quiet stream sends a `: ping` comment
+        every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - in: query
@@ -878,7 +966,8 @@ paths:
       description: |
         Server-Sent Events. `ready`, then `change` events with `type`
         (`create`, `write`, or `remove`) and `path`. The agent uses inotify
-        and falls back to a 200 ms poll when inotify is unavailable.
+        and falls back to a 200 ms poll when inotify is unavailable. A quiet
+        stream sends a `: ping` comment every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"
@@ -1201,7 +1290,7 @@ components:
         id: {type: integer}
         type:
           type: string
-          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]
+          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]
         sandbox_id: {type: string}
         time: {type: string, format: date-time}
         data:
@@ -1249,6 +1338,10 @@ components:
         scopes:
           type: array
           items: {type: string}
+        project:
+          type: string
+          description: Empty when the key is not bound to a project.
+        quota: {$ref: "#/components/schemas/KeyQuota"}
         created_at: {type: string, format: date-time}
         last_used_at:
           type: string
@@ -1272,7 +1365,19 @@ components:
         name: {type: string}
         scopes:
           type: array
-          items: {type: string, enum: [admin, sandbox]}
+          description: >
+            admin implies sandbox, and sandbox implies read. read keys can only
+            call GET routes (no exec, terminals, writes, or previews). Defaults
+            to [sandbox].
+          items: {type: string, enum: [admin, sandbox, read]}
+        project:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          description: >
+            Optional and fixed once set. Keys of the same project see and use
+            each other's sandboxes, volumes, and events. Not allowed on admin
+            keys, which already see everything.
+        quota: {$ref: "#/components/schemas/KeyQuota"}
         expires_at:
           type: string
           format: date-time
@@ -1285,6 +1390,17 @@ components:
             Private registry credentials for images and build bases this key
             uses. They take precedence over the server's registries.
           items: {$ref: "#/components/schemas/RegistryCredential"}
+    KeyQuota:
+      type: object
+      description: >
+        Limits on what one key's live (creating, running, or paused) sandboxes
+        hold at once. Creating past one returns 429 quota_exceeded. 0 uses the
+        server: max_sandboxes falls back to limits.max_sandboxes_per_key, and
+        the CPU and memory totals are unlimited.
+      properties:
+        max_sandboxes: {type: integer, minimum: 0}
+        max_cpu: {type: number, minimum: 0, description: Total CPUs across live sandboxes.}
+        max_memory_mb: {type: integer, minimum: 0, description: Total memory across live sandboxes.}
     RegistryCredential:
       type: object
       required: [server]
@@ -1499,6 +1615,16 @@ components:
         pids: {type: integer}
         ttl_seconds: {type: integer}
         idle_timeout_seconds: {type: integer}
+        idle_action:
+          type: string
+          enum: [stop, pause, hibernate]
+          description: >
+            What the reaper does after idle_timeout_seconds without activity.
+            stop (the default) stops the sandbox. pause freezes it. hibernate
+            snapshots it, /workspace included, and removes the container. A
+            paused or hibernated sandbox wakes on its next exec, file,
+            process, terminal, or preview request. hibernate needs a backend
+            with snapshots. Needs idle_timeout_seconds.
         env: {type: object, additionalProperties: {type: string}}
         network: {$ref: "#/components/schemas/Network"}
         backend: {type: string, enum: [docker, gvisor, kata, firecracker]}
@@ -1566,7 +1692,7 @@ components:
         events:
           type: array
           description: Event types to send. Empty or omitted sends every type.
-          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]}
+          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]}
     UpdateWebhook:
       type: object
       additionalProperties: false
@@ -1575,7 +1701,7 @@ components:
         description: {type: string, maxLength: 256}
         events:
           type: array
-          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]}
+          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]}
         enabled: {type: boolean}
     Webhook:
       type: object
@@ -1644,7 +1770,7 @@ components:
       required: [id, status, backend, image, expires_at, node]
       properties:
         id: {type: string}
-        status: {type: string, enum: [creating, running, paused, stopped, error, warm]}
+        status: {type: string, enum: [creating, running, paused, hibernated, stopped, error, warm]}
         backend: {type: string}
         template: {type: string}
         image: {type: string}
@@ -1672,6 +1798,7 @@ components:
           items: {type: string}
           description: Names of secrets set on this sandbox. Values are not returned.
         idle_timeout_seconds: {type: integer}
+        idle_action: {type: string, enum: [stop, pause, hibernate]}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         node: {type: string}

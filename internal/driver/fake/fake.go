@@ -54,6 +54,9 @@ type Driver struct {
 	// pull, a build's base, and PullImage. A nil return lets the pull through.
 	Registry func(ref string, auth *driver.RegistryAuth) error
 	pulls    []PullCall
+	// NetErr fails ApplyNetPolicy when set.
+	NetErr     error
+	netApplies int
 }
 
 // PullCall is one pull that reached the fake registry.
@@ -609,4 +612,36 @@ func (d *Driver) RemoveFile(_ context.Context, id, path string) error {
 	}
 	delete(d.files[id], path)
 	return nil
+}
+
+var _ driver.NetEnforcer = (*Driver)(nil)
+
+// ApplyNetPolicy records the policy on the sandbox, as the Docker driver
+// installs it. NetErr fails it when set.
+func (d *Driver) ApplyNetPolicy(_ context.Context, containerID string, spec driver.SandboxSpec) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.NetErr != nil {
+		return d.NetErr
+	}
+	b, ok := d.boxes[containerID]
+	if !ok {
+		return driver.ErrNotFound
+	}
+	b.spec.Policy = spec.Policy
+	d.netApplies++
+	return nil
+}
+
+// DropNetPolicy is a no-op.
+func (d *Driver) DropNetPolicy(context.Context, string) error { return nil }
+
+// RefreshNetPolicies is a no-op.
+func (d *Driver) RefreshNetPolicies(context.Context) error { return nil }
+
+// NetApplies counts successful ApplyNetPolicy calls.
+func (d *Driver) NetApplies() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.netApplies
 }

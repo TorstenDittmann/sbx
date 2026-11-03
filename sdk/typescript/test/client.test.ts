@@ -84,6 +84,12 @@ test("client maps create, exec, files, and errors", async () => {
         res.end(JSON.stringify({ ...sandboxJSON(), secret_keys: Object.keys(sent.secrets) }))
         return
       }
+      if (req.method === "PATCH" && req.url === "/v1/sandboxes/sbx_test/network") {
+        const sent = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { allow?: string[]; deny?: string[] }
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ ...sandboxJSON(), network: "allow", egress_allow: sent.allow, egress_deny: sent.deny }))
+        return
+      }
       if (req.method === "GET" && req.url === "/v1/sandboxes/missing") {
         res.writeHead(404, { "content-type": "application/json" })
         res.end(JSON.stringify({ error: { code: "not_found", message: "gone" } }))
@@ -226,6 +232,12 @@ test("client maps create, exec, files, and errors", async () => {
   const withSecret = await client.setSecrets("sbx_test", { TOKEN: "next" })
   assert.deepEqual(withSecret.secretKeys, ["TOKEN"])
   assert.equal(JSON.parse(seen.body ?? "{}").secrets.TOKEN, "next")
+
+  const updated = await client.updateNetwork("sbx_test", { allow: ["api.example.com"], deny: [], maxConnections: 8 })
+  assert.equal(seen.method, "PATCH")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}"), { allow: ["api.example.com"], deny: [], max_connections: 8 })
+  assert.equal(updated.network, "allow")
+  assert.deepEqual(updated.egressAllow, ["api.example.com"])
 
   await server.close()
 })
@@ -424,6 +436,83 @@ test("client sends key registry credentials", async () => {
     assert.deepEqual(bodies, [
       { name: "ci", registries: [{ server: "ghcr.io", username: "bot", password: "p" }, { server: "quay.io", identity_token: "t" }] },
       { registries: [] },
+    ])
+  } finally {
+    server.close()
+  }
+})
+
+test("breaking out of watch and execStream closes the connection and skips pings", async () => {
+  const closed: string[] = []
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    const kind = req.url?.includes("/files/watch") ? "watch" : "exec"
+    res.on("close", () => closed.push(kind))
+    if (kind === "watch") {
+      res.write('event: ready\ndata: {"path":"/workspace"}\n\n: ping\n\n')
+      res.write('event: change\ndata: {"type":"create","path":"/workspace/a.txt"}\n\n')
+    } else {
+      res.write(': ping\n\nevent: stdout\ndata: {"data":"first"}\n\n')
+    }
+    // Never end: only the client hanging up closes these streams.
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "sbx_testkey" })
+
+    for await (const change of client.watch("sbx_test", "/workspace")) {
+      assert.deepEqual(change, { type: "create", path: "/workspace/a.txt" })
+      break
+    }
+    for await (const event of client.execStream("sbx_test", "sleep 60")) {
+      assert.equal(event.type, "stdout")
+      assert.equal(event.data, "first")
+      break
+    }
+    const deadline = Date.now() + 2000
+    while (closed.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    assert.deepEqual(closed.sort(), ["exec", "watch"])
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})
+
+test("client sends key project and quota and reads usage", async () => {
+  const seen: { method: string; url: string; body: unknown }[] = []
+  const quota = { max_sandboxes: 5, max_cpu: 2, max_memory_mb: 0 }
+  const key = { id: "key_1", name: "team", prefix: "sbx_ab", scopes: ["read"], project: "acme", quota }
+  const server = createServer(async (req, res) => {
+    let raw = ""
+    for await (const chunk of req) raw += chunk
+    seen.push({ method: req.method!, url: req.url!, body: raw ? JSON.parse(raw) : undefined })
+    res.writeHead(req.method === "POST" ? 201 : 200, { "content-type": "application/json" })
+    if (req.url === "/v1/me") {
+      res.end(JSON.stringify({ ...key, limits: { max_sandboxes: 5, max_cpu: 2, max_memory_mb: 0 }, usage: { sandboxes: 1, cpu: 0.5, memory_mb: 256 } }))
+      return
+    }
+    res.end(JSON.stringify(req.method === "POST" ? { ...key, key: "sbx_new" } : key))
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const { port } = server.address() as { port: number }
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${port}`, apiKey: "sbx_test" })
+    const created = await client.createKey("team", { scopes: ["read"], project: "acme", quota: { maxSandboxes: 5, maxCpu: 2 } })
+    assert.equal(created.project, "acme")
+    assert.deepEqual(created.quota, { maxSandboxes: 5, maxCpu: 2, maxMemoryMb: undefined })
+    await client.setKeyQuota("key_1", { maxMemoryMb: 1024 })
+    const me = await client.me()
+    assert.deepEqual(me.usage, { sandboxes: 1, cpu: 0.5, memoryMb: 256 })
+    assert.equal(me.limits.maxSandboxes, 5)
+    assert.deepEqual(seen.map((s) => [s.method, s.url, s.body]), [
+      ["POST", "/v1/keys", { name: "team", scopes: ["read"], project: "acme", quota: { max_sandboxes: 5, max_cpu: 2 } }],
+      ["PUT", "/v1/keys/key_1/quota", { max_memory_mb: 1024 }],
+      ["GET", "/v1/me", undefined],
     ])
   } finally {
     server.close()

@@ -67,19 +67,21 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/keys/{id}", s.auth("admin", s.getKey))
 	mux.HandleFunc("DELETE /v1/keys/{id}", s.auth("admin", s.revokeKey))
 	mux.HandleFunc("PUT /v1/keys/{id}/registries", s.auth("admin", s.setKeyRegistries))
+	mux.HandleFunc("PUT /v1/keys/{id}/quota", s.auth("admin", s.setKeyQuota))
+	mux.HandleFunc("GET /v1/me", s.auth("read", s.me))
 
-	mux.HandleFunc("GET /v1/backends", s.auth("sandbox", s.listBackends))
-	mux.HandleFunc("GET /v1/templates", s.auth("sandbox", s.listTemplates))
+	mux.HandleFunc("GET /v1/backends", s.auth("read", s.listBackends))
+	mux.HandleFunc("GET /v1/templates", s.auth("read", s.listTemplates))
 	mux.HandleFunc("POST /v1/templates", s.auth("admin", s.createTemplate))
 	mux.HandleFunc("DELETE /v1/templates/{name}", s.auth("admin", s.deleteTemplate))
 	mux.HandleFunc("POST /v1/builds", s.auth("sandbox", s.createBuild))
 
 	mux.HandleFunc("POST /v1/volumes", s.auth("sandbox", s.createVolume))
-	mux.HandleFunc("GET /v1/volumes", s.auth("sandbox", s.listVolumes))
-	mux.HandleFunc("GET /v1/volumes/{id}", s.auth("sandbox", s.getVolume))
+	mux.HandleFunc("GET /v1/volumes", s.auth("read", s.listVolumes))
+	mux.HandleFunc("GET /v1/volumes/{id}", s.auth("read", s.getVolume))
 	mux.HandleFunc("DELETE /v1/volumes/{id}", s.auth("sandbox", s.deleteVolume))
 
-	mux.HandleFunc("GET /v1/events", s.auth("sandbox", s.streamEvents))
+	mux.HandleFunc("GET /v1/events", s.auth("read", s.streamEvents))
 
 	mux.HandleFunc("POST /v1/webhooks", s.auth("sandbox", s.createWebhook))
 	mux.HandleFunc("GET /v1/webhooks", s.auth("sandbox", s.listWebhooks))
@@ -90,42 +92,43 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/webhooks/{id}/test", s.auth("sandbox", s.testWebhook))
 
 	mux.HandleFunc("POST /v1/sandboxes", s.auth("sandbox", s.createSandbox))
-	mux.HandleFunc("GET /v1/sandboxes", s.auth("sandbox", s.listSandboxes))
-	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("sandbox", s.getSandbox))
+	mux.HandleFunc("GET /v1/sandboxes", s.auth("read", s.listSandboxes))
+	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("read", s.getSandbox))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.auth("sandbox", s.deleteSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/timeout", s.auth("sandbox", s.timeoutSandbox))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/secrets", s.auth("sandbox", s.setSecrets))
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/network", s.auth("sandbox", s.updateNetwork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.auth("sandbox", s.snapshotSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.auth("sandbox", s.execSandbox))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.auth("sandbox", s.sandboxStats))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/stats", s.auth("read", s.sandboxStats))
 
 	mux.HandleFunc("POST /v1/sandboxes/{id}/processes", s.auth("sandbox", s.createProcess))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/processes", s.auth("sandbox", s.listProcesses))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}", s.auth("sandbox", s.getProcess))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes", s.auth("read", s.listProcesses))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}", s.auth("read", s.getProcess))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/processes/{procId}", s.auth("sandbox", s.deleteProcess))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/processes/{procId}/signal", s.auth("sandbox", s.signalProcess))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/processes/{procId}/stdin", s.auth("sandbox", s.processStdin))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}/stream", s.auth("sandbox", s.streamProcess))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/processes/{procId}/stream", s.auth("read", s.streamProcess))
 
 	mux.HandleFunc("POST /v1/sandboxes/{id}/terminals", s.auth("sandbox", s.createTerminal))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/terminals/{termId}", s.auth("sandbox", s.deleteTerminal))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/terminals/{termId}/resize", s.auth("sandbox", s.resizeTerminal))
 	mux.HandleFunc("GET /v1/sandboxes/{id}/terminals/{termId}/ws", s.auth("sandbox", s.terminalSocket))
 
-	mux.HandleFunc("GET /v1/sandboxes/{id}/files", s.auth("sandbox", s.listFiles))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files", s.auth("read", s.listFiles))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/files", s.auth("sandbox", s.deleteFile))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/files/content", s.auth("sandbox", s.downloadFile))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/content", s.auth("read", s.downloadFile))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/files/content", s.auth("sandbox", s.uploadFile))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/files/archive", s.auth("sandbox", s.downloadArchive))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/archive", s.auth("read", s.downloadArchive))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/files/archive", s.auth("sandbox", s.uploadArchive))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/files/stat", s.auth("sandbox", s.statFile))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/stat", s.auth("read", s.statFile))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/files/mkdir", s.auth("sandbox", s.mkdir))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/files/watch", s.auth("sandbox", s.watchFiles))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/files/watch", s.auth("read", s.watchFiles))
 
 	mux.HandleFunc("POST /v1/sandboxes/{id}/previews", s.auth("sandbox", s.createPreview))
-	mux.HandleFunc("GET /v1/sandboxes/{id}/previews", s.auth("sandbox", s.listPreviews))
+	mux.HandleFunc("GET /v1/sandboxes/{id}/previews", s.auth("read", s.listPreviews))
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}/previews/{previewId}", s.auth("sandbox", s.deletePreview))
 	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{$}", s.auth("sandbox", s.proxyPreview))
 	mux.HandleFunc("/v1/sandboxes/{id}/previews/{previewId}/{path...}", s.auth("sandbox", s.proxyPreview))
@@ -203,7 +206,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("# HELP sbx_info Build information.\n# TYPE sbx_info gauge\n")
 	fmt.Fprintf(&b, "sbx_info{version=%q} 1\n", version.Version)
 	b.WriteString("# HELP sbx_sandboxes Sandboxes by status.\n# TYPE sbx_sandboxes gauge\n")
-	for _, status := range []string{"creating", "running", "paused", "stopped", "error"} {
+	for _, status := range []string{"creating", "running", "paused", "hibernated", "stopped", "error"} {
 		fmt.Fprintf(&b, "sbx_sandboxes{status=%q} %d\n", status, counts[status])
 	}
 	c := &s.mgr.Counts
@@ -213,6 +216,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_sandbox_deletes_total %d\n", c.Deletes.Load())
 	b.WriteString("# HELP sbx_sandbox_reaped_total Sandboxes stopped by the reaper.\n# TYPE sbx_sandbox_reaped_total counter\n")
 	fmt.Fprintf(&b, "sbx_sandbox_reaped_total %d\n", c.Reaped.Load())
+	b.WriteString("# HELP sbx_sandbox_idle_paused_total Idle sandboxes paused by the reaper.\n# TYPE sbx_sandbox_idle_paused_total counter\n")
+	fmt.Fprintf(&b, "sbx_sandbox_idle_paused_total %d\n", c.IdlePaused.Load())
+	b.WriteString("# HELP sbx_sandbox_hibernated_total Idle sandboxes hibernated to a snapshot by the reaper.\n# TYPE sbx_sandbox_hibernated_total counter\n")
+	fmt.Fprintf(&b, "sbx_sandbox_hibernated_total %d\n", c.Hibernated.Load())
 	b.WriteString("# HELP sbx_execs_total Completed exec calls.\n# TYPE sbx_execs_total counter\n")
 	fmt.Fprintf(&b, "sbx_execs_total %d\n", c.Execs.Load())
 	b.WriteString("# HELP sbx_exec_errors_total Failed exec calls.\n# TYPE sbx_exec_errors_total counter\n")
@@ -255,7 +262,7 @@ func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
 		if now := time.Now().UTC(); key.LastUsedAt == nil || now.Sub(*key.LastUsedAt) >= time.Minute {
 			_ = s.mgr.Store().TouchKey(r.Context(), key.ID, now)
 		}
-		p := principal{actor: core.Actor{KeyID: key.ID, Admin: key.Admin()}, key: key}
+		p := principal{actor: actorOf(key), key: key}
 		next(w, r.WithContext(context.WithValue(r.Context(), actorKey, p)))
 	}
 }
@@ -288,6 +295,14 @@ func (s *Server) authenticate(r *http.Request) (store.APIKey, error) {
 	return key, nil
 }
 
+// actorOf is the core caller for an authenticated key.
+func actorOf(key store.APIKey) core.Actor {
+	return core.Actor{
+		KeyID: key.ID, Admin: key.Admin(), Project: key.Project, Quota: key.Quota,
+		ReadOnly: !key.HasScope(store.ScopeSandbox),
+	}
+}
+
 func actor(r *http.Request) core.Actor {
 	p, _ := r.Context().Value(actorKey).(principal)
 	return p.actor
@@ -307,6 +322,8 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 			MaxConns   int       `json:"max_connections"`
 		} `json:"network"`
 		Registries []registryBody `json:"registries"`
+		Project    string         `json:"project"`
+		Quota      *quotaBody     `json:"quota"`
 	}
 	if err := decodeJSON(r, 1<<20, &body); err != nil {
 		writeDecodeErr(w, err)
@@ -317,6 +334,13 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		writeManager(w, err)
 		return
 	}
+	var quota store.KeyQuota
+	if body.Quota != nil {
+		if quota, err = body.Quota.quota(); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+			return
+		}
+	}
 	if body.Name == "" || len(body.Name) > 64 {
 		writeErr(w, http.StatusBadRequest, "invalid", "name is required")
 		return
@@ -325,8 +349,19 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 		body.Scopes = []string{"sandbox"}
 	}
 	for _, scope := range body.Scopes {
-		if scope != "admin" && scope != "sandbox" {
-			writeErr(w, http.StatusBadRequest, "invalid", "scopes must be admin or sandbox")
+		if !store.ValidScope(scope) {
+			writeErr(w, http.StatusBadRequest, "invalid", "scopes must be admin, sandbox, or read")
+			return
+		}
+	}
+	if body.Project != "" {
+		if !store.ValidProject(body.Project) {
+			writeErr(w, http.StatusBadRequest, "invalid", "project must be 1 to 64 letters, digits, '.', '_' or '-', starting with a letter or digit")
+			return
+		}
+		probe := store.APIKey{Scopes: body.Scopes}
+		if probe.Admin() {
+			writeErr(w, http.StatusBadRequest, "invalid", "admin keys see every project and cannot be bound to one")
 			return
 		}
 	}
@@ -373,6 +408,7 @@ func (s *Server) createKey(w http.ResponseWriter, r *http.Request) {
 	key := store.APIKey{
 		ID: id.RecordID(), Name: body.Name, Hash: hash, Prefix: prefix,
 		Scopes: body.Scopes, Network: network, Registries: registries, CreatedAt: now, ExpiresAt: expires,
+		Project: body.Project, Quota: quota,
 	}
 	if err := s.mgr.Store().CreateKey(r.Context(), key); err != nil {
 		s.log.Error("create key", "err", err)
@@ -398,6 +434,8 @@ func keyJSON(key store.APIKey, secret string) map[string]any {
 			"max_connections": key.Network.MaxConns,
 		},
 	}
+	body["project"] = key.Project
+	body["quota"] = quotaJSON(key.Quota)
 	// Registry secrets are write-only.
 	regs := make([]map[string]any, 0, len(key.Registries))
 	for _, reg := range key.Registries {
@@ -467,6 +505,71 @@ func (s *Server) setKeyRegistries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, keyJSON(key, ""))
+}
+
+type quotaBody struct {
+	MaxSandboxes int     `json:"max_sandboxes"`
+	MaxCPU       float64 `json:"max_cpu"`
+	MaxMemoryMB  int     `json:"max_memory_mb"`
+}
+
+func (b quotaBody) quota() (store.KeyQuota, error) {
+	if b.MaxSandboxes < 0 || b.MaxCPU < 0 || b.MaxMemoryMB < 0 {
+		return store.KeyQuota{}, errors.New("quota values must be >= 0; 0 uses the server default")
+	}
+	return store.KeyQuota{MaxSandboxes: b.MaxSandboxes, MaxCPU: b.MaxCPU, MaxMemoryMB: b.MaxMemoryMB}, nil
+}
+
+func quotaJSON(q store.KeyQuota) map[string]any {
+	return map[string]any{"max_sandboxes": q.MaxSandboxes, "max_cpu": q.MaxCPU, "max_memory_mb": q.MaxMemoryMB}
+}
+
+// setKeyQuota replaces a key's quota. Zero fields use the server default.
+// Sandboxes already running are not stopped when a quota shrinks; the key
+// cannot create more until it is back under the limit.
+func (s *Server) setKeyQuota(w http.ResponseWriter, r *http.Request) {
+	var body quotaBody
+	if err := decodeJSON(r, 1<<16, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	q, err := body.quota()
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid", err.Error())
+		return
+	}
+	st := s.mgr.Store()
+	if err := st.SetKeyQuota(r.Context(), r.PathValue("id"), q); errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "not_found", "key not found")
+		return
+	} else if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not update key")
+		return
+	}
+	key, err := st.KeyByID(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not load key")
+		return
+	}
+	writeJSON(w, http.StatusOK, keyJSON(key, ""))
+}
+
+// me describes the calling key: its scopes, project, quota, and what its live
+// sandboxes hold now, so a client can see its headroom before it creates.
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	p, _ := r.Context().Value(actorKey).(principal)
+	u, err := s.mgr.Usage(r.Context(), p.actor)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "could not load usage")
+		return
+	}
+	body := keyJSON(p.key, "")
+	// The effective sandbox limit, so the client need not know the server default.
+	limits := quotaJSON(p.key.Quota)
+	limits["max_sandboxes"] = s.mgr.MaxSandboxes(p.actor)
+	body["limits"] = limits
+	body["usage"] = map[string]any{"sandboxes": u.Sandboxes, "cpu": u.CPU, "memory_mb": u.MemoryMB}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func (s *Server) getKey(w http.ResponseWriter, r *http.Request) {
@@ -736,7 +839,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	in := core.CreateInput{
 		Template: body.Template, Image: body.Image, CPU: body.CPU, MemoryMB: body.MemoryMB,
 		DiskMB: body.DiskMB, PIDs: body.PIDs, TTLSeconds: body.TTLSeconds,
-		IdleTimeoutSeconds: body.IdleTimeoutSeconds, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
+		IdleTimeoutSeconds: body.IdleTimeoutSeconds, IdleAction: body.IdleAction, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
 		Steps: body.Steps,
 	}
 	if body.Network != nil {
@@ -834,6 +937,30 @@ func (s *Server) setSecrets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sandboxJSON(sb))
 }
 
+// updateNetwork changes the egress policy of a running sandbox. Omitted
+// fields keep their current value; see core.NetworkUpdate.
+func (s *Server) updateNetwork(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode       string    `json:"mode"`
+		Allow      *[]string `json:"allow"`
+		Deny       *[]string `json:"deny"`
+		EgressKbps *int      `json:"egress_kbps"`
+		MaxConns   *int      `json:"max_connections"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	sb, err := s.mgr.UpdateNetwork(r.Context(), actor(r), r.PathValue("id"), core.NetworkUpdate{
+		Mode: body.Mode, Allow: body.Allow, Deny: body.Deny, EgressKbps: body.EgressKbps, MaxConns: body.MaxConns,
+	})
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxJSON(sb))
+}
+
 func (s *Server) pauseSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := s.mgr.Pause(r.Context(), actor(r), r.PathValue("id"))
 	if err != nil {
@@ -872,46 +999,8 @@ func (s *Server) execSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) streamExec(w http.ResponseWriter, r *http.Request, sandboxID string, in core.ExecInput) {
-	flusher, _ := w.(http.Flusher)
-	headerSent := false
-	send := func(event string, payload any) {
-		if !headerSent {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			headerSent = true
-		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	res, err := s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, func(chunk driver.ExecChunk) error {
-		send(string(chunk.Kind), map[string]string{"data": string(chunk.Data)})
-		return nil
-	})
-	if err != nil && !headerSent {
-		writeManager(w, err)
-		return
-	}
-	if err != nil {
-		var op *core.OpError
-		code, msg := "driver", err.Error()
-		if errors.As(err, &op) {
-			code, msg = op.Code, op.Msg
-		}
-		send("error", map[string]string{"code": code, "message": msg})
-		return
-	}
-	send("exit", map[string]any{
-		"exit_code":   res.ExitCode,
-		"duration_ms": res.Duration.Milliseconds(),
-		"truncated":   res.Truncated,
+	s.streamChunks(w, r, func(emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+		return s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, emit)
 	})
 }
 
@@ -1050,6 +1139,7 @@ type createRequest struct {
 	PIDs               *int              `json:"pids"`
 	TTLSeconds         *int              `json:"ttl_seconds"`
 	IdleTimeoutSeconds *int              `json:"idle_timeout_seconds"`
+	IdleAction         string            `json:"idle_action"`
 	Env                map[string]string `json:"env"`
 	Network            *struct {
 		Mode       string    `json:"mode"`
@@ -1095,6 +1185,7 @@ type sandboxResponse struct {
 	Env                map[string]string `json:"env,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 	IdleTimeoutSeconds int               `json:"idle_timeout_seconds,omitempty"`
+	IdleAction         string            `json:"idle_action,omitempty"`
 	ExpiresAt          time.Time         `json:"expires_at"`
 	CreatedAt          time.Time         `json:"created_at"`
 	Node               string            `json:"node"`
@@ -1123,10 +1214,22 @@ func sandboxJSON(sb store.Sandbox) sandboxResponse {
 		ID: sb.ID, Status: sb.Status, Backend: sb.Backend, Template: sb.Template, Image: sb.Image,
 		CPU: sb.CPU, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB, PIDs: sb.PIDs, Network: sb.Network,
 		Allow: sb.Allow, Deny: sb.Deny, EgressKbps: sb.EgressKbps, MaxConns: sb.MaxConns,
-		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds,
+		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds, IdleAction: idleActionJSON(sb),
 		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local", Mounts: mounts,
 		SecretKeys: secretKeys(sb.Secrets),
 	}
+}
+
+// idleActionJSON shows the idle action only when an idle timeout makes it
+// matter.
+func idleActionJSON(sb store.Sandbox) string {
+	if sb.IdleTimeoutSeconds <= 0 {
+		return ""
+	}
+	if sb.IdleAction == "" {
+		return core.IdleStop
+	}
+	return sb.IdleAction
 }
 
 func volumeJSON(v store.Volume) volumeResponse {
