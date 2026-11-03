@@ -25,7 +25,7 @@ Terminals, logs, and previews need [sbx-agent](/docs/agent).
 
 ## API keys
 
-With an admin key, create a key with a name, a scope, and an optional expiry. The new key is shown once. The list shows each key's prefix, scopes, last use, expiry, and whether it is active, expired, or revoked. **Revoke** takes effect at once. The server still refuses to revoke the last admin key.
+With an admin key, create a key with a name, a scope (`sandbox`, `read`, or `admin`), an optional project and quota, and an optional expiry. The new key is shown once. The list shows each key's prefix, scopes, project, quota, last use, expiry, and whether it is active, expired, or revoked. **Revoke** takes effect at once. The server still refuses to revoke the last admin key.
 
 ## Security notes
 

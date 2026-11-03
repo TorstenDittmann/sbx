@@ -283,13 +283,23 @@ const created = await client.createKey("agent", {
   expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
   network: { mode: "allow", maxMode: "allow", allow: ["pypi.org"] },
   registries: [{ server: "ghcr.io", username: "agent-bot", password: process.env.GHCR_TOKEN }],
+  project: "acme", // share sandboxes with other "acme" keys
+  quota: { maxSandboxes: 50, maxCpu: 16, maxMemoryMb: 32768 },
 })
 created.key // shown once
 
 await client.listKeys()
 await client.getKey(created.id)
 await client.setKeyRegistries(created.id, []) // replace or remove private registry credentials
+await client.setKeyQuota(created.id, { maxSandboxes: 10 })
 await client.revokeKey(created.id) // stops working immediately
+```
+
+Any key can read its own limits and usage:
+
+```ts
+const { limits, usage } = await client.me()
+console.log(`${usage.sandboxes}/${limits.maxSandboxes} sandboxes`)
 ```
 
 ### Backends

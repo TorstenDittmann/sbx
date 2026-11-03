@@ -290,19 +290,29 @@ Admin key required.
 
 ```python
 from datetime import datetime, timedelta, timezone
-from sbx import KeyNetworkPolicy
+from sbx import KeyNetworkPolicy, KeyQuota
 
 created = client.create_key(
     "agent",
     scopes=["sandbox"],
     expires_at=datetime.now(timezone.utc) + timedelta(days=30),
     network=KeyNetworkPolicy(mode="allow", max_mode="allow", allow=["pypi.org"]),
+    project="acme",  # share sandboxes with other "acme" keys
+    quota=KeyQuota(max_sandboxes=50, max_cpu=16, max_memory_mb=32768),
 )
 created.key  # shown once
 
 client.list_keys()
 client.get_key(created.id)
+client.set_key_quota(created.id, KeyQuota(max_sandboxes=10))
 client.revoke_key(created.id)  # stops working immediately
+```
+
+Any key can read its own limits and usage:
+
+```python
+me = client.me()
+print(f"{me.usage.sandboxes}/{me.limits.max_sandboxes} sandboxes")
 ```
 
 ### Backends

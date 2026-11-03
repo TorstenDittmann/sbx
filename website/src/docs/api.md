@@ -310,13 +310,15 @@ A Volume is `{"id", "name", "backend", "created_at"}`. `backend` is `docker`, `g
 
 ## API keys
 
-All **admin**.
+All **admin**, except `GET /v1/me`, which any key may call.
 
 | Route | Body | Returns |
 |---|---|---|
-| `POST /v1/keys` | `{"name", "scopes", "expires_at", "network"}` | `201` Key with `key` once |
+| `POST /v1/keys` | `{"name", "scopes", "expires_at", "network", "registries", "project", "quota"}` | `201` Key with `key` once |
 | `GET /v1/keys` | | `{"keys": [Key]}` |
 | `GET /v1/keys/{id}` | | Key |
 | `DELETE /v1/keys/{id}` | | `204`, or `409` for the last usable admin key |
+| `PUT /v1/keys/{id}/quota` | `{"max_sandboxes", "max_cpu", "max_memory_mb"}` | Key |
+| `GET /v1/me` | | The calling Key with `limits` and `usage` |
 
-A Key is `{"id", "name", "prefix", "scopes", "created_at", "last_used_at", "expires_at", "revoked_at", "network"}`. `network` takes `mode`, `max_mode`, `allow`, `deny`, `egress_kbps`, and `max_connections`. See [API keys](/docs/api-keys/#network-policy-per-key).
+A Key is `{"id", "name", "prefix", "scopes", "project", "quota", "created_at", "last_used_at", "expires_at", "revoked_at", "network", "registries"}`. `scopes` are `admin`, `sandbox`, or `read`. `network` takes `mode`, `max_mode`, `allow`, `deny`, `egress_kbps`, and `max_connections`. See [API keys](/docs/api-keys/#scopes) for scopes, [projects](/docs/api-keys/#projects), [quotas](/docs/api-keys/#quotas), and the [network policy](/docs/api-keys/#network-policy-per-key).

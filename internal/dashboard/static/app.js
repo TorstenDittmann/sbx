@@ -789,6 +789,8 @@
 				h("td", {}, k.name, mine && h("span", { class: "muted small" }, " (this browser)")),
 				h("td", {}, h("code", {}, k.prefix + "…")),
 				h("td", {}, k.scopes.join(", ")),
+				h("td", {}, k.project || h("span", { class: "muted" }, "none")),
+				h("td", {}, quotaText(k.quota)),
 				h("td", {}, pill(st)),
 				h("td", {}, ago(k.created_at)),
 				h("td", {}, k.last_used_at ? ago(k.last_used_at) : "never"),
@@ -806,8 +808,26 @@
 			);
 		}
 
+		function quotaText(q) {
+			const parts = [];
+			if (q && q.max_sandboxes) parts.push(q.max_sandboxes + " sandboxes");
+			if (q && q.max_cpu) parts.push(q.max_cpu + " CPU");
+			if (q && q.max_memory_mb) parts.push(q.max_memory_mb + " MB");
+			return parts.length ? parts.join(", ") : h("span", { class: "muted" }, "default");
+		}
+
 		const name = h("input", { placeholder: "ci-runner", required: true, maxlength: 64 });
-		const scope = h("select", {}, h("option", { value: "sandbox" }, "sandbox"), h("option", { value: "admin" }, "admin"));
+		const scope = h(
+			"select",
+			{},
+			h("option", { value: "sandbox" }, "sandbox"),
+			h("option", { value: "read" }, "read (read-only)"),
+			h("option", { value: "admin" }, "admin"),
+		);
+		const project = h("input", { placeholder: "optional", maxlength: 64, pattern: "[A-Za-z0-9][A-Za-z0-9._\\-]*" });
+		const maxSandboxes = h("input", { type: "number", min: 0, step: 1, placeholder: "default" });
+		const maxCPU = h("input", { type: "number", min: 0, step: 0.1, placeholder: "no limit" });
+		const maxMemory = h("input", { type: "number", min: 0, step: 1, placeholder: "no limit" });
 		const expires = h("input", { type: "datetime-local" });
 		const form = h(
 			"form",
@@ -816,11 +836,16 @@
 				const btn = form.querySelector("button[type=submit]");
 				btn.disabled = true;
 				const req = { name: name.value.trim(), scopes: [scope.value] };
+				if (project.value.trim()) req.project = project.value.trim();
+				const quota = {};
+				if (maxSandboxes.value) quota.max_sandboxes = Number(maxSandboxes.value);
+				if (maxCPU.value) quota.max_cpu = Number(maxCPU.value);
+				if (maxMemory.value) quota.max_memory_mb = Number(maxMemory.value);
+				if (Object.keys(quota).length) req.quota = quota;
 				if (expires.value) req.expires_at = new Date(expires.value).toISOString();
 				try {
 					const k = await api("POST", "/v1/keys", req);
-					name.value = "";
-					expires.value = "";
+					for (const el of [name, project, maxSandboxes, maxCPU, maxMemory, expires]) el.value = "";
 					const code = h("code", {}, k.key);
 					secretBox.replaceChildren(
 						h(
@@ -841,6 +866,10 @@
 			} },
 			h("label", {}, "Name", name),
 			h("label", {}, "Scope", scope),
+			h("label", {}, "Project", project),
+			h("label", {}, "Max sandboxes", maxSandboxes),
+			h("label", {}, "Max CPU", maxCPU),
+			h("label", {}, "Max memory (MB)", maxMemory),
 			h("label", {}, "Expires (optional)", expires),
 			h("button", { class: "primary", type: "submit" }, "Create key"),
 		);
@@ -853,7 +882,7 @@
 			h(
 				"table",
 				{},
-				h("thead", {}, h("tr", {}, ["Name", "Prefix", "Scopes", "Status", "Created", "Last used", "Expires", ""].map((t) => h("th", {}, t)))),
+				h("thead", {}, h("tr", {}, ["Name", "Prefix", "Scopes", "Project", "Quota", "Status", "Created", "Last used", "Expires", ""].map((t) => h("th", {}, t)))),
 				body,
 			),
 		);

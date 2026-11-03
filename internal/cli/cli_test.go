@@ -63,3 +63,36 @@ func TestLoadFlagsOverride(t *testing.T) {
 		t.Fatal(def.Addr)
 	}
 }
+
+func TestKeysCreateScopedAndQuota(t *testing.T) {
+	dir := t.TempDir()
+	args := []string{"keys", "create", "--name", "viewer", "--read-only", "--project", "acme",
+		"--max-sandboxes", "5", "--max-cpu", "2.5", "--max-memory-mb", "4096", "--data-dir", dir}
+	if err := Run(args); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(dir, "sbx.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	keys, err := st.ListKeys(context.Background())
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("%+v %v", keys, err)
+	}
+	k := keys[0]
+	if k.Project != "acme" || k.HasScope("sandbox") || !k.HasScope("read") ||
+		k.Quota != (store.KeyQuota{MaxSandboxes: 5, MaxCPU: 2.5, MaxMemoryMB: 4096}) {
+		t.Fatalf("%+v", k)
+	}
+	for _, bad := range [][]string{
+		{"keys", "create", "--name", "x", "--admin", "--read-only", "--data-dir", dir},
+		{"keys", "create", "--name", "x", "--admin", "--project", "acme", "--data-dir", dir},
+		{"keys", "create", "--name", "x", "--project", "-bad", "--data-dir", dir},
+		{"keys", "create", "--name", "x", "--max-cpu", "-1", "--data-dir", dir},
+	} {
+		if err := Run(bad); err == nil {
+			t.Errorf("%v accepted", bad)
+		}
+	}
+}

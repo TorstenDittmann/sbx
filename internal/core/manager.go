@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,70 @@ import (
 type Actor struct {
 	KeyID string
 	Admin bool
+	// Project, when set, lets the caller see what other keys of the same
+	// project created.
+	Project string
+	// Quota caps the caller's live sandboxes. Zero fields use the server.
+	Quota store.KeyQuota
+	// ReadOnly is a key with only the read scope. It may read files, but
+	// not the kernel's views of the sandbox: /proc/1/environ alone would
+	// hand it the secrets that the API never returns.
+	ReadOnly bool
+}
+
+// kernelPath reports whether a cleaned path is under /proc, /sys, or /dev.
+func kernelPath(p string) bool {
+	for _, root := range []string{"/proc", "/sys", "/dev"} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// sees reports whether actor may see a sandbox or volume owned by owner.
+func (m *Manager) sees(ctx context.Context, actor Actor, owner string) (bool, error) {
+	if actor.Admin || owner == actor.KeyID {
+		return true, nil
+	}
+	if actor.Project == "" || owner == "" || owner == store.SystemOwner {
+		return false, nil
+	}
+	p, err := m.store.KeyProject(ctx, owner)
+	return p == actor.Project, err
+}
+
+// MaxSandboxes is the caller's live sandbox limit.
+func (m *Manager) MaxSandboxes(actor Actor) int {
+	if actor.Quota.MaxSandboxes > 0 {
+		return actor.Quota.MaxSandboxes
+	}
+	return m.cfg.Limits.MaxSandboxesPerKey
+}
+
+// checkQuota fails when one more sandbox of cpu and mem would take actor past
+// its quota.
+func (m *Manager) checkQuota(ctx context.Context, actor Actor, cpu float64, mem int) error {
+	u, err := m.store.UsageOf(ctx, actor.KeyID)
+	if err != nil {
+		return err
+	}
+	if max := m.MaxSandboxes(actor); u.Sandboxes >= max {
+		return quota(fmt.Sprintf("sandbox limit of %d reached", max))
+	}
+	// Compare in thousandths of a CPU so 0.1 + 0.2 fits a quota of 0.3.
+	if q := actor.Quota.MaxCPU; q > 0 && math.Round((u.CPU+cpu)*1000) > math.Round(q*1000) {
+		return quota(fmt.Sprintf("cpu quota of %v reached: %v in use, %v requested", q, u.CPU, cpu))
+	}
+	if q := actor.Quota.MaxMemoryMB; q > 0 && u.MemoryMB+mem > q {
+		return quota(fmt.Sprintf("memory quota of %d MB reached: %d MB in use, %d MB requested", q, u.MemoryMB, mem))
+	}
+	return nil
+}
+
+// Usage returns what the caller's live sandboxes hold.
+func (m *Manager) Usage(ctx context.Context, actor Actor) (store.Usage, error) {
+	return m.store.UsageOf(ctx, actor.KeyID)
 }
 
 // CreateInput is a sandbox create request after JSON decoding.
@@ -339,14 +404,9 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	}
 
 	m.mu.Lock()
-	n, err := m.store.CountActive(ctx, actor.KeyID)
-	if err != nil {
+	if err := m.checkQuota(ctx, actor, cpu, mem); err != nil {
 		m.mu.Unlock()
 		return store.Sandbox{}, err
-	}
-	if n >= m.cfg.Limits.MaxSandboxesPerKey {
-		m.mu.Unlock()
-		return store.Sandbox{}, quota(fmt.Sprintf("sandbox limit of %d reached", m.cfg.Limits.MaxSandboxesPerKey))
 	}
 	// A claim turns a pooled sandbox into the caller's without adding a
 	// container, so it is tried before the node cap, which counts the pool.
@@ -482,6 +542,7 @@ func (m *Manager) List(ctx context.Context, actor Actor, in ListInput) ([]store.
 	}
 	if !actor.Admin {
 		f.OwnerID = actor.KeyID
+		f.Project = actor.Project
 	}
 	return m.store.ListSandboxes(ctx, f)
 }
@@ -1172,7 +1233,9 @@ func (m *Manager) visible(ctx context.Context, actor Actor, sandboxID string) (s
 	if err != nil {
 		return store.Sandbox{}, err
 	}
-	if !actor.Admin && sb.OwnerKeyID != actor.KeyID {
+	if ok, err := m.sees(ctx, actor, sb.OwnerKeyID); err != nil {
+		return store.Sandbox{}, err
+	} else if !ok {
 		return store.Sandbox{}, notFound("sandbox not found")
 	}
 	return sb, nil
@@ -1227,6 +1290,9 @@ func (m *Manager) fileReady(ctx context.Context, actor Actor, sandboxID, p strin
 	p, err = cleanPath(p)
 	if err != nil {
 		return store.Sandbox{}, nil, "", err
+	}
+	if actor.ReadOnly && kernelPath(p) {
+		return store.Sandbox{}, nil, "", forbidden("a read-only key cannot read " + p)
 	}
 	return sb, d, p, nil
 }
