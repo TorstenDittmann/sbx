@@ -484,6 +484,9 @@ func (m *Manager) OpenPreview(ctx context.Context, sandboxID, previewID string) 
 	if err != nil {
 		return nil, Preview{}, err
 	}
+	if sb, err = m.autoWake(ctx, sb); err != nil {
+		return nil, Preview{}, err
+	}
 	if sb.Status == "paused" {
 		return nil, Preview{}, conflict("sandbox is paused")
 	}

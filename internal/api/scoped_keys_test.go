@@ -65,6 +65,20 @@ func TestReadOnlyKey(t *testing.T) {
 			t.Errorf("%s %s with read key = %s, want 403", tc.method, tc.path, resp.Status)
 		}
 	}
+	// /proc/1/environ holds the sandbox's secrets, which the API never
+	// returns, so a read key may not download the kernel's files.
+	for _, p := range []string{"/proc/1/environ", "/workspace/../proc/self/environ", "/sys/kernel", "/dev"} {
+		for _, route := range []string{"/files/content", "/files/archive"} {
+			resp := h.do(t, http.MethodGet, "/v1/sandboxes/"+sbID+route+"?path="+p, reader.Key, nil)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusForbidden {
+				t.Errorf("GET %s %s with read key = %s, want 403", route, p, resp.Status)
+			}
+		}
+	}
+	if resp := h.do(t, http.MethodGet, "/v1/sandboxes/"+sbID+"/files/content?path=/proc/1/environ", writer.Key, nil); resp.StatusCode == http.StatusForbidden {
+		t.Errorf("GET /proc/1/environ with sandbox key = %s, want it allowed", resp.Status)
+	}
 }
 
 func TestProjectKeysShareVisibility(t *testing.T) {

@@ -14,7 +14,15 @@ export class SbxError extends Error {
   }
 }
 
-export type SandboxStatus = "creating" | "running" | "paused" | "stopped" | "error" | "warm"
+export type SandboxStatus = "creating" | "running" | "paused" | "hibernated" | "stopped" | "error" | "warm"
+
+/**
+ * What the server does with a sandbox after `idleTimeout` without activity.
+ * `stop` (the default) stops it. `pause` freezes it in place. `hibernate`
+ * snapshots it, `/workspace` included, and removes its container. A paused or
+ * hibernated sandbox wakes on its next exec, file call, or preview request.
+ */
+export type IdleAction = "stop" | "pause" | "hibernate"
 
 // BuildStep is one template build step. See Template for the builder.
 export type BuildStep =
@@ -110,6 +118,7 @@ export type SandboxInfo = {
   labels?: Record<string, string>
   secretKeys?: string[]
   idleTimeoutSeconds?: number
+  idleAction?: IdleAction
   expiresAt: string
   createdAt: string
   node: string
@@ -170,6 +179,8 @@ export type CreateSandboxOptions = {
   pids?: number
   ttl?: number | string
   idleTimeout?: number | string
+  /** What happens once `idleTimeout` passes. Needs `idleTimeout`. */
+  idleAction?: IdleAction
   env?: Record<string, string>
   network?: NetworkPolicy
   backend?: "docker" | "gvisor" | "kata" | "firecracker"
@@ -303,6 +314,8 @@ export type SandboxEventType =
   | "sandbox.expired"
   | "sandbox.paused"
   | "sandbox.resumed"
+  | "sandbox.hibernated"
+  | "sandbox.network_updated"
   | "sandbox.oom"
   | "sandbox.lost"
 
@@ -373,6 +386,7 @@ type SandboxJSON = {
   labels?: Record<string, string>
   secret_keys?: string[]
   idle_timeout_seconds?: number
+  idle_action?: IdleAction
   expires_at: string
   created_at: string
   node: string
@@ -414,6 +428,7 @@ function mapSandbox(raw: SandboxJSON): SandboxInfo {
     labels: raw.labels,
     secretKeys: raw.secret_keys,
     idleTimeoutSeconds: raw.idle_timeout_seconds,
+    idleAction: raw.idle_action,
     expiresAt: raw.expires_at,
     createdAt: raw.created_at,
     node: raw.node,
@@ -550,6 +565,7 @@ function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   if (options.pids != null) body.pids = options.pids
   if (options.ttl != null) body.ttl_seconds = parseDuration(options.ttl)
   if (options.idleTimeout != null) body.idle_timeout_seconds = parseDuration(options.idleTimeout)
+  if (options.idleAction) body.idle_action = options.idleAction
   if (options.env) body.env = options.env
   if (options.network) body.network = networkBody(options.network)
   if (options.backend) body.backend = options.backend
@@ -760,6 +776,19 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("PUT", `/v1/sandboxes/${encodeURIComponent(id)}/secrets`, { secrets }).then(mapSandbox)
   }
 
+  /**
+   * Changes the egress rules of a running or paused sandbox. Omitted fields
+   * keep their current value; `mode: "full"` without `allow` drops back to
+   * the key or server allow list. Server and key deny rules always stay.
+   */
+  updateNetwork(id: string, policy: NetworkPolicy): Promise<SandboxInfo> {
+    return this.requestJSON<SandboxJSON>(
+      "PATCH",
+      `/v1/sandboxes/${encodeURIComponent(id)}/network`,
+      networkBody(policy),
+    ).then(mapSandbox)
+  }
+
   setTTL(id: string, ttl: number | string): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("POST", `/v1/sandboxes/${encodeURIComponent(id)}/timeout`, {
       ttl_seconds: parseDuration(ttl),
@@ -841,25 +870,14 @@ export class SbxClient {
     if (options.recursive) q.set("recursive", "1")
     const response = await this.request("GET", `/v1/sandboxes/${encodeURIComponent(id)}/files/watch?${q}`)
     if (!response.body) throw new SbxError(response.status, "driver", "empty watch stream")
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let split = buffer.indexOf("\n\n")
-      while (split >= 0) {
-        const block = buffer.slice(0, split)
-        buffer = buffer.slice(split + 2)
-        const event = parseSSE(block)
-        if (event?.event === "change") {
-          const raw = event.json
-          yield { type: String(raw.type ?? ""), path: String(raw.path ?? "") }
-        } else if (event?.event === "error") {
-          throw new SbxError(502, String(event.json.code ?? "driver"), String(event.json.message ?? "watch failed"))
-        }
-        split = buffer.indexOf("\n\n")
+    // Breaking out of the loop cancels the body and closes the watch.
+    for await (const block of sseBlocks(response.body)) {
+      const event = parseSSE(block)
+      if (event?.event === "change") {
+        const raw = event.json
+        yield { type: String(raw.type ?? ""), path: String(raw.path ?? "") }
+      } else if (event?.event === "error") {
+        throw new SbxError(502, String(event.json.code ?? "driver"), String(event.json.message ?? "watch failed"))
       }
     }
   }
@@ -1135,21 +1153,11 @@ function mapPreview(raw: PreviewJSON): PreviewInfo {
 }
 
 async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ExecEvent> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  while (true) {
-    const chunk = await reader.read()
-    if (chunk.done) break
-    buffer += decoder.decode(chunk.value, { stream: true })
-    let split = buffer.indexOf("\n\n")
-    while (split >= 0) {
-      const block = buffer.slice(0, split)
-      buffer = buffer.slice(split + 2)
-      const event = parseExecEvent(block)
-      if (event) yield event
-      split = buffer.indexOf("\n\n")
-    }
+  // sseBlocks cancels the body when the caller stops early, so breaking out
+  // of a for-await loop closes the connection instead of leaking it.
+  for await (const block of sseBlocks(body)) {
+    const event = parseExecEvent(block)
+    if (event) yield event
   }
 }
 
@@ -1308,6 +1316,7 @@ export class Sandbox {
   labels?: Record<string, string>
   secretKeys?: string[]
   idleTimeoutSeconds?: number
+  idleAction?: IdleAction
   expiresAt: string
   createdAt: string
   node: string
@@ -1331,6 +1340,7 @@ export class Sandbox {
     this.labels = info.labels
     this.secretKeys = info.secretKeys
     this.idleTimeoutSeconds = info.idleTimeoutSeconds
+    this.idleAction = info.idleAction
     this.expiresAt = info.expiresAt
     this.createdAt = info.createdAt
     this.node = info.node
@@ -1378,6 +1388,13 @@ export class Sandbox {
 
   async kill(): Promise<SandboxInfo> {
     const info = await this.#client.deleteSandbox(this.id)
+    this.apply(info)
+    return info
+  }
+
+  /** Changes this sandbox's egress rules. See `Client.updateNetwork`. */
+  async updateNetwork(policy: NetworkPolicy): Promise<SandboxInfo> {
+    const info = await this.#client.updateNetwork(this.id, policy)
     this.apply(info)
     return info
   }

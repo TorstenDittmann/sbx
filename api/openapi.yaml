@@ -402,7 +402,10 @@ paths:
         `id: <n>`, `event: <type>`, and `data:` holding an `Event` object.
         Types are `sandbox.created`, `sandbox.failed`, `sandbox.deleted`,
         `sandbox.expired` (reason `ttl` or `idle`), `sandbox.paused`,
-        `sandbox.resumed`, `sandbox.oom` (a process was OOM-killed; the
+        `sandbox.resumed`, `sandbox.hibernated` (an idle sandbox saved to a
+        snapshot), `sandbox.network_updated` (egress rules changed; data
+        holds the new network, allow, deny, egress_kbps, and
+        max_connections), `sandbox.oom` (a process was OOM-killed; the
         sandbox usually keeps running), and `sandbox.lost` (the sandbox
         stopped without sbx stopping it; reason `exited` or `missing`).
 
@@ -562,6 +565,38 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Sandbox"}
+  /v1/sandboxes/{id}/network:
+    patch:
+      operationId: updateSandboxNetwork
+      summary: Change egress rules on a running sandbox
+      description: >
+        Replaces the allow list, the sandbox deny rules, and the limits of a
+        running or paused sandbox without restarting it. Omitted fields keep
+        their current value. Sending mode full without allow drops back to the
+        API key or server allow list. The new policy goes through the same
+        inheritance as a create, using the API key that owns the sandbox: the
+        server and key deny lists stay, limits cannot go above the server or
+        key limit, and a key max_mode still applies. Switching between none
+        and full or allow is rejected because the interface is attached at
+        create time. Connections that are already open are not cut. Docker,
+        gVisor, and Kata support this; Firecracker returns 400 unsupported.
+        Emits sandbox.network_updated.
+      parameters:
+        - $ref: "#/components/parameters/SandboxID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/Network"}
+      responses:
+        "200":
+          description: Sandbox with the new egress_allow, egress_deny, egress_kbps, and max_connections
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Sandbox"}
+        "400": {description: Invalid rule, none to full switch, or a backend without live updates}
+        "403": {description: Outside the owning API key's max_mode or allow list}
+        "409": {description: Sandbox is not running}
   /v1/sandboxes/{id}/pause:
     post:
       operationId: pauseSandbox
@@ -653,7 +688,8 @@ paths:
       description: |
         Waits for the process and returns stdout, stderr, and the exit code.
         `?stream=1` switches the response to Server-Sent Events (`stdout`,
-        `stderr`, `exit`, `error`).
+        `stderr`, `exit`, `error`). A quiet stream sends a `: ping` comment
+        every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - in: query
@@ -793,7 +829,8 @@ paths:
       description: |
         Server-Sent Events. `ready`, then `change` events with `type`
         (`create`, `write`, or `remove`) and `path`. The agent uses inotify
-        and falls back to a 200 ms poll when inotify is unavailable.
+        and falls back to a 200 ms poll when inotify is unavailable. A quiet
+        stream sends a `: ping` comment every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"
@@ -1111,7 +1148,7 @@ components:
         id: {type: integer}
         type:
           type: string
-          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.oom, sandbox.lost]
+          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.network_updated, sandbox.oom, sandbox.lost]
         sandbox_id: {type: string}
         time: {type: string, format: date-time}
         data:
@@ -1436,6 +1473,16 @@ components:
         pids: {type: integer}
         ttl_seconds: {type: integer}
         idle_timeout_seconds: {type: integer}
+        idle_action:
+          type: string
+          enum: [stop, pause, hibernate]
+          description: >
+            What the reaper does after idle_timeout_seconds without activity.
+            stop (the default) stops the sandbox. pause freezes it. hibernate
+            snapshots it, /workspace included, and removes the container. A
+            paused or hibernated sandbox wakes on its next exec, file,
+            process, terminal, or preview request. hibernate needs a backend
+            with snapshots. Needs idle_timeout_seconds.
         env: {type: object, additionalProperties: {type: string}}
         network: {$ref: "#/components/schemas/Network"}
         backend: {type: string, enum: [docker, gvisor, kata, firecracker]}
@@ -1540,7 +1587,7 @@ components:
       required: [id, status, backend, image, expires_at, node]
       properties:
         id: {type: string}
-        status: {type: string, enum: [creating, running, paused, stopped, error, warm]}
+        status: {type: string, enum: [creating, running, paused, hibernated, stopped, error, warm]}
         backend: {type: string}
         template: {type: string}
         image: {type: string}
@@ -1568,6 +1615,7 @@ components:
           items: {type: string}
           description: Names of secrets set on this sandbox. Values are not returned.
         idle_timeout_seconds: {type: integer}
+        idle_action: {type: string, enum: [stop, pause, hibernate]}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         node: {type: string}

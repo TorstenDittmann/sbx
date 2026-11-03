@@ -14,13 +14,14 @@ An admin key sees every sandbox and the **API keys** page. A sandbox key sees on
 
 The list refreshes every few seconds. Search matches id, template, image, status, and labels, the same as `GET /v1/sandboxes?q=`. **New sandbox** creates one from a template or an image, with a TTL and a network mode.
 
-Open a sandbox for three tabs:
+Open a sandbox for four tabs:
 
 - **Overview** shows resources, network, expiry, labels, env, secret names, and mounts. Pause, resume, set a new TTL, or delete from the header.
 - **Terminal** opens an interactive shell (`bash` when the image has it, otherwise `sh`) over the terminal WebSocket. Leaving the tab kills the shell. **New session** starts another.
 - **Logs** lists background processes and streams the stdout and stderr of the one you pick. **Run in background** starts a command with `sh -c` and follows it.
+- **Previews** publishes a port a process listens on. The URL with the preview token is shown once, with **Copy** and **Open**; the list shows each preview's port, access, and URL without the token, and **Delete** removes one. See [Previews](/docs/previews).
 
-Terminals and logs need [sbx-agent](/docs/agent).
+Terminals, logs, and previews need [sbx-agent](/docs/agent).
 
 ## API keys
 

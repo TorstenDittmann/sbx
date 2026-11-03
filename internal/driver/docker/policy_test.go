@@ -142,3 +142,28 @@ func TestRefreshDoesNotResurrectDeletedPolicy(t *testing.T) {
 		t.Fatalf("next refresh = %v", err)
 	}
 }
+
+func TestLiveUpdateClearsBandwidthLimit(t *testing.T) {
+	var scripts []string
+	d, fd := newPolicyDriver(t, func(script string) { scripts = append(scripts, script) })
+	ctx := context.Background()
+	addRunning(fd, "cid-bw")
+	spec := driver.SandboxSpec{ID: "sbx_0123456789abcdef", Network: driver.NetFull, Policy: driver.NetPolicy{EgressKbps: 128}}
+	if err := d.ApplyNetPolicy(ctx, "cid-bw", spec); err != nil {
+		t.Fatal(err)
+	}
+	spec.Policy.EgressKbps = 0
+	if err := d.ApplyNetPolicy(ctx, "cid-bw", spec); err != nil {
+		t.Fatal(err)
+	}
+	last := scripts[len(scripts)-1]
+	if !strings.Contains(last, "tc qdisc del") {
+		t.Fatalf("dropping egress_kbps did not remove the qdisc:\n%s", last)
+	}
+	if err := d.ApplyNetPolicy(ctx, "cid-bw", spec); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(scripts[len(scripts)-1], "tc qdisc") {
+		t.Fatal("a policy without a limit kept touching tc")
+	}
+}

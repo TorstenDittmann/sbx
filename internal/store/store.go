@@ -68,8 +68,8 @@ type KeyQuota struct {
 	MaxMemoryMB  int     `json:"max_memory_mb,omitempty"`
 }
 
-// Usage is what one key's live sandboxes hold: those creating, running, or
-// paused, since a paused sandbox keeps its reservation.
+// Usage is what one key's live sandboxes hold: those creating, running,
+// paused, or hibernated, since each keeps its reservation.
 type Usage struct {
 	Sandboxes int
 	CPU       float64
@@ -181,7 +181,9 @@ type BuildStep struct {
 // SystemOwner is the owner of warm-pool sandboxes. They do not count toward a key's quota.
 const SystemOwner = "sbx-system"
 
-// Sandbox is one sandbox row. Status is creating, running, paused, stopped, error, or warm.
+// Sandbox is one sandbox row. Status is creating, running, paused,
+// hibernated, stopped, error, or warm. A hibernated sandbox has no container:
+// its state is in SnapshotImage until it is woken.
 type Sandbox struct {
 	ID                 string
 	Template           string
@@ -204,11 +206,18 @@ type Sandbox struct {
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
 	IdleTimeoutSeconds int
-	LastActivityAt     time.Time
-	FinishedAt         *time.Time
-	ContainerID        string
-	Error              string
-	Mounts             []Mount
+	// IdleAction is what the reaper does once IdleTimeoutSeconds pass
+	// without activity: stop (the default), pause, or hibernate.
+	IdleAction     string
+	LastActivityAt time.Time
+	FinishedAt     *time.Time
+	ContainerID    string
+	Error          string
+	Mounts         []Mount
+	// SnapshotImage is the hibernation snapshot the sandbox was saved to.
+	// While hibernated there is no container and a wake starts one from
+	// it; after the wake the container keeps running from it.
+	SnapshotImage string
 }
 
 // Mount records a volume attached to a sandbox.
@@ -283,6 +292,8 @@ func migrate(db *sql.DB) error {
 		{"sandboxes", "max_conns", `ALTER TABLE sandboxes ADD COLUMN max_conns INTEGER NOT NULL DEFAULT 0`},
 		{"sandboxes", "mounts_json", `ALTER TABLE sandboxes ADD COLUMN mounts_json TEXT NOT NULL DEFAULT '[]'`},
 		{"sandboxes", "secrets_json", `ALTER TABLE sandboxes ADD COLUMN secrets_json TEXT NOT NULL DEFAULT '{}'`},
+		{"sandboxes", "idle_action", `ALTER TABLE sandboxes ADD COLUMN idle_action TEXT NOT NULL DEFAULT 'stop'`},
+		{"sandboxes", "snapshot_image", `ALTER TABLE sandboxes ADD COLUMN snapshot_image TEXT NOT NULL DEFAULT ''`},
 		{"api_keys", "network_json", `ALTER TABLE api_keys ADD COLUMN network_json TEXT NOT NULL DEFAULT '{}'`},
 		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at INTEGER`},
 		{"api_keys", "revoked_at", `ALTER TABLE api_keys ADD COLUMN revoked_at INTEGER`},
@@ -383,7 +394,9 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     container_id TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
     mounts_json TEXT NOT NULL DEFAULT '[]',
-    secrets_json TEXT NOT NULL DEFAULT '{}'
+    secrets_json TEXT NOT NULL DEFAULT '{}',
+    idle_action TEXT NOT NULL DEFAULT 'stop',
+    snapshot_image TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS volumes (
@@ -684,12 +697,14 @@ func (s *Store) InsertSandbox(ctx context.Context, sb Sandbox) error {
 			id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
 			env_json, network, allow_json, deny_json, egress_kbps, max_conns,
 			labels_json, owner_key_id, created_at, expires_at,
-			idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json,
+			idle_action, snapshot_image
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		sb.ID, sb.Template, sb.Image, sb.Backend, sb.Status, sb.CPU, sb.MemoryMB, sb.DiskMB, sb.PIDs,
 		mustJSON(sb.Env), sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns,
 		mustJSON(sb.Labels), sb.OwnerKeyID, millis(sb.CreatedAt), millis(sb.ExpiresAt),
-		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mountsJSON(sb.Mounts), mustJSON(sb.Secrets))
+		sb.IdleTimeoutSeconds, millis(sb.LastActivityAt), nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mountsJSON(sb.Mounts), mustJSON(sb.Secrets),
+		idleAction(sb.IdleAction), sb.SnapshotImage)
 	return err
 }
 
@@ -706,10 +721,10 @@ func (s *Store) UpdateSandboxFrom(ctx context.Context, sb Sandbox, from ...strin
 	q := `
 		UPDATE sandboxes SET
 			status = ?, expires_at = ?, idle_timeout_seconds = ?, last_activity_at = ?,
-			finished_at = ?, container_id = ?, error = ?, labels_json = ?
+			finished_at = ?, container_id = ?, error = ?, labels_json = ?, snapshot_image = ?
 		WHERE id = ?`
 	args := []any{sb.Status, millis(sb.ExpiresAt), sb.IdleTimeoutSeconds, millis(sb.LastActivityAt),
-		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.ID}
+		nullMillis(sb.FinishedAt), sb.ContainerID, sb.Error, mustJSON(sb.Labels), sb.SnapshotImage, sb.ID}
 	if len(from) > 0 {
 		q += ` AND status IN (?` + strings.Repeat(`, ?`, len(from)-1) + `)`
 		for _, st := range from {
@@ -803,16 +818,17 @@ func (s *Store) CountActive(ctx context.Context, ownerID string) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sandboxes
-		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&n)
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused', 'hibernated')`, ownerID).Scan(&n)
 	return n, err
 }
 
-// UsageOf sums what an owner's live sandboxes hold.
+// UsageOf sums what an owner's live sandboxes hold. Hibernated sandboxes
+// count too: a wake brings their CPU and memory back without a quota check.
 func (s *Store) UsageOf(ctx context.Context, ownerID string) (Usage, error) {
 	var u Usage
 	err := s.db.QueryRowContext(ctx, `
 		SELECT COUNT(*), COALESCE(SUM(cpu), 0), COALESCE(SUM(memory_mb), 0) FROM sandboxes
-		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&u.Sandboxes, &u.CPU, &u.MemoryMB)
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused', 'hibernated')`, ownerID).Scan(&u.Sandboxes, &u.CPU, &u.MemoryMB)
 	return u, err
 }
 
@@ -825,14 +841,18 @@ func ownerClause(owner, project string) (string, []any) {
 	return `(owner_key_id = ? OR owner_key_id IN (SELECT id FROM api_keys WHERE project = ?))`, []any{owner, project}
 }
 
-// ListDue returns sandboxes the reaper should stop.
+// ListDue returns sandboxes the reaper should act on: past their TTL, idle,
+// or stuck creating. An idle sandbox whose idle action is pause or hibernate
+// is due only while it is running; once paused or hibernated only its TTL
+// applies.
 func (s *Store) ListDue(ctx context.Context, now time.Time, creatingBefore time.Time) ([]Sandbox, error) {
 	rows, err := s.db.QueryContext(ctx, sandboxSelect+`
 		WHERE (
-			status IN ('running', 'paused') AND (
-				expires_at <= ? OR
-				(idle_timeout_seconds > 0 AND last_activity_at + idle_timeout_seconds * 1000 <= ?)
-			)
+			status IN ('running', 'paused', 'hibernated') AND expires_at <= ?
+		) OR (
+			status IN ('running', 'paused') AND
+			idle_timeout_seconds > 0 AND last_activity_at + idle_timeout_seconds * 1000 <= ? AND
+			(idle_action = 'stop' OR status = 'running')
 		) OR (
 			status = 'creating' AND created_at <= ?
 		)`, millis(now), millis(now), millis(creatingBefore))
@@ -886,7 +906,8 @@ const sandboxSelect = `
 SELECT id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
        env_json, network, allow_json, deny_json, egress_kbps, max_conns,
        labels_json, owner_key_id, created_at, expires_at,
-       idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json
+       idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json,
+       idle_action, snapshot_image
 FROM sandboxes`
 
 // UpdateSecrets replaces the secret map for one sandbox.
@@ -1017,6 +1038,7 @@ func scanSandbox(row scanner) (Sandbox, error) {
 		&sb.ID, &sb.Template, &sb.Image, &sb.Backend, &sb.Status, &sb.CPU, &sb.MemoryMB, &sb.DiskMB, &sb.PIDs,
 		&env, &sb.Network, &allow, &deny, &sb.EgressKbps, &sb.MaxConns, &labels, &sb.OwnerKeyID, &created, &expires,
 		&sb.IdleTimeoutSeconds, &activity, &finished, &sb.ContainerID, &sb.Error, &mounts, &secrets,
+		&sb.IdleAction, &sb.SnapshotImage,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Sandbox{}, ErrNotFound
@@ -1144,4 +1166,53 @@ func ParseLabelQuery(values []string) (map[string]string, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// idleAction stores the default for an unset idle action.
+func idleAction(a string) string {
+	if a == "" {
+		return "stop"
+	}
+	return a
+}
+
+// HibernateSandbox records that a running sandbox was saved to image and its
+// container is about to be removed. It only applies while the row is still
+// running with the activity time the caller saw, so a request that touched
+// the sandbox during the snapshot keeps it running.
+func (s *Store) HibernateSandbox(ctx context.Context, id, image string, activity time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET status = 'hibernated', container_id = '', snapshot_image = ?
+		WHERE id = ? AND status = 'running' AND last_activity_at = ?`, image, id, millis(activity))
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// UpdateNetwork replaces the egress policy of a sandbox that is still running
+// or paused. A sandbox that stopped meanwhile returns ErrNotFound.
+func (s *Store) UpdateNetwork(ctx context.Context, sb Sandbox) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET network = ?, allow_json = ?, deny_json = ?, egress_kbps = ?, max_conns = ?
+		WHERE id = ? AND status IN ('running', 'paused')`,
+		sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns, sb.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }

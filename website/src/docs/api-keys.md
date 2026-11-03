@@ -20,7 +20,7 @@ The first boot of a data directory generates an admin key, prints it once, and w
 |---|---|
 | `admin` | Everything. Manages keys and templates, sees every sandbox and volume, lists warm pool sandboxes, and can run [builds](/docs/templates/#builds-and-permissions). |
 | `sandbox` | Creates and uses sandboxes and volumes. Only sees what it created, or what its [project](#projects) created. Lists templates and backends. |
-| `read` | Read-only. Lists and gets sandboxes, volumes, templates, and backends, reads files, stats, process output, and the event stream. Cannot create, delete, exec, write files, open terminals, or reach previews. |
+| `read` | Read-only. Lists and gets sandboxes, volumes, templates, and backends, reads files (except under `/proc`, `/sys`, and `/dev`, which would expose a sandbox's secrets), stats, process output, and the event stream. Cannot create, delete, exec, write files, open terminals, or reach previews. |
 
 Each scope includes the ones below it. Give applications `sandbox` keys. A sandbox key that leaks can only touch its own sandboxes, and only up to its [quota](#quotas). Give dashboards, log shippers, and monitoring `read` keys, usually bound to a project so they have something to see.
 

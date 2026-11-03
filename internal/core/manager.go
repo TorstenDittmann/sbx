@@ -33,6 +33,20 @@ type Actor struct {
 	Project string
 	// Quota caps the caller's live sandboxes. Zero fields use the server.
 	Quota store.KeyQuota
+	// ReadOnly is a key with only the read scope. It may read files, but
+	// not the kernel's views of the sandbox: /proc/1/environ alone would
+	// hand it the secrets that the API never returns.
+	ReadOnly bool
+}
+
+// kernelPath reports whether a cleaned path is under /proc, /sys, or /dev.
+func kernelPath(p string) bool {
+	for _, root := range []string{"/proc", "/sys", "/dev"} {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 // sees reports whether actor may see a sandbox or volume owned by owner.
@@ -90,18 +104,20 @@ type CreateInput struct {
 	PIDs               *int
 	TTLSeconds         *int
 	IdleTimeoutSeconds *int
-	Env                map[string]string
-	Network            string
-	Allow              []string
-	Deny               []string
-	HasAllow           bool
-	HasDeny            bool
-	EgressKbps         *int
-	MaxConns           *int
-	Backend            string
-	Labels             map[string]string
-	Mounts             []MountInput
-	Secrets            map[string]string
+	// IdleAction is stop (the default), pause, or hibernate. See IdleStop.
+	IdleAction string
+	Env        map[string]string
+	Network    string
+	Allow      []string
+	Deny       []string
+	HasAllow   bool
+	HasDeny    bool
+	EgressKbps *int
+	MaxConns   *int
+	Backend    string
+	Labels     map[string]string
+	Mounts     []MountInput
+	Secrets    map[string]string
 	// Steps are build steps run after the template's own steps. They need
 	// an admin key unless builds.allow_sandbox_keys is set.
 	Steps []store.BuildStep
@@ -143,19 +159,23 @@ type Counters struct {
 	ExecErrors atomic.Int64
 	FileOps    atomic.Int64
 	Reaped     atomic.Int64
+	IdlePaused atomic.Int64
+	Hibernated atomic.Int64
 	Builds     atomic.Int64
 	ImagesGCed atomic.Int64
 }
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	cfg      config.Config
-	store    *store.Store
-	drivers  map[string]driver.Driver
-	log      *slog.Logger
-	now      func() time.Time
-	mu       sync.Mutex
-	poolMu   sync.Mutex
+	cfg     config.Config
+	store   *store.Store
+	drivers map[string]driver.Driver
+	log     *slog.Logger
+	now     func() time.Time
+	mu      sync.Mutex
+	poolMu  sync.Mutex
+	// netMu serializes live network updates so the driver and the store agree.
+	netMu    sync.Mutex
 	previews map[string]Preview
 	streams  map[string]int
 	budgets  map[string]*byteBudget
@@ -163,6 +183,8 @@ type Manager struct {
 	Counts   Counters
 	// buildLocks holds one mutex per build tag so concurrent creates build once.
 	buildLocks sync.Map
+	// sbLocks holds one mutex per sandbox for pause, hibernate, and wake.
+	sbLocks sync.Map
 	// evWake is closed and replaced on every lifecycle event. evStreams
 	// counts open event streams per key.
 	evMu      sync.Mutex
@@ -336,6 +358,10 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	if err := m.checkResources(cpu, mem, disk, pids, ttl, idle); err != nil {
 		return store.Sandbox{}, err
 	}
+	idleAction, err := checkIdleAction(in.IdleAction, idle, d)
+	if err != nil {
+		return store.Sandbox{}, err
+	}
 	image, access, _, err := m.buildImage(ctx, actor, backend, image, joinSteps(tpl.Steps, in.Steps))
 	if err != nil {
 		return store.Sandbox{}, err
@@ -374,7 +400,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 		CPU: cpu, MemoryMB: mem, DiskMB: disk, PIDs: pids, Env: env, Network: mode,
 		Allow: policy.Allow, Deny: policy.Deny, EgressKbps: policy.EgressKbps, MaxConns: policy.MaxConns,
 		Labels: nonNil(in.Labels), Secrets: nonNil(in.Secrets), OwnerKeyID: actor.KeyID, CreatedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second),
-		IdleTimeoutSeconds: idle, LastActivityAt: now, Mounts: mounts,
+		IdleTimeoutSeconds: idle, IdleAction: idleAction, LastActivityAt: now, Mounts: mounts,
 	}
 
 	m.mu.Lock()
@@ -384,7 +410,7 @@ func (m *Manager) Create(ctx context.Context, actor Actor, in CreateInput) (stor
 	}
 	// A claim turns a pooled sandbox into the caller's without adding a
 	// container, so it is tried before the node cap, which counts the pool.
-	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, mode, policy, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle)
+	claimed, okClaim, err := m.tryClaim(ctx, actor, in, tpl, backend, mode, policy, baseCPU, baseMem, baseDisk, basePIDs, ttl, idle, idleAction)
 	if err != nil {
 		m.mu.Unlock()
 		return store.Sandbox{}, err
@@ -542,14 +568,17 @@ func (m *Manager) SetTTL(ctx context.Context, actor Actor, sandboxID string, ttl
 	if ttl < 1 || ttl > m.cfg.Limits.MaxTTLSeconds {
 		return store.Sandbox{}, fmtInvalid("ttl_seconds must be between 1 and %d", m.cfg.Limits.MaxTTLSeconds)
 	}
-	sb, err := m.alive(ctx, actor, sandboxID)
+	sb, err := m.visible(ctx, actor, sandboxID)
 	if err != nil {
 		return store.Sandbox{}, err
+	}
+	if sb.Status != "running" && sb.Status != "paused" && sb.Status != "hibernated" {
+		return store.Sandbox{}, conflict("sandbox is not running")
 	}
 	now := m.now()
 	sb.ExpiresAt = now.Add(time.Duration(ttl) * time.Second)
 	sb.LastActivityAt = now
-	if err := m.store.UpdateSandboxFrom(ctx, sb, "running", "paused"); err != nil {
+	if err := m.store.UpdateSandboxFrom(ctx, sb, "running", "paused", "hibernated"); err != nil {
 		return store.Sandbox{}, stale(err)
 	}
 	return sb, nil
@@ -564,6 +593,9 @@ func (m *Manager) Pause(ctx context.Context, actor Actor, sandboxID string) (sto
 	if sb.Status == "paused" {
 		return sb, nil
 	}
+	mu := m.sandboxLock(sb.ID)
+	mu.Lock()
+	defer mu.Unlock()
 	d, err := m.backend(sb)
 	if err != nil {
 		return store.Sandbox{}, err
@@ -583,7 +615,8 @@ func (m *Manager) Pause(ctx context.Context, actor Actor, sandboxID string) (sto
 	return sb, nil
 }
 
-// Resume continues a paused sandbox.
+// Resume continues a paused sandbox, or starts a hibernated one from its
+// snapshot.
 func (m *Manager) Resume(ctx context.Context, actor Actor, sandboxID string) (store.Sandbox, error) {
 	sb, err := m.visible(ctx, actor, sandboxID)
 	if err != nil {
@@ -592,23 +625,10 @@ func (m *Manager) Resume(ctx context.Context, actor Actor, sandboxID string) (st
 	if sb.Status == "running" {
 		return sb, nil
 	}
-	if sb.Status != "paused" {
+	if sb.Status != "paused" && sb.Status != "hibernated" {
 		return store.Sandbox{}, conflict("sandbox is not paused")
 	}
-	d, err := m.backend(sb)
-	if err != nil {
-		return store.Sandbox{}, err
-	}
-	if err := d.Resume(ctx, sb.ContainerID); err != nil {
-		return store.Sandbox{}, m.asDriver(err)
-	}
-	sb.Status = "running"
-	sb.LastActivityAt = m.now()
-	if err := m.store.UpdateSandboxFrom(ctx, sb, "paused"); err != nil {
-		return store.Sandbox{}, stale(err)
-	}
-	m.emit(ctx, EventResumed, sb, nil)
-	return sb, nil
+	return m.wake(ctx, sb, false)
 }
 
 // Exec runs a command to completion.
@@ -1006,6 +1026,12 @@ func (m *Manager) Sweep(ctx context.Context) (int, error) {
 			reason = "create timed out"
 		} else if sb.IdleTimeoutSeconds > 0 && !sb.LastActivityAt.Add(time.Duration(sb.IdleTimeoutSeconds)*time.Second).After(now) && sb.ExpiresAt.After(now) {
 			reason = "idle"
+			if sb.Status == "running" && autoResumes(sb) {
+				if err := m.idleAct(ctx, sb); err != nil {
+					m.log.Error("idle action failed", "id", sb.ID, "action", sb.IdleAction, "err", err)
+				}
+				continue
+			}
 		}
 		if err := m.destroy(ctx, sb, reason); err != nil {
 			m.log.Error("reap failed", "id", sb.ID, "err", err)
@@ -1039,12 +1065,32 @@ func (m *Manager) reapOrphans(ctx context.Context) {
 				continue
 			}
 			sb, err := m.store.GetSandbox(ctx, st.SandboxID)
+			if err == nil && sb.Status == "hibernated" {
+				m.reapHibernated(ctx, d, st.ID, sb.ID)
+				continue
+			}
 			if errors.Is(err, store.ErrNotFound) || (err == nil && (sb.Status == "stopped" || sb.Status == "error")) {
 				if err := d.Delete(ctx, st.ID); err != nil {
 					m.log.Warn("orphan delete failed", "id", st.ID, "err", err)
 				}
 			}
 		}
+	}
+}
+
+// reapHibernated removes a container left behind by a hibernation whose
+// delete failed, which would otherwise block the wake. It holds the sandbox
+// lock so a wake that is starting a new container is not mistaken for one.
+func (m *Manager) reapHibernated(ctx context.Context, d driver.Driver, containerID, sandboxID string) {
+	mu := m.sandboxLock(sandboxID)
+	mu.Lock()
+	defer mu.Unlock()
+	sb, err := m.store.GetSandbox(ctx, sandboxID)
+	if err != nil || sb.Status != "hibernated" {
+		return
+	}
+	if err := d.Delete(ctx, containerID); err != nil && !errors.Is(err, driver.ErrNotFound) {
+		m.log.Warn("orphan delete failed", "id", containerID, "err", err)
 	}
 }
 
@@ -1169,6 +1215,10 @@ func (m *Manager) destroy(ctx context.Context, sb store.Sandbox, reason string) 
 			}
 		}
 	}
+	if cur.SnapshotImage != "" {
+		m.removeImage(ctx, backend, cur.SnapshotImage)
+	}
+	m.sbLocks.Delete(cur.ID)
 	m.log.Info("sandbox stopped", "id", sb.ID, "reason", reason)
 	typ, data := stopEvent(reason)
 	m.emit(ctx, typ, cur, data)
@@ -1207,6 +1257,9 @@ func (m *Manager) running(ctx context.Context, actor Actor, sandboxID string) (s
 	if err != nil {
 		return store.Sandbox{}, nil, err
 	}
+	if sb, err = m.autoWake(ctx, sb); err != nil {
+		return store.Sandbox{}, nil, err
+	}
 	if sb.Status == "paused" {
 		return store.Sandbox{}, nil, conflict("sandbox is paused")
 	}
@@ -1220,6 +1273,15 @@ func (m *Manager) running(ctx context.Context, actor Actor, sandboxID string) (s
 	return sb, d, nil
 }
 
+// autoWake resumes a paused or hibernated sandbox whose idle action is pause
+// or hibernate. Anything else is returned as it is.
+func (m *Manager) autoWake(ctx context.Context, sb store.Sandbox) (store.Sandbox, error) {
+	if (sb.Status != "paused" && sb.Status != "hibernated") || !autoResumes(sb) {
+		return sb, nil
+	}
+	return m.wake(ctx, sb, true)
+}
+
 func (m *Manager) fileReady(ctx context.Context, actor Actor, sandboxID, p string) (store.Sandbox, driver.Driver, string, error) {
 	sb, d, err := m.running(ctx, actor, sandboxID)
 	if err != nil {
@@ -1228,6 +1290,9 @@ func (m *Manager) fileReady(ctx context.Context, actor Actor, sandboxID, p strin
 	p, err = cleanPath(p)
 	if err != nil {
 		return store.Sandbox{}, nil, "", err
+	}
+	if actor.ReadOnly && kernelPath(p) {
+		return store.Sandbox{}, nil, "", forbidden("a read-only key cannot read " + p)
 	}
 	return sb, d, p, nil
 }
@@ -1337,7 +1402,7 @@ func (m *Manager) SetSecrets(ctx context.Context, actor Actor, sandboxID string,
 	if err != nil {
 		return store.Sandbox{}, err
 	}
-	if sb.Status != "running" && sb.Status != "paused" {
+	if sb.Status != "running" && sb.Status != "paused" && sb.Status != "hibernated" {
 		return store.Sandbox{}, invalid("sandbox is not running")
 	}
 	for k := range secrets {

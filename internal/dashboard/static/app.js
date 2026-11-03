@@ -207,7 +207,7 @@
 
 	function sandboxes() {
 		const q = h("input", { type: "search", placeholder: "Search id, template, image, label…", class: "grow" });
-		const statuses = ["", "running", "paused", "creating", "stopped", "error"];
+		const statuses = ["", "running", "paused", "hibernated", "creating", "stopped", "error"];
 		if (state.admin) statuses.push("warm");
 		const status = h("select", {}, statuses.map((s) => h("option", { value: s }, s || "all statuses")));
 		const body = h("tbody");
@@ -232,7 +232,7 @@
 
 		function row(sb) {
 			const open = () => (location.hash = "#/sandboxes/" + encodeURIComponent(sb.id));
-			const live = sb.status === "running" || sb.status === "paused";
+			const live = sb.status === "running" || sb.status === "paused" || sb.status === "hibernated";
 			return h(
 				"tr",
 				{ class: "click", onclick: open },
@@ -333,11 +333,11 @@
 		const base = "/v1/sandboxes/" + encodeURIComponent(id);
 		const head = h("div", { class: "bar" });
 		const panel = h("div");
-		const tabs = ["overview", "terminal", "logs"];
+		const tabs = ["overview", "terminal", "logs", "previews"];
 		let sb = null;
 
 		function header() {
-			const live = sb.status === "running" || sb.status === "paused";
+			const live = sb.status === "running" || sb.status === "paused" || sb.status === "hibernated";
 			head.replaceChildren(...h("div", {},
 				h("a", { href: "#/sandboxes" }, "Sandboxes"),
 				h("span", { class: "muted" }, "/"),
@@ -346,7 +346,7 @@
 				h("span", { class: "muted small" }, live ? ["expires ", ago(sb.expires_at)] : ""),
 				h("span", { class: "grow" }),
 				sb.status === "running" && h("button", { onclick: act(async () => { sb = await api("POST", base + "/pause"); header(); }, "Paused") }, "Pause"),
-				sb.status === "paused" && h("button", { onclick: act(async () => { sb = await api("POST", base + "/resume"); header(); }, "Resumed") }, "Resume"),
+				(sb.status === "paused" || sb.status === "hibernated") && h("button", { onclick: act(async () => { sb = await api("POST", base + "/resume"); header(); }, "Resumed") }, "Resume"),
 				live && h("button", { onclick: act(async () => {
 					const min = prompt("New TTL in minutes, from now:", "30");
 					if (!min) return false;
@@ -374,6 +374,7 @@
 				header();
 				if (tab === "terminal") terminal(panel, base, sb);
 				else if (tab === "logs") logs(panel, base, sb);
+				else if (tab === "previews") previews(panel, base, sb);
 				else overview(panel, sb);
 			})
 			.catch((e) => panel.append(h("div", { class: "empty" }, e.message)));
@@ -399,6 +400,8 @@
 			["Network", sb.network],
 			["Egress allow", (sb.egress_allow || []).join(", ") || "–"],
 			["Egress deny", (sb.egress_deny || []).join(", ") || "–"],
+			["Egress limit", sb.egress_kbps ? sb.egress_kbps + " kbit/s" : "–"],
+			["Max connections", sb.max_connections || "–"],
 			["Idle timeout", sb.idle_timeout_seconds ? sb.idle_timeout_seconds + "s" : "–"],
 			["Created", new Date(sb.created_at).toLocaleString()],
 			["Expires", new Date(sb.expires_at).toLocaleString()],
@@ -647,6 +650,112 @@
 		}
 		load();
 		every(3000, load);
+	}
+
+	// ---- previews ----------------------------------------------------------
+
+	// A link that opens a preview in its own tab. noreferrer keeps this page's
+	// URL out of the app's logs, and noopener keeps the app from reaching back.
+	function previewLink(href, text, cls) {
+		return h("a", { href, target: "_blank", rel: "noopener noreferrer", class: cls }, text || href);
+	}
+
+	function previews(panel, base, sb) {
+		const body = h("tbody");
+		const secretBox = h("div");
+
+		async function load() {
+			let data;
+			try {
+				data = await api("GET", base + "/previews");
+			} catch (e) {
+				body.replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted small" }, e.message)));
+				return;
+			}
+			const list = (data.previews || []).sort((a, b) => a.port - b.port);
+			if (!list.length) {
+				body.replaceChildren(h("tr", {}, h("td", { colspan: 5, class: "muted small" }, "No previews yet. Publish a port a process listens on.")));
+				return;
+			}
+			body.replaceChildren(...list.map(row));
+		}
+
+		function row(pv) {
+			return h(
+				"tr",
+				{},
+				h("td", {}, h("code", {}, pv.port)),
+				h("td", {}, pill(pv.public ? "public" : "token")),
+				// The list never carries the token, so a private preview's URL
+				// needs the token from when it was created.
+				h("td", { class: "url" }, pv.public ? previewLink(pv.public_url) : h("code", {}, pv.public_url)),
+				h("td", {}, ago(pv.created_at)),
+				h(
+					"td",
+					{ class: "actions" },
+					h("button", { class: "sm", onclick: () => copy(pv.public_url) }, "Copy URL"),
+					h("button", { class: "sm danger", onclick: act(async () => {
+						if (!confirm("Delete the preview of port " + pv.port + "? Its URL and token stop working.")) return false;
+						await api("DELETE", base + "/previews/" + encodeURIComponent(pv.id));
+						await load();
+					}, "Preview deleted") }, "Delete"),
+				),
+			);
+		}
+
+		const port = h("input", { type: "number", min: 1, max: 65535, placeholder: "3000", required: true, style: "width:110px" });
+		const pub = h("input", { type: "checkbox" });
+		const running = sb.status === "running";
+		const form = h(
+			"form",
+			{ class: "card form", onsubmit: async (ev) => {
+				ev.preventDefault();
+				const btn = form.querySelector("button[type=submit]");
+				btn.disabled = true;
+				try {
+					const pv = await api("POST", base + "/previews", { port: Number(port.value), public: pub.checked });
+					port.value = "";
+					pub.checked = false;
+					secretBox.replaceChildren(
+						h(
+							"div",
+							{ class: "secret" },
+							h("div", { style: "flex-basis:100%" }, h("strong", {}, "Port " + pv.port), h("span", { class: "muted small" }, pv.public ? " · public, anyone with the URL can open it." : " · this URL carries the token and is shown once.")),
+							h("code", {}, pv.public_url),
+							h("button", { class: "sm", type: "button", onclick: () => copy(pv.public_url) }, "Copy"),
+							previewLink(pv.public_url, "Open", "btn sm"),
+							h("button", { class: "sm ghost", type: "button", onclick: () => secretBox.replaceChildren() }, "Done"),
+						),
+					);
+					await load();
+				} catch (e) {
+					toast(e.message, true);
+				} finally {
+					btn.disabled = !running;
+				}
+			} },
+			h("label", {}, "Port", port),
+			h("label", { class: "inline" }, pub, "Public (no token)"),
+			h("button", { class: "primary", type: "submit", disabled: !running }, "Create preview"),
+			h("span", { class: "muted small" }, "Start a server in Logs first, for example python -m http.server 3000."),
+		);
+
+		panel.append(
+			form,
+			secretBox,
+			h("div", { style: "height:16px" }),
+			h(
+				"div",
+				{ class: "scroll" },
+				h(
+					"table",
+					{ class: "previews" },
+					h("thead", {}, h("tr", {}, ["Port", "Access", "URL", "Created", ""].map((t) => h("th", {}, t)))),
+					body,
+				),
+			),
+		);
+		load();
 	}
 
 	// ---- views: keys -------------------------------------------------------

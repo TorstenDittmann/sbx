@@ -28,6 +28,7 @@ from ._duration import Duration, parse_duration
 from ._terminal import TerminalSession, connect_websocket
 from ._types import (
     Backend,
+    IdleAction,
     BackendInfo,
     BuildInfo,
     BuildStep,
@@ -147,6 +148,7 @@ def create_body(
     pids: Optional[int] = None,
     ttl: Optional[Duration] = None,
     idle_timeout: Optional[Duration] = None,
+    idle_action: Optional[IdleAction] = None,
     env: Optional[Mapping[str, str]] = None,
     network: Optional[NetworkArg] = None,
     backend: Optional[Backend] = None,
@@ -184,6 +186,8 @@ def create_body(
         body["ttl_seconds"] = parse_duration(ttl)
     if idle_timeout is not None:
         body["idle_timeout_seconds"] = parse_duration(idle_timeout)
+    if idle_action:
+        body["idle_action"] = idle_action
     if env:
         body["env"] = dict(env)
     if network is not None:
@@ -462,6 +466,15 @@ class SbxClient:
 
     def set_secrets(self, id: str, secrets: Mapping[str, str]) -> SandboxInfo:
         return SandboxInfo.from_json(self._json("PUT", f"/v1/sandboxes/{_q(id)}/secrets", {"secrets": dict(secrets)}))
+
+    def update_network(self, id: str, policy: NetworkArg) -> SandboxInfo:
+        """Change the egress rules of a running or paused sandbox.
+
+        Omitted fields keep their current value. ``mode="full"`` without
+        ``allow`` drops back to the key or server allow list. Server and key
+        deny rules always stay.
+        """
+        return SandboxInfo.from_json(self._json("PATCH", f"/v1/sandboxes/{_q(id)}/network", _network(policy)))
 
     def set_ttl(self, id: str, ttl: Duration) -> SandboxInfo:
         body = {"ttl_seconds": parse_duration(ttl)}

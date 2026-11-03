@@ -78,6 +78,7 @@ with Sandbox.create(template="base", ttl="5m") as box:
 | `pids` | `int` | `pids` |
 | `ttl` | duration | `ttl_seconds` |
 | `idle_timeout` | duration | `idle_timeout_seconds` |
+| `idle_action` | `"stop"`, `"pause"`, or `"hibernate"` | `idle_action` |
 | `env` | `dict[str, str]` | `env` |
 | `secrets` | `dict[str, str]` | `secrets` |
 | `labels` | `dict[str, str]` | `labels` |
@@ -87,7 +88,7 @@ with Sandbox.create(template="base", ttl="5m") as box:
 
 Durations accept seconds as a number, a `timedelta`, or a string with a unit: `"500ms"`, `"30s"`, `"5m"`, `"1h"`. They are rounded to whole seconds; anything above 0 and below a second becomes 1. `parse_duration` is exported if you need it.
 
-A `Sandbox` has the fields of the API object: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memory_mb`, `disk_mb`, `pids`, `network`, `egress_allow`, `egress_deny`, `egress_kbps`, `max_connections`, `env`, `labels`, `secret_keys`, `idle_timeout_seconds`, `expires_at`, `created_at`, `node`, and `mounts`. Lifecycle calls update them.
+A `Sandbox` has the fields of the API object: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memory_mb`, `disk_mb`, `pids`, `network`, `egress_allow`, `egress_deny`, `egress_kbps`, `max_connections`, `env`, `labels`, `secret_keys`, `idle_timeout_seconds`, `idle_action`, `expires_at`, `created_at`, `node`, and `mounts`. Lifecycle calls update them.
 
 ### Lifecycle
 
@@ -97,6 +98,7 @@ box.pause()
 box.resume()
 box.refresh()        # re-read every field
 box.set_secrets({"TOKEN": "new"})
+box.update_network(NetworkPolicy(allow=["pypi.org"], max_connections=32))  # change egress rules live
 box.kill()           # delete
 ```
 
@@ -269,6 +271,7 @@ client.get_sandbox(id)
 client.list_sandboxes(status="running", template="python", q="demo", labels={"project": "demo"})
 client.delete_sandbox(id)
 client.set_secrets(id, {"TOKEN": "new"})
+client.update_network(id, {"mode": "full"})
 ```
 
 ### Volumes

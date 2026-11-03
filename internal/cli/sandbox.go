@@ -87,7 +87,7 @@ func durationSeconds(s string) (int, error) {
 	return int(d / time.Second), nil
 }
 
-const createUsage = "usage: sbx create [--template NAME] [--image IMAGE] [--ttl 5m] [--network none|full] [--env K=V] [--label K=V] [--json]"
+const createUsage = "usage: sbx create [--template NAME] [--image IMAGE] [--ttl 5m] [--idle-timeout 2m --idle-action stop|pause|hibernate] [--network none|full|allow] [--allow RULE] [--deny RULE] [--env K=V] [--label K=V] [--json]"
 
 func createCmd(args []string) error {
 	fs := newFlags("create")
@@ -96,11 +96,12 @@ func createCmd(args []string) error {
 	image := fs.String("image", "", "image reference")
 	backend := fs.String("backend", "", "docker, gvisor, kata, or firecracker")
 	ttl := fs.String("ttl", "", "lifetime, for example 300 or 5m")
-	idle := fs.String("idle-timeout", "", "stop after this long without activity")
+	idle := fs.String("idle-timeout", "", "act after this long without activity")
+	idleAction := fs.String("idle-action", "", "stop (default), pause, or hibernate once idle")
 	cpu := fs.Float64("cpu", 0, "CPUs")
 	memory := fs.Int("memory", 0, "memory in MiB")
 	disk := fs.Int("disk", 0, "workspace size in MiB")
-	network := fs.String("network", "", "none or full")
+	nf := addNetFlags(fs, "network")
 	asJSON := fs.Bool("json", false, "print the sandbox as JSON")
 	env, labels, secrets := kvFlag{}, kvFlag{}, kvFlag{}
 	var volumes listFlag
@@ -133,8 +134,13 @@ func createCmd(args []string) error {
 	set("env", env, len(env) > 0)
 	set("labels", labels, len(labels) > 0)
 	set("secrets", secrets, len(secrets) > 0)
-	if *network != "" {
-		body["network"] = map[string]string{"mode": *network}
+	set("idle_action", *idleAction, *idleAction != "")
+	if netBody := nf.body(); netBody != nil {
+		// An allow list on its own means the caller wants filtered egress.
+		if _, ok := netBody["mode"]; !ok && len(nf.allow.items) > 0 {
+			netBody["mode"] = "allow"
+		}
+		body["network"] = netBody
 	}
 	for name, s := range map[string]string{"ttl_seconds": *ttl, "idle_timeout_seconds": *idle} {
 		if s == "" {

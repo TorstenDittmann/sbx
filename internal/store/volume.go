@@ -96,10 +96,11 @@ func (s *Store) DeleteVolume(ctx context.Context, id string) error {
 	return nil
 }
 
-// VolumeInUse reports whether a creating, running, or paused sandbox mounts id.
+// VolumeInUse reports whether a creating, running, paused, or hibernated
+// sandbox mounts id.
 func (s *Store) VolumeInUse(ctx context.Context, volumeID string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT mounts_json FROM sandboxes WHERE status IN ('creating', 'running', 'paused')`)
+		SELECT mounts_json FROM sandboxes WHERE status IN ('creating', 'running', 'paused', 'hibernated')`)
 	if err != nil {
 		return false, err
 	}

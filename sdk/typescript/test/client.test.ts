@@ -84,6 +84,12 @@ test("client maps create, exec, files, and errors", async () => {
         res.end(JSON.stringify({ ...sandboxJSON(), secret_keys: Object.keys(sent.secrets) }))
         return
       }
+      if (req.method === "PATCH" && req.url === "/v1/sandboxes/sbx_test/network") {
+        const sent = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { allow?: string[]; deny?: string[] }
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({ ...sandboxJSON(), network: "allow", egress_allow: sent.allow, egress_deny: sent.deny }))
+        return
+      }
       if (req.method === "GET" && req.url === "/v1/sandboxes/missing") {
         res.writeHead(404, { "content-type": "application/json" })
         res.end(JSON.stringify({ error: { code: "not_found", message: "gone" } }))
@@ -226,6 +232,12 @@ test("client maps create, exec, files, and errors", async () => {
   const withSecret = await client.setSecrets("sbx_test", { TOKEN: "next" })
   assert.deepEqual(withSecret.secretKeys, ["TOKEN"])
   assert.equal(JSON.parse(seen.body ?? "{}").secrets.TOKEN, "next")
+
+  const updated = await client.updateNetwork("sbx_test", { allow: ["api.example.com"], deny: [], maxConnections: 8 })
+  assert.equal(seen.method, "PATCH")
+  assert.deepEqual(JSON.parse(seen.body ?? "{}"), { allow: ["api.example.com"], deny: [], max_connections: 8 })
+  assert.equal(updated.network, "allow")
+  assert.deepEqual(updated.egressAllow, ["api.example.com"])
 
   await server.close()
 })
@@ -426,6 +438,46 @@ test("client sends key registry credentials", async () => {
       { registries: [] },
     ])
   } finally {
+    server.close()
+  }
+})
+
+test("breaking out of watch and execStream closes the connection and skips pings", async () => {
+  const closed: string[] = []
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    const kind = req.url?.includes("/files/watch") ? "watch" : "exec"
+    res.on("close", () => closed.push(kind))
+    if (kind === "watch") {
+      res.write('event: ready\ndata: {"path":"/workspace"}\n\n: ping\n\n')
+      res.write('event: change\ndata: {"type":"create","path":"/workspace/a.txt"}\n\n')
+    } else {
+      res.write(': ping\n\nevent: stdout\ndata: {"data":"first"}\n\n')
+    }
+    // Never end: only the client hanging up closes these streams.
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "sbx_testkey" })
+
+    for await (const change of client.watch("sbx_test", "/workspace")) {
+      assert.deepEqual(change, { type: "create", path: "/workspace/a.txt" })
+      break
+    }
+    for await (const event of client.execStream("sbx_test", "sleep 60")) {
+      assert.equal(event.type, "stdout")
+      assert.equal(event.data, "first")
+      break
+    }
+    const deadline = Date.now() + 2000
+    while (closed.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    assert.deepEqual(closed.sort(), ["exec", "watch"])
+  } finally {
+    server.closeAllConnections()
     server.close()
   }
 })
