@@ -70,6 +70,7 @@ These routes need no key.
 | `pids` | integer | |
 | `ttl_seconds` | integer | Lifetime. |
 | `idle_timeout_seconds` | integer | `0` turns it off. |
+| `idle_action` | string | `stop` (default), `pause`, or `hibernate`. Needs `idle_timeout_seconds`. See [Auto-pause and hibernation](/docs/sandboxes/#auto-pause-and-hibernation). |
 | `env` | object | String values. |
 | `secrets` | object | Never returned. Names appear in `secret_keys`. |
 | `labels` | object | String values. |
@@ -179,7 +180,8 @@ data: {"id":42,"type":"sandbox.lost","sandbox_id":"sbx_…","time":"…","data":
 | `sandbox.failed` | A create failed or timed out, or template setup failed. | `create failed`, `create timed out`, `setup failed` |
 | `sandbox.deleted` | `DELETE /v1/sandboxes/{id}`. | |
 | `sandbox.expired` | The reaper stopped it. | `ttl`, `idle` |
-| `sandbox.paused`, `sandbox.resumed` | Pause and resume. | |
+| `sandbox.paused`, `sandbox.resumed` | Pause and resume. An idle pause has reason `idle`. A resume has `data.auto` when a request woke the sandbox and `data.from` `snapshot` after hibernation. | `idle` |
+| `sandbox.hibernated` | The reaper saved an idle sandbox to a snapshot and removed its container. | `idle` |
 | `sandbox.network_updated` | `PATCH /v1/sandboxes/{id}/network` changed the egress rules. `data` holds the new `network`, `allow`, `deny`, `egress_kbps`, and `max_connections`. | |
 | `sandbox.oom` | The kernel OOM-killed a process in the sandbox. The sandbox usually keeps running. Docker backends only. | |
 | `sandbox.lost` | It stopped without sbx stopping it. `exit_code` and `oom_killed` are set when the container is still there to inspect. | `exited`, `missing` |

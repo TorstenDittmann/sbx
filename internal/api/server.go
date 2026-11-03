@@ -196,7 +196,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("# HELP sbx_info Build information.\n# TYPE sbx_info gauge\n")
 	fmt.Fprintf(&b, "sbx_info{version=%q} 1\n", version.Version)
 	b.WriteString("# HELP sbx_sandboxes Sandboxes by status.\n# TYPE sbx_sandboxes gauge\n")
-	for _, status := range []string{"creating", "running", "paused", "stopped", "error"} {
+	for _, status := range []string{"creating", "running", "paused", "hibernated", "stopped", "error"} {
 		fmt.Fprintf(&b, "sbx_sandboxes{status=%q} %d\n", status, counts[status])
 	}
 	c := &s.mgr.Counts
@@ -206,6 +206,10 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(&b, "sbx_sandbox_deletes_total %d\n", c.Deletes.Load())
 	b.WriteString("# HELP sbx_sandbox_reaped_total Sandboxes stopped by the reaper.\n# TYPE sbx_sandbox_reaped_total counter\n")
 	fmt.Fprintf(&b, "sbx_sandbox_reaped_total %d\n", c.Reaped.Load())
+	b.WriteString("# HELP sbx_sandbox_idle_paused_total Idle sandboxes paused by the reaper.\n# TYPE sbx_sandbox_idle_paused_total counter\n")
+	fmt.Fprintf(&b, "sbx_sandbox_idle_paused_total %d\n", c.IdlePaused.Load())
+	b.WriteString("# HELP sbx_sandbox_hibernated_total Idle sandboxes hibernated to a snapshot by the reaper.\n# TYPE sbx_sandbox_hibernated_total counter\n")
+	fmt.Fprintf(&b, "sbx_sandbox_hibernated_total %d\n", c.Hibernated.Load())
 	b.WriteString("# HELP sbx_execs_total Completed exec calls.\n# TYPE sbx_execs_total counter\n")
 	fmt.Fprintf(&b, "sbx_execs_total %d\n", c.Execs.Load())
 	b.WriteString("# HELP sbx_exec_errors_total Failed exec calls.\n# TYPE sbx_exec_errors_total counter\n")
@@ -729,7 +733,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	in := core.CreateInput{
 		Template: body.Template, Image: body.Image, CPU: body.CPU, MemoryMB: body.MemoryMB,
 		DiskMB: body.DiskMB, PIDs: body.PIDs, TTLSeconds: body.TTLSeconds,
-		IdleTimeoutSeconds: body.IdleTimeoutSeconds, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
+		IdleTimeoutSeconds: body.IdleTimeoutSeconds, IdleAction: body.IdleAction, Env: body.Env, Secrets: body.Secrets, Backend: body.Backend, Labels: body.Labels,
 		Steps: body.Steps,
 	}
 	if body.Network != nil {
@@ -1029,6 +1033,7 @@ type createRequest struct {
 	PIDs               *int              `json:"pids"`
 	TTLSeconds         *int              `json:"ttl_seconds"`
 	IdleTimeoutSeconds *int              `json:"idle_timeout_seconds"`
+	IdleAction         string            `json:"idle_action"`
 	Env                map[string]string `json:"env"`
 	Network            *struct {
 		Mode       string    `json:"mode"`
@@ -1074,6 +1079,7 @@ type sandboxResponse struct {
 	Env                map[string]string `json:"env,omitempty"`
 	Labels             map[string]string `json:"labels,omitempty"`
 	IdleTimeoutSeconds int               `json:"idle_timeout_seconds,omitempty"`
+	IdleAction         string            `json:"idle_action,omitempty"`
 	ExpiresAt          time.Time         `json:"expires_at"`
 	CreatedAt          time.Time         `json:"created_at"`
 	Node               string            `json:"node"`
@@ -1102,10 +1108,22 @@ func sandboxJSON(sb store.Sandbox) sandboxResponse {
 		ID: sb.ID, Status: sb.Status, Backend: sb.Backend, Template: sb.Template, Image: sb.Image,
 		CPU: sb.CPU, MemoryMB: sb.MemoryMB, DiskMB: sb.DiskMB, PIDs: sb.PIDs, Network: sb.Network,
 		Allow: sb.Allow, Deny: sb.Deny, EgressKbps: sb.EgressKbps, MaxConns: sb.MaxConns,
-		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds,
+		Env: sb.Env, Labels: sb.Labels, IdleTimeoutSeconds: sb.IdleTimeoutSeconds, IdleAction: idleActionJSON(sb),
 		ExpiresAt: sb.ExpiresAt, CreatedAt: sb.CreatedAt, Node: "local", Mounts: mounts,
 		SecretKeys: secretKeys(sb.Secrets),
 	}
+}
+
+// idleActionJSON shows the idle action only when an idle timeout makes it
+// matter.
+func idleActionJSON(sb store.Sandbox) string {
+	if sb.IdleTimeoutSeconds <= 0 {
+		return ""
+	}
+	if sb.IdleAction == "" {
+		return core.IdleStop
+	}
+	return sb.IdleAction
 }
 
 func volumeJSON(v store.Volume) volumeResponse {

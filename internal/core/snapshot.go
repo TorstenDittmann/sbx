@@ -3,10 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/TorstenDittmann/sbx/internal/driver"
-	"github.com/TorstenDittmann/sbx/internal/id"
 	"github.com/TorstenDittmann/sbx/internal/store"
 )
 
@@ -57,38 +57,13 @@ func (m *Manager) Snapshot(ctx context.Context, actor Actor, sandboxID string, i
 	if !ok || !d.Capabilities().Snapshot {
 		return SnapshotResult{}, unsupported(sb.Backend + " does not support snapshots")
 	}
-	workspace := true
-	for _, mt := range sb.Mounts {
-		if mt.Path == "/workspace" {
-			workspace = false
-		}
-	}
-	snapID := id.Snapshot()
-	tag := buildImageRepo + ":" + snapID
-	// A snapshot holds its base's layers, so a private base keeps it private:
-	// a fork must still be allowed to pull the base.
-	priv := sb.Image
-	if driver.Repository(priv) != driver.Repository(buildImageRepo) {
-		priv = driver.Repository(priv)
-	}
-	if _, private, err := m.store.PrivateImage(ctx, priv); err != nil {
-		return SnapshotResult{}, err
-	} else if private {
-		if err := m.store.MarkPrivateImage(ctx, tag, sb.Image, m.now()); err != nil {
-			return SnapshotResult{}, err
-		}
-	}
 	start := m.now()
-	m.log.Info("snapshotting sandbox", "id", sb.ID, "image", tag, "base", sb.Image)
-	err = snap.Snapshot(ctx, sb.ContainerID, driver.SnapshotSpec{Tag: tag, Base: sb.Image, Workspace: workspace})
+	tag, workspace, err := m.commit(ctx, sb, snap)
 	if err != nil {
-		return SnapshotResult{}, m.asDriver(err)
+		return SnapshotResult{}, err
 	}
 	m.touch(ctx, sb)
-	mu := m.buildLock(tag)
-	mu.Lock()
-	m.touchImage(ctx, tag)
-	mu.Unlock()
+	snapID := strings.TrimPrefix(tag, buildImageRepo+":")
 	res := SnapshotResult{
 		ID: snapID, Image: tag, SandboxID: sb.ID, Base: sb.Image, Workspace: workspace,
 		Duration: m.now().Sub(start),

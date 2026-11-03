@@ -69,6 +69,7 @@ const same = await Sandbox.connect(box.id)
 | `pids` | `number` | `pids` |
 | `ttl` | `number \| string` | `ttl_seconds` |
 | `idleTimeout` | `number \| string` | `idle_timeout_seconds` |
+| `idleAction` | `"stop" \| "pause" \| "hibernate"` | `idle_action` |
 | `env` | `Record<string, string>` | `env` |
 | `secrets` | `Record<string, string>` | `secrets` |
 | `labels` | `Record<string, string>` | `labels` |
@@ -78,7 +79,7 @@ const same = await Sandbox.connect(box.id)
 
 Durations accept seconds as a number or a string with a unit: `"500ms"`, `"30s"`, `"5m"`, `"1h"`. They are rounded to whole seconds; anything above 0 and below a second becomes 1. `parseDuration` is exported if you need it.
 
-A `Sandbox` has the fields of the API object in camelCase: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memoryMb`, `diskMb`, `pids`, `network`, `env`, `labels`, `secretKeys`, `idleTimeoutSeconds`, `expiresAt`, `createdAt`, `node`, and `mounts`.
+A `Sandbox` has the fields of the API object in camelCase: `id`, `status`, `backend`, `template`, `image`, `cpu`, `memoryMb`, `diskMb`, `pids`, `network`, `env`, `labels`, `secretKeys`, `idleTimeoutSeconds`, `idleAction`, `expiresAt`, `createdAt`, `node`, and `mounts`.
 
 ### Lifecycle
 

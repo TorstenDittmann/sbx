@@ -119,8 +119,11 @@ func (m *Manager) referencedImages(ctx context.Context) (map[string]bool, error)
 		return nil, err
 	}
 	for _, sb := range rows {
-		if sb.Status == "creating" || sb.Status == "running" || sb.Status == "paused" {
+		if sb.Status == "creating" || sb.Status == "running" || sb.Status == "paused" || sb.Status == "hibernated" {
 			keep[sb.Image] = true
+			if sb.SnapshotImage != "" {
+				keep[sb.SnapshotImage] = true
+			}
 		}
 	}
 	return keep, nil

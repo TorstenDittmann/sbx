@@ -172,7 +172,7 @@ func (m *Manager) drainPool(ctx context.Context, template string) {
 	}
 }
 
-func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl store.Template, backend, mode string, policy driver.NetPolicy, cpu float64, mem, disk, pids, ttl, idle int) (store.Sandbox, bool, error) {
+func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl store.Template, backend, mode string, policy driver.NetPolicy, cpu float64, mem, disk, pids, ttl, idle int, idleAction string) (store.Sandbox, bool, error) {
 	if tpl.Name == "" || !warmCompatible(in, tpl, backend, cpu, mem, disk, pids) {
 		return store.Sandbox{}, false, nil
 	}
@@ -183,7 +183,7 @@ func (m *Manager) tryClaim(ctx context.Context, actor Actor, in CreateInput, tpl
 	if err != nil || !sameNet(mode, policy, poolMode, poolPolicy) {
 		return store.Sandbox{}, false, nil
 	}
-	sb, err := m.store.ClaimWarm(ctx, tpl.Name, backend, actor.KeyID, nonNil(in.Labels), ttl, idle, m.now())
+	sb, err := m.store.ClaimWarm(ctx, tpl.Name, backend, actor.KeyID, nonNil(in.Labels), ttl, idle, idleAction, m.now())
 	if errors.Is(err, store.ErrNotFound) {
 		return store.Sandbox{}, false, nil
 	}

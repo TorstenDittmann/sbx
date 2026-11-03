@@ -45,7 +45,8 @@ Usage:
   sbx version
 
 Sandboxes (talk to a running server):
-  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full|allow] [--allow RULE] [--deny RULE]
+  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--idle-timeout 2m --idle-action hibernate]
+             [--network none|full|allow] [--allow RULE] [--deny RULE]
              [--egress-kbps N] [--max-connections N] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
   sbx ls [--status S] [--template T] [--label key:value] [-q TEXT] [--quiet] [--json]
   sbx get ID

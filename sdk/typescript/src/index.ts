@@ -14,7 +14,15 @@ export class SbxError extends Error {
   }
 }
 
-export type SandboxStatus = "creating" | "running" | "paused" | "stopped" | "error" | "warm"
+export type SandboxStatus = "creating" | "running" | "paused" | "hibernated" | "stopped" | "error" | "warm"
+
+/**
+ * What the server does with a sandbox after `idleTimeout` without activity.
+ * `stop` (the default) stops it. `pause` freezes it in place. `hibernate`
+ * snapshots it, `/workspace` included, and removes its container. A paused or
+ * hibernated sandbox wakes on its next exec, file call, or preview request.
+ */
+export type IdleAction = "stop" | "pause" | "hibernate"
 
 // BuildStep is one template build step. See Template for the builder.
 export type BuildStep =
@@ -110,6 +118,7 @@ export type SandboxInfo = {
   labels?: Record<string, string>
   secretKeys?: string[]
   idleTimeoutSeconds?: number
+  idleAction?: IdleAction
   expiresAt: string
   createdAt: string
   node: string
@@ -170,6 +179,8 @@ export type CreateSandboxOptions = {
   pids?: number
   ttl?: number | string
   idleTimeout?: number | string
+  /** What happens once `idleTimeout` passes. Needs `idleTimeout`. */
+  idleAction?: IdleAction
   env?: Record<string, string>
   network?: NetworkPolicy
   backend?: "docker" | "gvisor" | "kata" | "firecracker"
@@ -273,6 +284,7 @@ export type SandboxEventType =
   | "sandbox.expired"
   | "sandbox.paused"
   | "sandbox.resumed"
+  | "sandbox.hibernated"
   | "sandbox.network_updated"
   | "sandbox.oom"
   | "sandbox.lost"
@@ -344,6 +356,7 @@ type SandboxJSON = {
   labels?: Record<string, string>
   secret_keys?: string[]
   idle_timeout_seconds?: number
+  idle_action?: IdleAction
   expires_at: string
   created_at: string
   node: string
@@ -385,6 +398,7 @@ function mapSandbox(raw: SandboxJSON): SandboxInfo {
     labels: raw.labels,
     secretKeys: raw.secret_keys,
     idleTimeoutSeconds: raw.idle_timeout_seconds,
+    idleAction: raw.idle_action,
     expiresAt: raw.expires_at,
     createdAt: raw.created_at,
     node: raw.node,
@@ -521,6 +535,7 @@ function createBody(options: CreateSandboxOptions): Record<string, unknown> {
   if (options.pids != null) body.pids = options.pids
   if (options.ttl != null) body.ttl_seconds = parseDuration(options.ttl)
   if (options.idleTimeout != null) body.idle_timeout_seconds = parseDuration(options.idleTimeout)
+  if (options.idleAction) body.idle_action = options.idleAction
   if (options.env) body.env = options.env
   if (options.network) body.network = networkBody(options.network)
   if (options.backend) body.backend = options.backend
@@ -1237,6 +1252,7 @@ export class Sandbox {
   labels?: Record<string, string>
   secretKeys?: string[]
   idleTimeoutSeconds?: number
+  idleAction?: IdleAction
   expiresAt: string
   createdAt: string
   node: string
@@ -1260,6 +1276,7 @@ export class Sandbox {
     this.labels = info.labels
     this.secretKeys = info.secretKeys
     this.idleTimeoutSeconds = info.idleTimeoutSeconds
+    this.idleAction = info.idleAction
     this.expiresAt = info.expiresAt
     this.createdAt = info.createdAt
     this.node = info.node
