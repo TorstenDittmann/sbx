@@ -29,7 +29,7 @@ npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. The Go client is [`github.com/TorstenDittmann/sbx/sdk/go`](sdk/go/README.md) (package `sbx`), standard library only, for Go 1.23+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -98,7 +98,7 @@ sbx shell $id
 sbx rm $id
 ```
 
-`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
+`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. `sbx preview $id 3000` publishes a port and prints its URL. See [CLI](website/src/docs/cli.md#sandbox-commands).
 
 A running sandbox can be committed to an image with `POST /v1/sandboxes/{id}/snapshot`, so a prepared environment can be forked. `/workspace` and root filesystem changes are kept, secrets are not, and `{"template": "name"}` also saves it as a template. Docker backend only; see [Snapshots](website/src/docs/templates.md#snapshots).
 
@@ -138,7 +138,7 @@ When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it,
 
 ## Dashboard
 
-`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
+`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, publishes preview URLs, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
 
 ## Deploying the website with Dokploy
 
@@ -162,6 +162,7 @@ SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
 (cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -t .)
+(cd sdk/go && go test -race ./...)
 ```
 
 Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK tests are skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.

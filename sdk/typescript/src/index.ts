@@ -809,25 +809,14 @@ export class SbxClient {
     if (options.recursive) q.set("recursive", "1")
     const response = await this.request("GET", `/v1/sandboxes/${encodeURIComponent(id)}/files/watch?${q}`)
     if (!response.body) throw new SbxError(response.status, "driver", "empty watch stream")
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ""
-    while (true) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      let split = buffer.indexOf("\n\n")
-      while (split >= 0) {
-        const block = buffer.slice(0, split)
-        buffer = buffer.slice(split + 2)
-        const event = parseSSE(block)
-        if (event?.event === "change") {
-          const raw = event.json
-          yield { type: String(raw.type ?? ""), path: String(raw.path ?? "") }
-        } else if (event?.event === "error") {
-          throw new SbxError(502, String(event.json.code ?? "driver"), String(event.json.message ?? "watch failed"))
-        }
-        split = buffer.indexOf("\n\n")
+    // Breaking out of the loop cancels the body and closes the watch.
+    for await (const block of sseBlocks(response.body)) {
+      const event = parseSSE(block)
+      if (event?.event === "change") {
+        const raw = event.json
+        yield { type: String(raw.type ?? ""), path: String(raw.path ?? "") }
+      } else if (event?.event === "error") {
+        throw new SbxError(502, String(event.json.code ?? "driver"), String(event.json.message ?? "watch failed"))
       }
     }
   }
@@ -1085,21 +1074,11 @@ function mapPreview(raw: PreviewJSON): PreviewInfo {
 }
 
 async function* readExecEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<ExecEvent> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ""
-  while (true) {
-    const chunk = await reader.read()
-    if (chunk.done) break
-    buffer += decoder.decode(chunk.value, { stream: true })
-    let split = buffer.indexOf("\n\n")
-    while (split >= 0) {
-      const block = buffer.slice(0, split)
-      buffer = buffer.slice(split + 2)
-      const event = parseExecEvent(block)
-      if (event) yield event
-      split = buffer.indexOf("\n\n")
-    }
+  // sseBlocks cancels the body when the caller stops early, so breaking out
+  // of a for-await loop closes the connection instead of leaking it.
+  for await (const block of sseBlocks(body)) {
+    const event = parseExecEvent(block)
+    if (event) yield event
   }
 }
 

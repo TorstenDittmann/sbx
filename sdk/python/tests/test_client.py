@@ -368,3 +368,20 @@ class KeysAndBackendsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamPingTest(unittest.TestCase):
+    def test_ping_comments_are_skipped(self) -> None:
+        exec_body = ': ping\n\nevent: stdout\ndata: {"data": "hi"}\n\n: ping\n\nevent: exit\ndata: {"exit_code": 0}\n\n'
+        watch_body = 'event: ready\ndata: {"path": "/workspace"}\n\n: ping\n\nevent: change\ndata: {"type": "create", "path": "/workspace/a"}\n\n'
+
+        def handler(req):  # type: ignore[no-untyped-def]
+            body = watch_body if "/files/watch" in req.path else exec_body
+            return 200, "text/event-stream", body
+
+        with FakeServer(handler) as server:
+            client = SbxClient(server.url, "sbx_test")
+            events = list(client.exec_stream("sbx_test", ["echo", "hi"]))
+            changes = list(client.watch("sbx_test", "/workspace"))
+        self.assertEqual([e.type for e in events], ["stdout", "exit"])
+        self.assertEqual([(c.type, c.path) for c in changes], [("create", "/workspace/a")])

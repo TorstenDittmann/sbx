@@ -52,11 +52,14 @@ Sandboxes (talk to a running server):
   sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
   sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
   sbx cp SRC DST              one side is ID:PATH; relative paths are under /workspace
+  sbx watch [-r] [-n COUNT] [--json] ID [PATH]   print file changes (default /workspace)
   sbx pause ID | sbx resume ID
   sbx ttl ID 10m
   sbx network ID [--mode full|allow] [--allow RULE] [--deny RULE] [--clear-allow] [--clear-deny]
              [--egress-kbps N] [--max-connections N]   show or change egress rules on a running sandbox
   sbx rm ID [ID...]
+  sbx preview ID PORT [--public] [--json]   publish a port and print its URL
+  sbx preview ls ID | sbx preview rm ID PREVIEW_ID
   These read SBX_URL (default http://127.0.0.1:8080) and SBX_API_KEY, or --url and --key.
   Without a key they read initial_api_key from SBX_DATA_DIR (default ./data).
 
@@ -96,6 +99,8 @@ func Run(args []string) error {
 		return shellCmd(args[1:])
 	case "cp":
 		return copyCmd(args[1:])
+	case "watch":
+		return watchCmd(args[1:])
 	case "rm", "delete":
 		return removeCmd(args[1:])
 	case "pause", "resume":
@@ -104,6 +109,8 @@ func Run(args []string) error {
 		return ttlCmd(args[1:])
 	case "network", "net":
 		return networkCmd(args[1:])
+	case "preview", "previews":
+		return previewCmd(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprint(os.Stdout, version.Format())
 		return nil

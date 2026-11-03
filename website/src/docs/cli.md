@@ -18,10 +18,14 @@ sbx get ID
 sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
 sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
 sbx cp SRC DST
+sbx watch [-r] [-n COUNT] [--json] ID [PATH]
 sbx pause ID
 sbx resume ID
 sbx ttl ID 10m
 sbx rm ID [ID...]
+sbx preview ID PORT [--public] [--json]
+sbx preview ls ID [--json]
+sbx preview rm ID PREVIEW_ID [PREVIEW_ID...]
 ```
 
 ## serve
@@ -120,4 +124,15 @@ sbx network $id --allow pypi.org,files.pythonhosted.org --max-connections 32
 sbx network $id --clear-deny
 ```
 
+`watch` prints filesystem changes as they happen, one `TYPE<TAB>PATH` line per change, where the type is `create`, `write`, or `remove`. The path defaults to `/workspace`, and a relative path is under it. `-r` includes subdirectories, `-n` exits after that many changes, and `--json` prints each change as a JSON object. It runs until interrupted and needs [sbx-agent](/docs/agent/). `sbx watch -n 1 $id out/done` waits for a file to appear.
+
 `pause` and `resume` print the new status. `ttl` sets the expiry to a duration from now. `rm` deletes one or more sandboxes and prints each id it removed.
+
+`preview` publishes a port that a process in the sandbox listens on and prints the URL to share, so `url=$(sbx preview $id 3000)` works. For a private preview that URL carries the token, which the server shows only once; the preview id and token also go to stderr. `--public` makes a preview anyone can open (when the operator allows public previews), and `--json` prints the whole response. `preview ls` prints id, port, access, age, and URL; listed URLs never include the token. `preview rm` deletes previews by id. `sbx preview create ID PORT` is the long form. See [Previews](/docs/previews/).
+
+```bash
+sbx exec $id -- sh -c 'python -m http.server 3000 >/dev/null 2>&1 &'
+url=$(sbx preview $id 3000)
+sbx preview ls $id
+sbx preview rm $id prv_...
+```

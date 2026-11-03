@@ -889,46 +889,8 @@ func (s *Server) execSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) streamExec(w http.ResponseWriter, r *http.Request, sandboxID string, in core.ExecInput) {
-	flusher, _ := w.(http.Flusher)
-	headerSent := false
-	send := func(event string, payload any) {
-		if !headerSent {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			headerSent = true
-		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	res, err := s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, func(chunk driver.ExecChunk) error {
-		send(string(chunk.Kind), map[string]string{"data": string(chunk.Data)})
-		return nil
-	})
-	if err != nil && !headerSent {
-		writeManager(w, err)
-		return
-	}
-	if err != nil {
-		var op *core.OpError
-		code, msg := "driver", err.Error()
-		if errors.As(err, &op) {
-			code, msg = op.Code, op.Msg
-		}
-		send("error", map[string]string{"code": code, "message": msg})
-		return
-	}
-	send("exit", map[string]any{
-		"exit_code":   res.ExitCode,
-		"duration_ms": res.Duration.Milliseconds(),
-		"truncated":   res.Truncated,
+	s.streamChunks(w, r, func(emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+		return s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, emit)
 	})
 }
 

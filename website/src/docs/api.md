@@ -38,6 +38,8 @@ Errors have one shape:
 
 Streaming routes use server-sent events. [Lifecycle events](#lifecycle-events) have their own format. Exec and process streams send `stdout` and `stderr` events with `{"data": "…"}`, then `exit` with `{"exit_code", "duration_ms", "truncated"}`, or `error` with `{"code", "message"}`.
 
+A stream that has been quiet for 15 seconds sends a `: ping` comment, so proxies and load balancers keep it open while a command runs without output. An exec stream sends its headers with the first output or the first ping, so an error before then, such as a missing sandbox, is still a plain JSON error with its status code. Breaking out of an SDK stream closes the connection, which stops a watch.
+
 ## Service
 
 These routes need no key.
