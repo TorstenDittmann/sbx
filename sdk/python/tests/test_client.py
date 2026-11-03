@@ -91,6 +91,9 @@ def route(req):
         return ok(sandbox_json(status="paused" if path.endswith("pause") else "running"))
     if method == "PUT" and path == "/v1/sandboxes/sbx_test/secrets":
         return ok(sandbox_json(secret_keys=list(req.json()["secrets"])))
+    if method == "PATCH" and path == "/v1/sandboxes/sbx_test/network":
+        sent = req.json()
+        return ok(sandbox_json(network="allow", egress_allow=sent.get("allow"), egress_deny=sent.get("deny")))
     if method == "GET" and path == "/v1/sandboxes/missing":
         return not_found()
     if method == "GET" and path == "/v1/sandboxes/plain":
@@ -238,6 +241,11 @@ class ClientTest(unittest.TestCase):
         info = box.set_secrets({"TOKEN": "next"})
         self.assertEqual(info.secret_keys, ["TOKEN"])
         self.assertEqual(box.secret_keys, ["TOKEN"])
+        box.update_network(NetworkPolicy(allow=["api.example.com"], deny=[], max_connections=8))
+        self.assertEqual(self.server.last.method, "PATCH")
+        self.assertEqual(self.server.last.json(), {"allow": ["api.example.com"], "deny": [], "max_connections": 8})
+        self.assertEqual(box.network, "allow")
+        self.assertEqual(box.egress_allow, ["api.example.com"])
         box.kill()
         self.assertEqual(box.status, "stopped")
 

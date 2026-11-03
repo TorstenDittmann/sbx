@@ -66,7 +66,7 @@ class FakeServer:
                 self.end_headers()
                 self.wfile.write(data)
 
-            do_GET = do_POST = do_PUT = do_DELETE = _serve
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _serve
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

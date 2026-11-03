@@ -47,7 +47,11 @@ func (d *Driver) applyNetPolicy(ctx context.Context, containerID string, spec dr
 	if err != nil {
 		return err
 	}
-	rendered, err := d.renderPolicy(ctx, chain, st, spec)
+	d.polMu.Lock()
+	prev, hadPrev := d.policies[containerID]
+	d.polMu.Unlock()
+	clearBW := hadPrev && prev.spec.Policy.EgressKbps > 0
+	rendered, err := d.renderPolicy(ctx, chain, st, spec, clearBW)
 	if err != nil {
 		return err
 	}
@@ -151,7 +155,7 @@ func (d *Driver) waitAddress(ctx context.Context, id string) (ContainerState, er
 	return ContainerState{}, fmt.Errorf("sandbox has no ipv4 address")
 }
 
-func (d *Driver) renderPolicy(ctx context.Context, chain string, st ContainerState, spec driver.SandboxSpec) (string, error) {
+func (d *Driver) renderPolicy(ctx context.Context, chain string, st ContainerState, spec driver.SandboxSpec, clearBW bool) (string, error) {
 	ip4, err := netip.ParseAddr(st.IPv4)
 	if err != nil || !ip4.Is4() {
 		return "", fmt.Errorf("sandbox ipv4 %q is invalid", st.IPv4)
@@ -173,7 +177,7 @@ func (d *Driver) renderPolicy(ctx context.Context, chain string, st ContainerSta
 		Deny4: deny4, Deny6: deny6, Allow4: allow4, Allow6: allow6,
 		DNS4: dns4, DNS6: dns6, AllowList: allowList,
 		MaxConns: spec.Policy.MaxConns, EgressKbps: spec.Policy.EgressKbps, PID: st.Pid,
-		Baseline: d.baseline(),
+		Baseline: d.baseline(), ClearBandwidth: clearBW,
 	})
 }
 

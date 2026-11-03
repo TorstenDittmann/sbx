@@ -399,6 +399,8 @@
 			["Network", sb.network],
 			["Egress allow", (sb.egress_allow || []).join(", ") || "–"],
 			["Egress deny", (sb.egress_deny || []).join(", ") || "–"],
+			["Egress limit", sb.egress_kbps ? sb.egress_kbps + " kbit/s" : "–"],
+			["Max connections", sb.max_connections || "–"],
 			["Idle timeout", sb.idle_timeout_seconds ? sb.idle_timeout_seconds + "s" : "–"],
 			["Created", new Date(sb.created_at).toLocaleString()],
 			["Expires", new Date(sb.expires_at).toLocaleString()],

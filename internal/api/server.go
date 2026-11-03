@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.auth("sandbox", s.deleteSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/timeout", s.auth("sandbox", s.timeoutSandbox))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/secrets", s.auth("sandbox", s.setSecrets))
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/network", s.auth("sandbox", s.updateNetwork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.auth("sandbox", s.snapshotSandbox))
@@ -819,6 +820,30 @@ func (s *Server) setSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sb, err := s.mgr.SetSecrets(r.Context(), actor(r), r.PathValue("id"), body.Secrets)
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxJSON(sb))
+}
+
+// updateNetwork changes the egress policy of a running sandbox. Omitted
+// fields keep their current value; see core.NetworkUpdate.
+func (s *Server) updateNetwork(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode       string    `json:"mode"`
+		Allow      *[]string `json:"allow"`
+		Deny       *[]string `json:"deny"`
+		EgressKbps *int      `json:"egress_kbps"`
+		MaxConns   *int      `json:"max_connections"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	sb, err := s.mgr.UpdateNetwork(r.Context(), actor(r), r.PathValue("id"), core.NetworkUpdate{
+		Mode: body.Mode, Allow: body.Allow, Deny: body.Deny, EgressKbps: body.EgressKbps, MaxConns: body.MaxConns,
+	})
 	if err != nil {
 		writeManager(w, err)
 		return

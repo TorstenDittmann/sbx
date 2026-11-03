@@ -240,6 +240,9 @@ type Sandbox struct {
 	EgressKbps int
 	PID        int
 	Baseline   Baseline
+	// ClearBandwidth removes a bandwidth qdisc an earlier script installed,
+	// for a live update that drops egress_kbps to 0. Needs PID.
+	ClearBandwidth bool
 }
 
 // ChainName is the iptables chain for a sandbox id. Ids look like sbx_<hex>.
@@ -282,18 +285,28 @@ func RenderSandbox(s Sandbox) (string, error) {
 		writeFamily(&b, "ip6tables", "icmp6-adm-prohibited", s, s.IPv6, s.Deny6, s.Allow6, s.DNS6, true)
 		b.WriteString("fi\n")
 	}
+	if s.EgressKbps == 0 && s.ClearBandwidth && s.PID >= 2 {
+		writeHostDev(&b, s.PID)
+		b.WriteString("tc qdisc del dev \"$dev\" root 2>/dev/null || true\n")
+	}
 	if s.EgressKbps > 0 {
-		fmt.Fprintf(&b, "command -v tc >/dev/null 2>&1\n")
-		fmt.Fprintf(&b, "command -v nsenter >/dev/null 2>&1\n")
-		fmt.Fprintf(&b, "ifindex=$(nsenter -t %d -n cat /sys/class/net/eth0/iflink)\n", s.PID)
-		b.WriteString("dev=\n")
-		b.WriteString("for path in /sys/class/net/*; do\n")
-		b.WriteString("  if [ \"$(cat \"$path/ifindex\" 2>/dev/null || true)\" = \"$ifindex\" ]; then dev=$(basename \"$path\"); break; fi\n")
-		b.WriteString("done\n")
-		b.WriteString("test -n \"$dev\"\n")
+		writeHostDev(&b, s.PID)
 		fmt.Fprintf(&b, "tc qdisc replace dev \"$dev\" root tbf rate %dkbit burst 32kb latency 400ms\n", s.EgressKbps)
 	}
 	return b.String(), nil
+}
+
+// writeHostDev finds the host end of the container's eth0 veth and leaves its
+// name in $dev.
+func writeHostDev(b *strings.Builder, pid int) {
+	b.WriteString("command -v tc >/dev/null 2>&1\n")
+	b.WriteString("command -v nsenter >/dev/null 2>&1\n")
+	fmt.Fprintf(b, "ifindex=$(nsenter -t %d -n cat /sys/class/net/eth0/iflink)\n", pid)
+	b.WriteString("dev=\n")
+	b.WriteString("for path in /sys/class/net/*; do\n")
+	b.WriteString("  if [ \"$(cat \"$path/ifindex\" 2>/dev/null || true)\" = \"$ifindex\" ]; then dev=$(basename \"$path\"); break; fi\n")
+	b.WriteString("done\n")
+	b.WriteString("test -n \"$dev\"\n")
 }
 
 func writeFamily(b *strings.Builder, bin, reject string, s Sandbox, src netip.Addr, deny, allow, dns []netip.Prefix, v6 bool) {

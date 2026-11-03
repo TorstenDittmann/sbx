@@ -87,6 +87,7 @@ await box.setTTL("30m")   // new remaining lifetime
 await box.pause()
 await box.resume()
 await box.refresh()       // re-read status and expiry
+await box.updateNetwork({ allow: ["pypi.org"], maxConnections: 32 })  // change egress rules live
 await box.kill()          // delete
 ```
 
@@ -259,6 +260,7 @@ await client.getSandbox(id)
 await client.listSandboxes({ status: "running", template: "python", q: "demo", labels: { project: "demo" } })
 await client.deleteSandbox(id)
 await client.setSecrets(id, { TOKEN: "new" })
+await client.updateNetwork(id, { mode: "full" })
 ```
 
 ### Volumes
