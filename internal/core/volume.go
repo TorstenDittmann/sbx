@@ -94,11 +94,10 @@ func (m *Manager) existingVolume(ctx context.Context, actor Actor, name, backend
 
 // ListVolumes returns volumes visible to the caller.
 func (m *Manager) ListVolumes(ctx context.Context, actor Actor) ([]store.Volume, error) {
-	owner := ""
-	if !actor.Admin {
-		owner = actor.KeyID
+	if actor.Admin {
+		return m.store.ListVolumes(ctx, "", "")
 	}
-	return m.store.ListVolumes(ctx, owner)
+	return m.store.ListVolumes(ctx, actor.KeyID, actor.Project)
 }
 
 // GetVolume loads one volume the caller may see.
@@ -110,7 +109,9 @@ func (m *Manager) GetVolume(ctx context.Context, actor Actor, volumeID string) (
 		}
 		return store.Volume{}, err
 	}
-	if !actor.Admin && vol.OwnerKeyID != actor.KeyID {
+	if ok, err := m.sees(ctx, actor, vol.OwnerKeyID); err != nil {
+		return store.Volume{}, err
+	} else if !ok {
 		return store.Volume{}, notFound("volume not found")
 	}
 	return vol, nil

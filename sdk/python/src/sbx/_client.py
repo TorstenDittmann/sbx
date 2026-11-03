@@ -39,6 +39,7 @@ from ._types import (
     FileList,
     KeyInfo,
     KeyNetworkPolicy,
+    KeyQuota,
     MountArg,
     NetworkArg,
     NetworkPolicy,
@@ -52,6 +53,7 @@ from ._types import (
     TerminalInfo,
     VolumeInfo,
     VolumeMount,
+    WhoAmI,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +94,12 @@ def _to_bytes(content: Content) -> bytes:
     if isinstance(content, str):
         return content.encode("utf-8")
     return bytes(content)
+
+
+def _quota(quota: Union[KeyQuota, Mapping[str, Any]]) -> Dict[str, Any]:
+    if isinstance(quota, KeyQuota):
+        return quota.to_json()
+    return KeyQuota(**quota).to_json()
 
 
 def _network(policy: NetworkArg, cls: Type[NetworkPolicy] = NetworkPolicy) -> Dict[str, Any]:
@@ -377,7 +385,10 @@ class SbxClient:
         scopes: Optional[Sequence[str]] = None,
         network: Optional[Union[KeyNetworkPolicy, Mapping[str, Any]]] = None,
         expires_at: Optional[Union[datetime, str]] = None,
+        project: Optional[str] = None,
+        quota: Optional[Union[KeyQuota, Mapping[str, Any]]] = None,
     ) -> CreatedKey:
+        """Create a key. scopes is any of "admin", "sandbox", or "read"."""
         body: Dict[str, Any] = {"name": name}
         if scopes is not None:
             body["scopes"] = list(scopes)
@@ -385,7 +396,19 @@ class SbxClient:
             body["network"] = _network(network, KeyNetworkPolicy)
         if expires_at is not None:
             body["expires_at"] = expires_at.isoformat() if isinstance(expires_at, datetime) else expires_at
+        if project:
+            body["project"] = project
+        if quota is not None:
+            body["quota"] = _quota(quota)
         return CreatedKey.from_json(self._json("POST", "/v1/keys", body))
+
+    def set_key_quota(self, id: str, quota: Union[KeyQuota, Mapping[str, Any]]) -> KeyInfo:
+        """Replace a key's quota. Unset fields fall back to the server defaults."""
+        return KeyInfo.from_json(self._json("PUT", f"/v1/keys/{_q(id)}/quota", _quota(quota)))
+
+    def me(self) -> WhoAmI:
+        """Describe the key this client uses, with its limits and current usage."""
+        return WhoAmI.from_json(self._json("GET", "/v1/me"))
 
     def list_keys(self) -> List[KeyInfo]:
         return [KeyInfo.from_json(k) for k in self._json("GET", "/v1/keys")["keys"]]

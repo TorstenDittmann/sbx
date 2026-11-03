@@ -51,6 +51,29 @@ type APIKey struct {
 	// RevokedAt is set once the key has been revoked. A revoked key never
 	// authenticates again.
 	RevokedAt *time.Time
+	// Project, when set, groups the key with every other key of the same
+	// project: each sees and, with the sandbox scope, uses the sandboxes and
+	// volumes the others created. It is fixed when the key is created.
+	Project string
+	// Quota limits what the key's live sandboxes may hold at once.
+	Quota KeyQuota
+}
+
+// KeyQuota caps the sandboxes one key may hold at once. Zero fields fall back
+// to the server: MaxSandboxes to limits.max_sandboxes_per_key, MaxCPU and
+// MaxMemoryMB to no total limit (each sandbox is still capped by the server).
+type KeyQuota struct {
+	MaxSandboxes int     `json:"max_sandboxes,omitempty"`
+	MaxCPU       float64 `json:"max_cpu,omitempty"`
+	MaxMemoryMB  int     `json:"max_memory_mb,omitempty"`
+}
+
+// Usage is what one key's live sandboxes hold: those creating, running, or
+// paused, since a paused sandbox keeps its reservation.
+type Usage struct {
+	Sandboxes int
+	CPU       float64
+	MemoryMB  int
 }
 
 // RegistryCred is one registry credential. Server is a normalized host.
@@ -79,10 +102,43 @@ func (k APIKey) Usable(now time.Time) bool {
 	return k.ExpiresAt == nil || now.Before(*k.ExpiresAt)
 }
 
-// HasScope reports whether the key may perform an action. admin implies every scope.
+// Scopes from the most to the least privileged. Each implies the ones after it.
+const (
+	ScopeAdmin   = "admin"
+	ScopeSandbox = "sandbox"
+	ScopeRead    = "read"
+)
+
+var scopeRank = map[string]int{ScopeRead: 1, ScopeSandbox: 2, ScopeAdmin: 3}
+
+// ValidScope reports whether s is a known scope.
+func ValidScope(s string) bool {
+	return scopeRank[s] > 0
+}
+
+// ValidProject accepts 1 to 64 of [A-Za-z0-9._-], starting with a letter or digit.
+func ValidProject(p string) bool {
+	if p == "" || len(p) > 64 {
+		return false
+	}
+	for i, c := range p {
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if !alnum && (i == 0 || (c != '.' && c != '_' && c != '-')) {
+			return false
+		}
+	}
+	return true
+}
+
+// HasScope reports whether the key may perform an action. admin implies
+// sandbox, and sandbox implies read.
 func (k APIKey) HasScope(scope string) bool {
+	want := scopeRank[scope]
+	if want == 0 {
+		return false
+	}
 	for _, s := range k.Scopes {
-		if s == "admin" || s == scope {
+		if scopeRank[s] >= want {
 			return true
 		}
 	}
@@ -179,7 +235,9 @@ type SandboxFilter struct {
 	Template string
 	Query    string
 	OwnerID  string
-	Labels   map[string]string
+	// Project, with OwnerID, also selects sandboxes of every key in the project.
+	Project string
+	Labels  map[string]string
 }
 
 // Store is a process-local SQLite database.
@@ -229,6 +287,8 @@ func migrate(db *sql.DB) error {
 		{"api_keys", "expires_at", `ALTER TABLE api_keys ADD COLUMN expires_at INTEGER`},
 		{"api_keys", "revoked_at", `ALTER TABLE api_keys ADD COLUMN revoked_at INTEGER`},
 		{"api_keys", "registries_json", `ALTER TABLE api_keys ADD COLUMN registries_json TEXT NOT NULL DEFAULT '[]'`},
+		{"api_keys", "project", `ALTER TABLE api_keys ADD COLUMN project TEXT NOT NULL DEFAULT ''`},
+		{"api_keys", "quota_json", `ALTER TABLE api_keys ADD COLUMN quota_json TEXT NOT NULL DEFAULT '{}'`},
 		{"templates", "setup_json", `ALTER TABLE templates ADD COLUMN setup_json TEXT NOT NULL DEFAULT '[]'`},
 		{"templates", "warm", `ALTER TABLE templates ADD COLUMN warm INTEGER NOT NULL DEFAULT 0`},
 		{"templates", "network", `ALTER TABLE templates ADD COLUMN network TEXT NOT NULL DEFAULT 'none'`},
@@ -384,10 +444,38 @@ func (s *Store) CreateKey(ctx context.Context, k APIKey) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), registriesJSON(k.Registries), millis(k.CreatedAt), nullMillis(k.ExpiresAt))
+		INSERT INTO api_keys (id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, expires_at, project, quota_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		k.ID, k.Name, k.Hash, k.Prefix, string(scopes), string(network), registriesJSON(k.Registries), millis(k.CreatedAt), nullMillis(k.ExpiresAt),
+		k.Project, mustJSON(k.Quota))
 	return err
+}
+
+// SetKeyQuota replaces a key's quota.
+func (s *Store) SetKeyQuota(ctx context.Context, id string, q KeyQuota) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE api_keys SET quota_json = ? WHERE id = ?`, mustJSON(q), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// KeyProject returns the project of key id, or "" when it has none or does
+// not exist.
+func (s *Store) KeyProject(ctx context.Context, id string) (string, error) {
+	var p string
+	err := s.db.QueryRowContext(ctx, `SELECT project FROM api_keys WHERE id = ?`, id).Scan(&p)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return p, err
 }
 
 // SetKeyRegistries replaces a key's registry credentials.
@@ -452,7 +540,7 @@ func (s *Store) CountKeys(ctx context.Context) (int, error) {
 // KeyByHash looks up a key by the digest of its secret.
 func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys WHERE key_hash = ?`, hash)
 	return scanKey(row)
 }
@@ -460,7 +548,7 @@ func (s *Store) KeyByHash(ctx context.Context, hash string) (APIKey, error) {
 // KeyByID loads one key. The secret is not included.
 func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys WHERE id = ?`, id)
 	return scanKey(row)
 }
@@ -468,7 +556,7 @@ func (s *Store) KeyByID(ctx context.Context, id string) (APIKey, error) {
 // ListKeys returns every key, newest first. Secrets are not included beyond the prefix.
 func (s *Store) ListKeys(ctx context.Context) ([]APIKey, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at
+		SELECT id, name, key_hash, prefix, scopes, network_json, registries_json, created_at, last_used_at, expires_at, revoked_at, project, quota_json
 		FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -677,8 +765,9 @@ func (s *Store) ListSandboxes(ctx context.Context, f SandboxFilter) ([]Sandbox, 
 		args = append(args, f.Template)
 	}
 	if f.OwnerID != "" {
-		q += ` AND owner_key_id = ?`
-		args = append(args, f.OwnerID)
+		c, a := ownerClause(f.OwnerID, f.Project)
+		q += ` AND ` + c
+		args = append(args, a...)
 	}
 	q += ` ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -716,6 +805,24 @@ func (s *Store) CountActive(ctx context.Context, ownerID string) (int, error) {
 		SELECT COUNT(*) FROM sandboxes
 		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&n)
 	return n, err
+}
+
+// UsageOf sums what an owner's live sandboxes hold.
+func (s *Store) UsageOf(ctx context.Context, ownerID string) (Usage, error) {
+	var u Usage
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(cpu), 0), COALESCE(SUM(memory_mb), 0) FROM sandboxes
+		WHERE owner_key_id = ? AND status IN ('creating', 'running', 'paused')`, ownerID).Scan(&u.Sandboxes, &u.CPU, &u.MemoryMB)
+	return u, err
+}
+
+// ownerClause selects rows owned by owner, or by any key of project when
+// project is set.
+func ownerClause(owner, project string) (string, []any) {
+	if project == "" {
+		return `owner_key_id = ?`, []any{owner}
+	}
+	return `(owner_key_id = ? OR owner_key_id IN (SELECT id FROM api_keys WHERE project = ?))`, []any{owner, project}
 }
 
 // ListDue returns sandboxes the reaper should stop.
@@ -804,10 +911,10 @@ type scanner interface {
 
 func scanKey(row scanner) (APIKey, error) {
 	var k APIKey
-	var scopes, network, registries string
+	var scopes, network, registries, quota string
 	var created int64
 	var last, expires, revoked sql.NullInt64
-	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &registries, &created, &last, &expires, &revoked)
+	err := row.Scan(&k.ID, &k.Name, &k.Hash, &k.Prefix, &scopes, &network, &registries, &created, &last, &expires, &revoked, &k.Project, &quota)
 	if errors.Is(err, sql.ErrNoRows) {
 		return APIKey{}, ErrNotFound
 	}
@@ -824,6 +931,11 @@ func scanKey(row scanner) (APIKey, error) {
 	}
 	if registries != "" && registries != "[]" {
 		if err := json.Unmarshal([]byte(registries), &k.Registries); err != nil {
+			return APIKey{}, err
+		}
+	}
+	if quota != "" && quota != "{}" {
+		if err := json.Unmarshal([]byte(quota), &k.Quota); err != nil {
 			return APIKey{}, err
 		}
 	}

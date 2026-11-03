@@ -186,6 +186,58 @@ paths:
               schema: {$ref: "#/components/schemas/APIKey"}
         "400": {description: Invalid credential}
         "404": {description: Not found}
+  /v1/keys/{id}/quota:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+    put:
+      operationId: setKeyQuota
+      summary: Replace a key's quota
+      description: >
+        Zero or missing fields use the server default. Sandboxes already
+        running are not stopped when a quota shrinks; the key cannot create
+        more until it is back under the limit.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyQuota"}
+      responses:
+        "200":
+          description: The updated key
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/APIKey"}
+        "400": {description: A negative value}
+        "404": {description: Not found}
+  /v1/me:
+    get:
+      operationId: me
+      summary: Describe the calling key
+      description: >
+        Any scope may call it. Returns the key without its secret, its
+        effective limits (max_sandboxes resolved against the server default),
+        and what its live sandboxes hold now.
+      responses:
+        "200":
+          description: The calling key with limits and usage
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/APIKey"
+                  - type: object
+                    properties:
+                      limits: {$ref: "#/components/schemas/KeyQuota"}
+                      usage:
+                        type: object
+                        description: Sandboxes that are creating, running, or paused, and the CPU and memory they hold.
+                        properties:
+                          sandboxes: {type: integer}
+                          cpu: {type: number}
+                          memory_mb: {type: integer}
   /v1/backends:
     get:
       operationId: listBackends
@@ -1107,6 +1159,10 @@ components:
         scopes:
           type: array
           items: {type: string}
+        project:
+          type: string
+          description: Empty when the key is not bound to a project.
+        quota: {$ref: "#/components/schemas/KeyQuota"}
         created_at: {type: string, format: date-time}
         last_used_at:
           type: string
@@ -1130,7 +1186,19 @@ components:
         name: {type: string}
         scopes:
           type: array
-          items: {type: string, enum: [admin, sandbox]}
+          description: >
+            admin implies sandbox, and sandbox implies read. read keys can only
+            call GET routes (no exec, terminals, writes, or previews). Defaults
+            to [sandbox].
+          items: {type: string, enum: [admin, sandbox, read]}
+        project:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          description: >
+            Optional and fixed once set. Keys of the same project see and use
+            each other's sandboxes, volumes, and events. Not allowed on admin
+            keys, which already see everything.
+        quota: {$ref: "#/components/schemas/KeyQuota"}
         expires_at:
           type: string
           format: date-time
@@ -1143,6 +1211,17 @@ components:
             Private registry credentials for images and build bases this key
             uses. They take precedence over the server's registries.
           items: {$ref: "#/components/schemas/RegistryCredential"}
+    KeyQuota:
+      type: object
+      description: >
+        Limits on what one key's live (creating, running, or paused) sandboxes
+        hold at once. Creating past one returns 429 quota_exceeded. 0 uses the
+        server: max_sandboxes falls back to limits.max_sandboxes_per_key, and
+        the CPU and memory totals are unlimited.
+      properties:
+        max_sandboxes: {type: integer, minimum: 0}
+        max_cpu: {type: number, minimum: 0, description: Total CPUs across live sandboxes.}
+        max_memory_mb: {type: integer, minimum: 0, description: Total memory across live sandboxes.}
     RegistryCredential:
       type: object
       required: [server]

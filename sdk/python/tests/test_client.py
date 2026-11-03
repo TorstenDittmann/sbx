@@ -335,6 +335,48 @@ class KeysAndBackendsTest(unittest.TestCase):
             calls = [f"{r.method} {r.path}" for r in server.requests[2:]]
             self.assertEqual(calls, ["GET /v1/keys", "DELETE /v1/keys/key_1", "GET /v1/keys/key_1"])
 
+    def test_key_project_quota_and_me(self) -> None:
+        key = {
+            "id": "key_1",
+            "name": "team",
+            "prefix": "sbx_ab",
+            "scopes": ["read"],
+            "project": "acme",
+            "quota": {"max_sandboxes": 5, "max_cpu": 2, "max_memory_mb": 0},
+        }
+
+        def handler(req):
+            if req.path == "/v1/me":
+                return ok(
+                    {
+                        **key,
+                        "limits": {"max_sandboxes": 5, "max_cpu": 2, "max_memory_mb": 0},
+                        "usage": {"sandboxes": 1, "cpu": 0.5, "memory_mb": 256},
+                    }
+                )
+            if req.method == "POST":
+                return ok({**key, "key": "sbx_new"}, 201)
+            return ok(key)
+
+        from sbx import KeyQuota
+
+        with FakeServer(handler) as server:
+            client = SbxClient(server.url, "sbx_test")
+            created = client.create_key("team", scopes=["read"], project="acme", quota=KeyQuota(max_sandboxes=5, max_cpu=2))
+            self.assertEqual(created.project, "acme")
+            self.assertEqual(created.quota, KeyQuota(max_sandboxes=5, max_cpu=2))
+            self.assertEqual(
+                server.last.json(),
+                {"name": "team", "scopes": ["read"], "project": "acme", "quota": {"max_sandboxes": 5, "max_cpu": 2}},
+            )
+            client.set_key_quota("key_1", {"max_memory_mb": 1024})
+            self.assertEqual(server.last.json(), {"max_memory_mb": 1024})
+            self.assertEqual(server.last.path, "/v1/keys/key_1/quota")
+            me = client.me()
+            self.assertEqual(me.usage.memory_mb, 256)
+            self.assertEqual(me.limits.max_sandboxes, 5)
+            self.assertEqual(me.project, "acme")
+
     def test_backends(self) -> None:
         backend = {
             "name": "docker",

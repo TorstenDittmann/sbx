@@ -64,11 +64,13 @@ Manages API keys directly in the database, so it works while the server is stopp
 ```bash
 sbx keys create --name ci                       # a sandbox key
 sbx keys create --name ops --admin --expires 720h
+sbx keys create --name grafana --read-only --project acme
+sbx keys create --name agent --max-sandboxes 50 --max-cpu 16 --max-memory-mb 32768
 sbx keys list
 sbx keys revoke --id key_...
 ```
 
-`create` prints the new key once. `--expires` takes a Go duration such as `720h`. `list` prints id, prefix, name, scopes, and state (`active`, `expired`, or `revoked`).
+`create` prints the new key once. `--expires` takes a Go duration such as `720h`. `--read-only` grants only the `read` scope. `--project` shares sandboxes and volumes with other keys of that project. `--max-sandboxes`, `--max-cpu`, and `--max-memory-mb` set the key's [quota](/docs/api-keys/#quotas). `list` prints id, prefix, name, scopes, project, and state (`active`, `expired`, or `revoked`).
 
 `revoke` can revoke the last admin key, which the API refuses to do. That is deliberate: the host is the recovery path. Create a new admin key with `sbx keys create --admin` afterwards. See [API keys](/docs/api-keys/).
 

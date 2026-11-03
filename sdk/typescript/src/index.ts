@@ -236,10 +236,40 @@ export type KeyInfo = {
   network: KeyNetworkPolicy
   /** Registries the key has credentials for. Secrets are never returned. */
   registries: { server: string; username?: string }[]
+  /** Keys of the same project see and use each other's sandboxes and volumes. */
+  project?: string
+  quota: KeyQuota
   createdAt?: string
   lastUsedAt?: string
   expiresAt?: string
   revokedAt?: string
+}
+
+/**
+ * Limits on what one key's live sandboxes hold at once. 0 or unset uses the
+ * server: `maxSandboxes` falls back to `limits.max_sandboxes_per_key`, and the
+ * CPU and memory totals are unlimited.
+ */
+export type KeyQuota = {
+  maxSandboxes?: number
+  maxCpu?: number
+  maxMemoryMb?: number
+}
+
+/** Options for `createKey`. `scopes` is any of `admin`, `sandbox`, or `read`. */
+export type CreateKeyOptions = {
+  scopes?: string[]
+  network?: KeyNetworkPolicy
+  expiresAt?: Date | string
+  registries?: RegistryCredential[]
+  project?: string
+  quota?: KeyQuota
+}
+
+/** The calling key, its effective limits, and what its live sandboxes hold. */
+export type WhoAmI = KeyInfo & {
+  limits: { maxSandboxes: number; maxCpu: number; maxMemoryMb: number }
+  usage: { sandboxes: number; cpu: number; memoryMb: number }
 }
 
 /**
@@ -652,7 +682,7 @@ export class SbxClient {
     return this.requestJSON<SandboxJSON>("POST", "/v1/sandboxes", createBody(options)).then(mapSandbox)
   }
 
-  createKey(name: string, options: { scopes?: string[]; network?: KeyNetworkPolicy; expiresAt?: Date | string; registries?: RegistryCredential[] } = {}): Promise<CreatedKey> {
+  createKey(name: string, options: CreateKeyOptions = {}): Promise<CreatedKey> {
     const body: Record<string, unknown> = { name }
     if (options.scopes) body.scopes = options.scopes
     if (options.network) {
@@ -662,6 +692,8 @@ export class SbxClient {
     }
     if (options.expiresAt) body.expires_at = options.expiresAt instanceof Date ? options.expiresAt.toISOString() : options.expiresAt
     if (options.registries) body.registries = options.registries.map(registryBody)
+    if (options.project) body.project = options.project
+    if (options.quota) body.quota = quotaBody(options.quota)
     return this.requestJSON<KeyJSON & { key: string }>("POST", "/v1/keys", body).then((raw) => ({ ...mapKey(raw), key: raw.key }))
   }
 
@@ -676,6 +708,20 @@ export class SbxClient {
   /** Replace a key's private registry credentials. An empty list removes them. */
   setKeyRegistries(id: string, registries: RegistryCredential[]): Promise<KeyInfo> {
     return this.requestJSON<KeyJSON>("PUT", `/v1/keys/${encodeURIComponent(id)}/registries`, { registries: registries.map(registryBody) }).then(mapKey)
+  }
+
+  /** Replace a key's quota. Unset fields fall back to the server defaults. */
+  setKeyQuota(id: string, quota: KeyQuota): Promise<KeyInfo> {
+    return this.requestJSON<KeyJSON>("PUT", `/v1/keys/${encodeURIComponent(id)}/quota`, quotaBody(quota)).then(mapKey)
+  }
+
+  /** Describe the key this client uses, with its limits and current usage. Any scope may call it. */
+  me(): Promise<WhoAmI> {
+    return this.requestJSON<KeyJSON & { limits: QuotaJSON; usage: { sandboxes: number; cpu: number; memory_mb: number } }>("GET", "/v1/me").then((raw) => ({
+      ...mapKey(raw),
+      limits: { maxSandboxes: raw.limits.max_sandboxes ?? 0, maxCpu: raw.limits.max_cpu ?? 0, maxMemoryMb: raw.limits.max_memory_mb ?? 0 },
+      usage: { sandboxes: raw.usage.sandboxes, cpu: raw.usage.cpu, memoryMb: raw.usage.memory_mb },
+    }))
   }
 
   /** Revoke a key. It stops authenticating immediately. */
@@ -1023,6 +1069,18 @@ type KeyJSON = {
     max_connections?: number
   }
   registries?: { server: string; username?: string }[]
+  project?: string
+  quota?: QuotaJSON
+}
+
+type QuotaJSON = { max_sandboxes?: number; max_cpu?: number; max_memory_mb?: number }
+
+function quotaBody(q: KeyQuota): QuotaJSON {
+  const body: QuotaJSON = {}
+  if (q.maxSandboxes) body.max_sandboxes = q.maxSandboxes
+  if (q.maxCpu) body.max_cpu = q.maxCpu
+  if (q.maxMemoryMb) body.max_memory_mb = q.maxMemoryMb
+  return body
 }
 
 function registryBody(r: RegistryCredential): Record<string, string> {
@@ -1053,6 +1111,12 @@ function mapKey(raw: KeyJSON): KeyInfo {
       maxConnections: network.max_connections,
     },
     registries: raw.registries ?? [],
+    project: raw.project || undefined,
+    quota: {
+      maxSandboxes: raw.quota?.max_sandboxes || undefined,
+      maxCpu: raw.quota?.max_cpu || undefined,
+      maxMemoryMb: raw.quota?.max_memory_mb || undefined,
+    },
   }
 }
 
