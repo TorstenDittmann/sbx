@@ -18,6 +18,7 @@ sbx get ID
 sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
 sbx shell [--cwd DIR] ID [-- CMD [ARGS...]]
 sbx cp SRC DST
+sbx watch [-r] [-n COUNT] [--json] ID [PATH]
 sbx pause ID
 sbx resume ID
 sbx ttl ID 10m
@@ -110,5 +111,7 @@ sbx rm $id
 `shell` opens an interactive terminal: bash when the image has it, otherwise sh. It puts the local terminal in raw mode and follows window resizes. Pass a command after `--` to run something else. Terminals need [sbx-agent](/docs/agent/).
 
 `cp` copies files and directories in either direction. One side is `ID:PATH`; a relative path is under `/workspace`. When the destination is an existing directory, the source is copied into it under its own name, like `cp -r`. A directory is sent as a tar archive, so the destination's parent must exist. `-` reads a file from stdin or writes one to stdout.
+
+`watch` prints filesystem changes as they happen, one `TYPE<TAB>PATH` line per change, where the type is `create`, `write`, or `remove`. The path defaults to `/workspace`, and a relative path is under it. `-r` includes subdirectories, `-n` exits after that many changes, and `--json` prints each change as a JSON object. It runs until interrupted and needs [sbx-agent](/docs/agent/). `sbx watch -n 1 $id out/done` waits for a file to appear.
 
 `pause` and `resume` print the new status. `ttl` sets the expiry to a duration from now. `rm` deletes one or more sandboxes and prints each id it removed.
