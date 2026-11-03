@@ -49,44 +49,16 @@ func (s *Server) mkdir(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) watchFiles(w http.ResponseWriter, r *http.Request) {
 	recursive := r.URL.Query().Get("recursive") == "1" || r.URL.Query().Get("recursive") == "true"
-	flusher, _ := w.(http.Flusher)
-	headerSent := false
-	send := func(event string, payload any) {
-		if !headerSent {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			headerSent = true
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	send("ready", map[string]string{"path": r.URL.Query().Get("path")})
+	sse := newSSE(w)
+	defer sse.Stop()
+	sse.Send("ready", map[string]string{"path": r.URL.Query().Get("path")})
 	err := s.mgr.Watch(r.Context(), actor(r), r.PathValue("id"), r.URL.Query().Get("path"), recursive, func(ev driver.FileEvent) error {
-		send("change", map[string]string{"type": ev.Type, "path": ev.Path})
+		sse.Send("change", map[string]string{"type": ev.Type, "path": ev.Path})
 		return nil
 	})
-	if err != nil && !headerSent {
-		writeManager(w, err)
-		return
-	}
+	sse.Stop()
 	if err != nil && !errors.Is(err, r.Context().Err()) {
-		var op *core.OpError
-		code, msg := "driver", err.Error()
-		if errors.As(err, &op) {
-			code, msg = op.Code, op.Msg
-		}
-		send("error", map[string]string{"code": code, "message": msg})
+		sse.SendError(err)
 	}
 }
 
@@ -367,30 +339,14 @@ func (s *Server) spliceUpgrade(w http.ResponseWriter, upstream io.ReadWriteClose
 }
 
 func (s *Server) streamChunks(w http.ResponseWriter, r *http.Request, run func(func(driver.ExecChunk) error) (driver.ExecResult, error)) {
-	flusher, _ := w.(http.Flusher)
-	headerSent := false
-	send := func(event string, payload any) {
-		if !headerSent {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			headerSent = true
-		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
+	sse := newSSE(w)
+	defer sse.Stop()
 	res, err := run(func(chunk driver.ExecChunk) error {
-		send(string(chunk.Kind), map[string]string{"data": string(chunk.Data)})
+		sse.Send(string(chunk.Kind), map[string]string{"data": string(chunk.Data)})
 		return nil
 	})
-	if err != nil && !headerSent {
+	started := sse.Stop()
+	if err != nil && !started {
 		writeManager(w, err)
 		return
 	}
@@ -398,15 +354,10 @@ func (s *Server) streamChunks(w http.ResponseWriter, r *http.Request, run func(f
 		return
 	}
 	if err != nil {
-		var op *core.OpError
-		code, msg := "driver", err.Error()
-		if errors.As(err, &op) {
-			code, msg = op.Code, op.Msg
-		}
-		send("error", map[string]string{"code": code, "message": msg})
+		sse.SendError(err)
 		return
 	}
-	send("exit", map[string]any{
+	sse.Send("exit", map[string]any{
 		"exit_code":   res.ExitCode,
 		"duration_ms": res.Duration.Milliseconds(),
 		"truncated":   res.Truncated,
