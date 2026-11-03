@@ -55,6 +55,8 @@ Sandboxes (talk to a running server):
   sbx pause ID | sbx resume ID
   sbx ttl ID 10m
   sbx rm ID [ID...]
+  sbx preview ID PORT [--public] [--json]   publish a port and print its URL
+  sbx preview ls ID | sbx preview rm ID PREVIEW_ID
   These read SBX_URL (default http://127.0.0.1:8080) and SBX_API_KEY, or --url and --key.
   Without a key they read initial_api_key from SBX_DATA_DIR (default ./data).
 
@@ -102,6 +104,8 @@ func Run(args []string) error {
 		return stateCmd(args[0], args[1:])
 	case "ttl":
 		return ttlCmd(args[1:])
+	case "preview", "previews":
+		return previewCmd(args[1:])
 	case "version", "--version", "-v":
 		fmt.Fprint(os.Stdout, version.Format())
 		return nil

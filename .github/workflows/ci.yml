@@ -165,8 +165,7 @@ jobs:
           bun test --cwd sdk/typescript test
 
   python-sdk:
-    # ubuntu-latest moved to 26.04, where setup-python has no 3.9 build.
-    # 24.04 keeps the oldest supported Python (requires-python >= 3.9) tested.
+    # ubuntu-latest (26.04) has no Python 3.9 build for setup-python.
     runs-on: ubuntu-24.04
     strategy:
       matrix:
