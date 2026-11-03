@@ -98,13 +98,15 @@ type Counters struct {
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	cfg      config.Config
-	store    *store.Store
-	drivers  map[string]driver.Driver
-	log      *slog.Logger
-	now      func() time.Time
-	mu       sync.Mutex
-	poolMu   sync.Mutex
+	cfg     config.Config
+	store   *store.Store
+	drivers map[string]driver.Driver
+	log     *slog.Logger
+	now     func() time.Time
+	mu      sync.Mutex
+	poolMu  sync.Mutex
+	// netMu serializes live network updates so the driver and the store agree.
+	netMu    sync.Mutex
 	previews map[string]Preview
 	streams  map[string]int
 	budgets  map[string]*byteBudget

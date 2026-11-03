@@ -242,6 +242,10 @@ class Sandbox:
     def set_secrets(self, secrets: Mapping[str, str]) -> SandboxInfo:
         return self._apply(self.client.set_secrets(self.id, secrets))
 
+    def update_network(self, policy: NetworkArg) -> SandboxInfo:
+        """Change this sandbox's egress rules. See ``Client.update_network``."""
+        return self._apply(self.client.update_network(self.id, policy))
+
     def start_process(
         self,
         cmd: Command,

@@ -45,7 +45,8 @@ Usage:
   sbx version
 
 Sandboxes (talk to a running server):
-  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
+  sbx create [TEMPLATE] [--image IMAGE] [--ttl 5m] [--network none|full|allow] [--allow RULE] [--deny RULE]
+             [--egress-kbps N] [--max-connections N] [--env K=V] [--label K=V] [--volume ID:/path] [--json]
   sbx ls [--status S] [--template T] [--label key:value] [-q TEXT] [--quiet] [--json]
   sbx get ID
   sbx exec [--cwd DIR] [--env K=V] [--timeout 30s] [-i] ID [--] CMD [ARGS...]
@@ -54,6 +55,8 @@ Sandboxes (talk to a running server):
   sbx watch [-r] [-n COUNT] [--json] ID [PATH]   print file changes (default /workspace)
   sbx pause ID | sbx resume ID
   sbx ttl ID 10m
+  sbx network ID [--mode full|allow] [--allow RULE] [--deny RULE] [--clear-allow] [--clear-deny]
+             [--egress-kbps N] [--max-connections N]   show or change egress rules on a running sandbox
   sbx rm ID [ID...]
   sbx preview ID PORT [--public] [--json]   publish a port and print its URL
   sbx preview ls ID | sbx preview rm ID PREVIEW_ID
@@ -104,6 +107,8 @@ func Run(args []string) error {
 		return stateCmd(args[0], args[1:])
 	case "ttl":
 		return ttlCmd(args[1:])
+	case "network", "net":
+		return networkCmd(args[1:])
 	case "preview", "previews":
 		return previewCmd(args[1:])
 	case "version", "--version", "-v":

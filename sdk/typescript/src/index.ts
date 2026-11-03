@@ -273,6 +273,7 @@ export type SandboxEventType =
   | "sandbox.expired"
   | "sandbox.paused"
   | "sandbox.resumed"
+  | "sandbox.network_updated"
   | "sandbox.oom"
   | "sandbox.lost"
 
@@ -712,6 +713,19 @@ export class SbxClient {
 
   setSecrets(id: string, secrets: Record<string, string>): Promise<SandboxInfo> {
     return this.requestJSON<SandboxJSON>("PUT", `/v1/sandboxes/${encodeURIComponent(id)}/secrets`, { secrets }).then(mapSandbox)
+  }
+
+  /**
+   * Changes the egress rules of a running or paused sandbox. Omitted fields
+   * keep their current value; `mode: "full"` without `allow` drops back to
+   * the key or server allow list. Server and key deny rules always stay.
+   */
+  updateNetwork(id: string, policy: NetworkPolicy): Promise<SandboxInfo> {
+    return this.requestJSON<SandboxJSON>(
+      "PATCH",
+      `/v1/sandboxes/${encodeURIComponent(id)}/network`,
+      networkBody(policy),
+    ).then(mapSandbox)
   }
 
   setTTL(id: string, ttl: number | string): Promise<SandboxInfo> {
@@ -1293,6 +1307,13 @@ export class Sandbox {
 
   async kill(): Promise<SandboxInfo> {
     const info = await this.#client.deleteSandbox(this.id)
+    this.apply(info)
+    return info
+  }
+
+  /** Changes this sandbox's egress rules. See `Client.updateNetwork`. */
+  async updateNetwork(policy: NetworkPolicy): Promise<SandboxInfo> {
+    const info = await this.#client.updateNetwork(this.id, policy)
     this.apply(info)
     return info
   }

@@ -115,6 +115,15 @@ sbx rm $id
 
 `cp` copies files and directories in either direction. One side is `ID:PATH`; a relative path is under `/workspace`. When the destination is an existing directory, the source is copied into it under its own name, like `cp -r`. A directory is sent as a tar archive, so the destination's parent must exist. `-` reads a file from stdin or writes one to stdout.
 
+`create` takes the [network](/docs/network/) flags too: `--network none|full|allow`, the repeatable `--allow` and `--deny` (hostnames, IPs, or CIDRs, also comma-separated), `--egress-kbps`, and `--max-connections`. `--allow` without `--network` means `--network allow`.
+
+`network ID` prints a sandbox's mode, allow and deny lists, and limits. With flags it changes them on the running sandbox: `--allow` and `--deny` replace the lists, `--clear-allow` and `--clear-deny` empty them, `--mode full|allow` switches mode, and `--egress-kbps` and `--max-connections` set the limits. Server and key deny rules always stay.
+
+```bash
+sbx network $id --allow pypi.org,files.pythonhosted.org --max-connections 32
+sbx network $id --clear-deny
+```
+
 `watch` prints filesystem changes as they happen, one `TYPE<TAB>PATH` line per change, where the type is `create`, `write`, or `remove`. The path defaults to `/workspace`, and a relative path is under it. `-r` includes subdirectories, `-n` exits after that many changes, and `--json` prints each change as a JSON object. It runs until interrupted and needs [sbx-agent](/docs/agent/). `sbx watch -n 1 $id out/done` waits for a file to appear.
 
 `pause` and `resume` print the new status. `ttl` sets the expiry to a duration from now. `rm` deletes one or more sandboxes and prints each id it removed.
