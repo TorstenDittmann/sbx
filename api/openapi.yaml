@@ -444,6 +444,143 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
+  /v1/webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List webhooks
+      description: A sandbox key sees its own webhooks; an admin key sees every one. Secrets are not included.
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [webhooks]
+                properties:
+                  webhooks:
+                    type: array
+                    items: {$ref: "#/components/schemas/Webhook"}
+    post:
+      operationId: createWebhook
+      summary: Create a webhook
+      description: |
+        Sends lifecycle events to `url` as signed `POST` requests. The body is
+        the same `Event` object the event stream sends. Signatures follow
+        Standard Webhooks: headers `webhook-id` (`evt_<event id>`, stable
+        across retries), `webhook-timestamp` (Unix seconds), and
+        `webhook-signature` (`v1,` and the base64 HMAC-SHA256 of
+        `<webhook-id>.<webhook-timestamp>.<body>`, keyed with the base64
+        bytes after `whsec_` in the secret).
+
+        A webhook receives the events a stream for its key would: a sandbox
+        key's webhook gets its own sandboxes, an admin key's gets every
+        sandbox. It starts with the next event. Events arrive in order, one
+        at a time; any 2xx is a success. A failed event is retried after 5s,
+        30s, 2m, 10m, 30m, 1h, and 2h, and holds back later events. If the
+        last retry fails too, the event is dropped and the webhook is
+        disabled. Delivery is at least once; dedupe on `webhook-id`.
+
+        The secret is returned only here and by rotate-secret. Private,
+        loopback, and metadata destinations are refused unless the operator
+        sets `webhooks.allow_private`. Redirects are not followed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateWebhook"}
+      responses:
+        "201":
+          description: Created webhook, with its secret
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+        "400":
+          description: Invalid URL or event type, or webhooks are off
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "429":
+          description: The key has webhooks.max_per_key webhooks
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+  /v1/webhooks/{id}:
+    get:
+      operationId: getWebhook
+      summary: Get a webhook and its delivery status
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      responses:
+        "200":
+          description: Webhook
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+    patch:
+      operationId: updateWebhook
+      summary: Update a webhook
+      description: >
+        Omitted fields keep their value. Setting enabled to true on a
+        disabled webhook clears its failure count and resumes after the last
+        event it handled, sending events that arrived meanwhile while they
+        are still kept.
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/UpdateWebhook"}
+      responses:
+        "200":
+          description: Updated webhook
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      responses:
+        "204": {description: Deleted}
+  /v1/webhooks/{id}/rotate-secret:
+    post:
+      operationId: rotateWebhookSecret
+      summary: Replace the signing secret
+      description: The response carries the new secret. A delivery already in flight may still be signed with the old one.
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      responses:
+        "200":
+          description: Webhook with the new secret
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Webhook"}
+  /v1/webhooks/{id}/test:
+    post:
+      operationId: testWebhook
+      summary: Send a test event
+      description: >
+        Sends a signed `webhook.test` event (id 0, empty sandbox_id,
+        data.webhook_id) right away, also to a disabled webhook, and reports
+        the response. It does not change the delivery status.
+      parameters:
+        - $ref: "#/components/parameters/WebhookID"
+      responses:
+        "200":
+          description: Outcome of the test delivery
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, status_code, error, duration_ms]
+                properties:
+                  ok: {type: boolean}
+                  status_code: {type: integer, description: 0 when no response arrived.}
+                  error: {type: string}
+                  duration_ms: {type: integer}
   /v1/sandboxes:
     get:
       operationId: listSandboxes
@@ -1114,6 +1251,11 @@ components:
       in: path
       required: true
       schema: {type: string, pattern: "^vol_[0-9a-f]{16}$"}
+    WebhookID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, pattern: "^wh_[0-9a-f]{16}$"}
     ProcID:
       name: procId
       in: path
@@ -1148,7 +1290,7 @@ components:
         id: {type: integer}
         type:
           type: string
-          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.network_updated, sandbox.oom, sandbox.lost]
+          enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]
         sandbox_id: {type: string}
         time: {type: string, format: date-time}
         data:
@@ -1540,6 +1682,47 @@ components:
             What to do when the key already has a volume with this name.
             error returns 409. reuse returns that volume, or 409 if it is on
             another backend.
+    CreateWebhook:
+      type: object
+      required: [url]
+      additionalProperties: false
+      properties:
+        url: {type: string, format: uri, maxLength: 2048, description: http or https.}
+        description: {type: string, maxLength: 256}
+        events:
+          type: array
+          description: Event types to send. Empty or omitted sends every type.
+          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]}
+    UpdateWebhook:
+      type: object
+      additionalProperties: false
+      properties:
+        url: {type: string, format: uri, maxLength: 2048}
+        description: {type: string, maxLength: 256}
+        events:
+          type: array
+          items: {type: string, enum: [sandbox.created, sandbox.failed, sandbox.deleted, sandbox.expired, sandbox.paused, sandbox.resumed, sandbox.hibernated, sandbox.network_updated, sandbox.oom, sandbox.lost]}
+        enabled: {type: boolean}
+    Webhook:
+      type: object
+      required: [id, url, description, events, enabled, created_at, updated_at, last_attempt_at, last_success_at, last_status, last_error, failures]
+      properties:
+        id: {type: string}
+        url: {type: string}
+        description: {type: string}
+        events:
+          type: array
+          description: Empty means every event type.
+          items: {type: string}
+        enabled: {type: boolean, description: False after the owner turned it off or the last retry of an event failed.}
+        secret: {type: string, description: "whsec_ and base64. Only on create and rotate-secret."}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        last_attempt_at: {type: [string, "null"], format: date-time}
+        last_success_at: {type: [string, "null"], format: date-time}
+        last_status: {type: integer, description: HTTP status of the last attempt; 0 when none arrived.}
+        last_error: {type: string}
+        failures: {type: integer, description: Failed attempts since the last success.}
     Volume:
       type: object
       required: [id, name, backend, created_at]

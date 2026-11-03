@@ -84,6 +84,15 @@ builds:
   timeout_seconds: 1200
   retain_unused_seconds: 604800
 
+# Lifecycle event webhooks (POST /v1/webhooks). Deliveries leave from the
+# sbx server, so private and loopback targets are refused unless
+# allow_private is true or network.private_allow lists the range. Cloud
+# metadata addresses are always refused. max_per_key 0 turns webhooks off.
+webhooks:
+  allow_private: false
+  max_per_key: 10
+  timeout_seconds: 10
+
 # Credentials for private image registries, used for sandbox images and
 # template bases for every key. A key's own credential for the same server
 # (POST /v1/keys "registries") takes precedence. Use password, password_env,

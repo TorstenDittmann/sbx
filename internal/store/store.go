@@ -442,6 +442,24 @@ CREATE TABLE IF NOT EXISTS private_images (
     base TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS webhooks (
+    id TEXT PRIMARY KEY,
+    owner_key_id TEXT NOT NULL,
+    url TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    events_json TEXT NOT NULL DEFAULT '[]',
+    secret TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    cursor INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_attempt_at INTEGER,
+    last_success_at INTEGER,
+    last_status INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL DEFAULT '',
+    failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_webhooks_owner ON webhooks(owner_key_id);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_status ON sandboxes(status);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_expires ON sandboxes(expires_at);
 `

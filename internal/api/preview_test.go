@@ -222,7 +222,7 @@ func newConfiguredHarness(t *testing.T, cfg config.Config) *harness {
 	mgr := core.New(cfg, st, map[string]driver.Driver{"docker": fd}, log)
 	srv := httptest.NewServer(api.New(mgr, log, nil).Handler())
 	t.Cleanup(srv.Close)
-	return &harness{srv: srv, key: plain, docker: fd, store: st}
+	return &harness{srv: srv, key: plain, docker: fd, store: st, mgr: mgr}
 }
 
 func TestPreviewTrustedForwardedHost(t *testing.T) {

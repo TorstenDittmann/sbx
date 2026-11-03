@@ -13,9 +13,12 @@ const (
 	StatusCreating SandboxStatus = "creating"
 	StatusRunning  SandboxStatus = "running"
 	StatusPaused   SandboxStatus = "paused"
-	StatusStopped  SandboxStatus = "stopped"
-	StatusError    SandboxStatus = "error"
-	StatusWarm     SandboxStatus = "warm"
+	// StatusHibernated is an idle sandbox saved to a snapshot with no
+	// container. The next request, or Resume, starts it again.
+	StatusHibernated SandboxStatus = "hibernated"
+	StatusStopped    SandboxStatus = "stopped"
+	StatusError      SandboxStatus = "error"
+	StatusWarm       SandboxStatus = "warm"
 )
 
 // Backend names accepted by create, build, and volume calls.
@@ -388,8 +391,12 @@ const (
 	EventExpired EventType = "sandbox.expired"
 	EventPaused  EventType = "sandbox.paused"
 	EventResumed EventType = "sandbox.resumed"
-	EventOOM     EventType = "sandbox.oom"
-	EventLost    EventType = "sandbox.lost"
+	// EventHibernated is an idle sandbox saved to a snapshot.
+	EventHibernated EventType = "sandbox.hibernated"
+	// EventNetworkUpdated is a change to a running sandbox's egress rules.
+	EventNetworkUpdated EventType = "sandbox.network_updated"
+	EventOOM            EventType = "sandbox.oom"
+	EventLost           EventType = "sandbox.lost"
 )
 
 // Event is a sandbox lifecycle event. ID only grows; pass it as

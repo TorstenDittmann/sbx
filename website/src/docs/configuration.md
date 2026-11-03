@@ -131,6 +131,14 @@ List values in environment variables are comma-separated.
 | `builds.timeout_seconds` | `SBX_BUILD_TIMEOUT_SECONDS` | `1200` | Longest a single image build may take. |
 | `builds.retain_unused_seconds` | `SBX_BUILD_RETAIN_UNUSED_SECONDS` | `604800` | How long a built image no template or live sandbox needs is kept after its last use. `0` keeps images forever; otherwise at least 3600. See [cleanup](/docs/templates/#cleanup). |
 
+## Webhooks
+
+| Key | Env | Default | Meaning |
+|---|---|---|---|
+| `webhooks.allow_private` | `SBX_WEBHOOKS_ALLOW_PRIVATE` | `false` | Let [webhooks](/docs/webhooks) reach private and loopback addresses. `network.private_allow` also reopens the ranges it lists. Metadata addresses stay blocked. |
+| `webhooks.max_per_key` | `SBX_WEBHOOKS_MAX_PER_KEY` | `10` | Webhooks one API key may register. `0` turns webhooks off. |
+| `webhooks.timeout_seconds` | `SBX_WEBHOOK_TIMEOUT_SECONDS` | `10` | Longest one delivery attempt may take, 1 to 60. |
+
 ## Registries
 
 `registries` lists credentials for private image registries. sbx sends them when it pulls a sandbox image or a template base, for every key. A key can carry [its own credentials](/docs/api-keys/#private-registries), which take precedence for the same server.

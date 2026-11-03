@@ -192,6 +192,39 @@ Events are stored in SQLite with ids that only grow, across restarts too. Send t
 
 Docker backends report OOM kills and container exits as they happen. For every backend, the reaper also compares running sandboxes with the backend every `reaper_interval_seconds`, so a missed event is caught on the next sweep.
 
+To have sbx push these events to your own URL instead, register a [webhook](/docs/webhooks).
+
+## Webhooks
+
+A webhook receives the same events as `GET /v1/events` for its key, as signed `POST` requests. See [Webhooks](/docs/webhooks) for signatures, retries, and verification.
+
+| Route | Body | Returns |
+|---|---|---|
+| `POST /v1/webhooks` | `{"url", "description"?, "events"?}` | `201` with a [Webhook](#the-webhook-object), including `secret`. |
+| `GET /v1/webhooks` | | `{"webhooks": [...]}`. A sandbox key sees its own; an admin sees all. |
+| `GET /v1/webhooks/{id}` | | The webhook and its delivery status. |
+| `PATCH /v1/webhooks/{id}` | `{"url"?, "description"?, "events"?, "enabled"?}` | The updated webhook. |
+| `DELETE /v1/webhooks/{id}` | | `204`. |
+| `POST /v1/webhooks/{id}/rotate-secret` | | The webhook with a new `secret`. |
+| `POST /v1/webhooks/{id}/test` | | `{"ok", "status_code", "error", "duration_ms"}` after sending a `webhook.test` event. |
+
+`events` lists the [event types](#lifecycle-events) to send; empty or omitted sends all of them. Unknown types, non-http(s) URLs, and URLs that name a private or metadata IP fail with `400`. More than `webhooks.max_per_key` webhooks fails with `429`.
+
+### The webhook object
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `wh_…` |
+| `url`, `description` | string | |
+| `events` | string[] | Empty means every type. |
+| `enabled` | boolean | `false` after you turn it off, or after an event failed every retry. |
+| `secret` | string | `whsec_…`. Only on create and rotate. |
+| `created_at`, `updated_at` | time | |
+| `last_attempt_at`, `last_success_at` | time or null | |
+| `last_status` | integer | HTTP status of the last attempt; `0` when no response arrived. |
+| `last_error` | string | Why the last attempt failed, or why the webhook was disabled. |
+| `failures` | integer | Failed attempts since the last success. |
+
 ## Exec
 
 ### Run a command

@@ -83,6 +83,14 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /v1/events", s.auth("read", s.streamEvents))
 
+	mux.HandleFunc("POST /v1/webhooks", s.auth("sandbox", s.createWebhook))
+	mux.HandleFunc("GET /v1/webhooks", s.auth("sandbox", s.listWebhooks))
+	mux.HandleFunc("GET /v1/webhooks/{id}", s.auth("sandbox", s.getWebhook))
+	mux.HandleFunc("PATCH /v1/webhooks/{id}", s.auth("sandbox", s.updateWebhook))
+	mux.HandleFunc("DELETE /v1/webhooks/{id}", s.auth("sandbox", s.deleteWebhook))
+	mux.HandleFunc("POST /v1/webhooks/{id}/rotate-secret", s.auth("sandbox", s.rotateWebhookSecret))
+	mux.HandleFunc("POST /v1/webhooks/{id}/test", s.auth("sandbox", s.testWebhook))
+
 	mux.HandleFunc("POST /v1/sandboxes", s.auth("sandbox", s.createSandbox))
 	mux.HandleFunc("GET /v1/sandboxes", s.auth("read", s.listSandboxes))
 	mux.HandleFunc("GET /v1/sandboxes/{id}", s.auth("read", s.getSandbox))

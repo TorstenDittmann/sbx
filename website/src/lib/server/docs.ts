@@ -25,6 +25,7 @@ export const sections: DocSection[] = [
 			{ slug: "templates", title: "Templates and builds", description: "Built-in templates, warm pools, and cached build steps." },
 			{ slug: "volumes", title: "Volumes", description: "Named volumes that outlive a sandbox." },
 			{ slug: "previews", title: "Previews", description: "Publish a port from inside a sandbox, privately or publicly." },
+			{ slug: "webhooks", title: "Webhooks", description: "Signed lifecycle events sent to your own URL." },
 			{ slug: "agent", title: "sbx-agent", description: "Processes, terminals, file watches, and archives." },
 		],
 	},

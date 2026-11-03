@@ -15,14 +15,6 @@ import (
 // eventPing keeps proxies from closing a quiet event stream.
 const eventPing = 15 * time.Second
 
-type eventResponse struct {
-	ID        int64          `json:"id"`
-	Type      string         `json:"type"`
-	SandboxID string         `json:"sandbox_id"`
-	Time      time.Time      `json:"time"`
-	Data      map[string]any `json:"data"`
-}
-
 // streamEvents is GET /v1/events: sandbox lifecycle events as server-sent
 // events. Each event's SSE id is its sequence number, so a reconnect with
 // Last-Event-ID (or ?after=) resumes without gaps. Without either, the
@@ -90,6 +82,6 @@ func (s *Server) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func eventJSON(ev store.Event) eventResponse {
-	return eventResponse{ID: ev.Seq, Type: ev.Type, SandboxID: ev.SandboxID, Time: ev.Time, Data: ev.Data}
+func eventJSON(ev store.Event) core.EventPayload {
+	return core.NewEventPayload(ev)
 }
