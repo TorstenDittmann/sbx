@@ -165,7 +165,7 @@ jobs:
           bun test --cwd sdk/typescript test
 
   python-sdk:
-    # setup-python has no 3.9 build for ubuntu 26.04 yet.
+    # ubuntu-latest (26.04) has no Python 3.9 build for setup-python.
     runs-on: ubuntu-24.04
     strategy:
       matrix:
