@@ -25,7 +25,7 @@ func (s *Store) CountPooling(ctx context.Context) (int, error) {
 
 // ClaimWarm assigns the oldest warm sandbox for a template to owner.
 // ErrNotFound means the pool was empty.
-func (s *Store) ClaimWarm(ctx context.Context, template, backend, owner string, labels map[string]string, ttl, idle int, now time.Time) (Sandbox, error) {
+func (s *Store) ClaimWarm(ctx context.Context, template, backend, owner string, labels map[string]string, ttl, idle int, action string, now time.Time) (Sandbox, error) {
 	expires := now.Add(time.Duration(ttl) * time.Second)
 	row := s.db.QueryRowContext(ctx, `
 		UPDATE sandboxes SET
@@ -33,6 +33,7 @@ func (s *Store) ClaimWarm(ctx context.Context, template, backend, owner string, 
 			status = 'running',
 			expires_at = ?,
 			idle_timeout_seconds = ?,
+			idle_action = ?,
 			last_activity_at = ?,
 			created_at = ?,
 			labels_json = ?,
@@ -46,8 +47,9 @@ func (s *Store) ClaimWarm(ctx context.Context, template, backend, owner string, 
 		RETURNING id, template, image, backend, status, cpu, memory_mb, disk_mb, pids,
 		          env_json, network, allow_json, deny_json, egress_kbps, max_conns,
 		          labels_json, owner_key_id, created_at, expires_at,
-		          idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json`,
-		owner, millis(expires), idle, millis(now), millis(now), mustJSON(labels), template, backend)
+		          idle_timeout_seconds, last_activity_at, finished_at, container_id, error, mounts_json, secrets_json,
+		          idle_action, snapshot_image`,
+		owner, millis(expires), idle, idleAction(action), millis(now), millis(now), mustJSON(labels), template, backend)
 	return scanSandbox(row)
 }
 

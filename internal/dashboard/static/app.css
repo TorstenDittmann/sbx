@@ -81,7 +81,7 @@ td.actions button + button { margin-left: 6px; }
 .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--code); white-space: nowrap; }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
 .pill.running::before, .pill.active::before, .pill.exited-0::before { background: var(--ok); }
-.pill.paused::before, .pill.creating::before, .pill.warm::before { background: var(--warn); }
+.pill.paused::before, .pill.hibernated::before, .pill.creating::before, .pill.warm::before { background: var(--warn); }
 .pill.error::before, .pill.revoked::before, .pill.expired::before, .pill.exited::before { background: var(--danger); }
 
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--panel); }

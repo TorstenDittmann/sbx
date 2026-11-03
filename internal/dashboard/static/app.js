@@ -207,7 +207,7 @@
 
 	function sandboxes() {
 		const q = h("input", { type: "search", placeholder: "Search id, template, image, label…", class: "grow" });
-		const statuses = ["", "running", "paused", "creating", "stopped", "error"];
+		const statuses = ["", "running", "paused", "hibernated", "creating", "stopped", "error"];
 		if (state.admin) statuses.push("warm");
 		const status = h("select", {}, statuses.map((s) => h("option", { value: s }, s || "all statuses")));
 		const body = h("tbody");
@@ -232,7 +232,7 @@
 
 		function row(sb) {
 			const open = () => (location.hash = "#/sandboxes/" + encodeURIComponent(sb.id));
-			const live = sb.status === "running" || sb.status === "paused";
+			const live = sb.status === "running" || sb.status === "paused" || sb.status === "hibernated";
 			return h(
 				"tr",
 				{ class: "click", onclick: open },
@@ -337,7 +337,7 @@
 		let sb = null;
 
 		function header() {
-			const live = sb.status === "running" || sb.status === "paused";
+			const live = sb.status === "running" || sb.status === "paused" || sb.status === "hibernated";
 			head.replaceChildren(...h("div", {},
 				h("a", { href: "#/sandboxes" }, "Sandboxes"),
 				h("span", { class: "muted" }, "/"),
@@ -346,7 +346,7 @@
 				h("span", { class: "muted small" }, live ? ["expires ", ago(sb.expires_at)] : ""),
 				h("span", { class: "grow" }),
 				sb.status === "running" && h("button", { onclick: act(async () => { sb = await api("POST", base + "/pause"); header(); }, "Paused") }, "Pause"),
-				sb.status === "paused" && h("button", { onclick: act(async () => { sb = await api("POST", base + "/resume"); header(); }, "Resumed") }, "Resume"),
+				(sb.status === "paused" || sb.status === "hibernated") && h("button", { onclick: act(async () => { sb = await api("POST", base + "/resume"); header(); }, "Resumed") }, "Resume"),
 				live && h("button", { onclick: act(async () => {
 					const min = prompt("New TTL in minutes, from now:", "30");
 					if (!min) return false;

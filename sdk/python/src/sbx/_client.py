@@ -28,6 +28,7 @@ from ._duration import Duration, parse_duration
 from ._terminal import TerminalSession, connect_websocket
 from ._types import (
     Backend,
+    IdleAction,
     BackendInfo,
     BuildInfo,
     BuildStep,
@@ -139,6 +140,7 @@ def create_body(
     pids: Optional[int] = None,
     ttl: Optional[Duration] = None,
     idle_timeout: Optional[Duration] = None,
+    idle_action: Optional[IdleAction] = None,
     env: Optional[Mapping[str, str]] = None,
     network: Optional[NetworkArg] = None,
     backend: Optional[Backend] = None,
@@ -176,6 +178,8 @@ def create_body(
         body["ttl_seconds"] = parse_duration(ttl)
     if idle_timeout is not None:
         body["idle_timeout_seconds"] = parse_duration(idle_timeout)
+    if idle_action:
+        body["idle_action"] = idle_action
     if env:
         body["env"] = dict(env)
     if network is not None:

@@ -43,12 +43,12 @@ func (s *Store) DeleteSandboxPreviews(ctx context.Context, sandboxID string) err
 	return err
 }
 
-// LivePreviews deletes previews whose sandbox is gone or no longer running or
-// paused, then returns the rest.
+// LivePreviews deletes previews whose sandbox is gone or no longer running,
+// paused, or hibernated, then returns the rest.
 func (s *Store) LivePreviews(ctx context.Context) ([]Preview, error) {
 	if _, err := s.db.ExecContext(ctx, `
 		DELETE FROM previews WHERE sandbox_id NOT IN (
-			SELECT id FROM sandboxes WHERE status IN ('running', 'paused'))`); err != nil {
+			SELECT id FROM sandboxes WHERE status IN ('running', 'paused', 'hibernated'))`); err != nil {
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `

@@ -350,7 +350,8 @@ paths:
         `id: <n>`, `event: <type>`, and `data:` holding an `Event` object.
         Types are `sandbox.created`, `sandbox.failed`, `sandbox.deleted`,
         `sandbox.expired` (reason `ttl` or `idle`), `sandbox.paused`,
-        `sandbox.resumed`, `sandbox.oom` (a process was OOM-killed; the
+        `sandbox.resumed`, `sandbox.hibernated` (an idle sandbox saved to a
+        snapshot), `sandbox.oom` (a process was OOM-killed; the
         sandbox usually keeps running), and `sandbox.lost` (the sandbox
         stopped without sbx stopping it; reason `exited` or `missing`).
 
@@ -1357,6 +1358,16 @@ components:
         pids: {type: integer}
         ttl_seconds: {type: integer}
         idle_timeout_seconds: {type: integer}
+        idle_action:
+          type: string
+          enum: [stop, pause, hibernate]
+          description: >
+            What the reaper does after idle_timeout_seconds without activity.
+            stop (the default) stops the sandbox. pause freezes it. hibernate
+            snapshots it, /workspace included, and removes the container. A
+            paused or hibernated sandbox wakes on its next exec, file,
+            process, terminal, or preview request. hibernate needs a backend
+            with snapshots. Needs idle_timeout_seconds.
         env: {type: object, additionalProperties: {type: string}}
         network: {$ref: "#/components/schemas/Network"}
         backend: {type: string, enum: [docker, gvisor, kata, firecracker]}
@@ -1461,7 +1472,7 @@ components:
       required: [id, status, backend, image, expires_at, node]
       properties:
         id: {type: string}
-        status: {type: string, enum: [creating, running, paused, stopped, error, warm]}
+        status: {type: string, enum: [creating, running, paused, hibernated, stopped, error, warm]}
         backend: {type: string}
         template: {type: string}
         image: {type: string}
@@ -1489,6 +1500,7 @@ components:
           items: {type: string}
           description: Names of secrets set on this sandbox. Values are not returned.
         idle_timeout_seconds: {type: integer}
+        idle_action: {type: string, enum: [stop, pause, hibernate]}
         expires_at: {type: string, format: date-time}
         created_at: {type: string, format: date-time}
         node: {type: string}

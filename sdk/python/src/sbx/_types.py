@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 
-SandboxStatus = Literal["creating", "running", "paused", "stopped", "error", "warm"]
+SandboxStatus = Literal["creating", "running", "paused", "hibernated", "stopped", "error", "warm"]
+# What the server does after idle_timeout without activity. A paused or
+# hibernated sandbox wakes on its next exec, file call, or preview request.
+IdleAction = Literal["stop", "pause", "hibernate"]
 NetworkMode = Literal["none", "full", "allow"]
 Backend = Literal["docker", "gvisor", "kata", "firecracker"]
 Signal = Literal["TERM", "KILL", "INT", "HUP", "QUIT"]
@@ -99,6 +102,7 @@ class SandboxInfo:
     labels: Optional[Dict[str, str]] = None
     secret_keys: Optional[List[str]] = None
     idle_timeout_seconds: Optional[int] = None
+    idle_action: Optional[IdleAction] = None
     mounts: Optional[List[VolumeMount]] = None
 
     @classmethod
@@ -123,6 +127,7 @@ class SandboxInfo:
             labels=raw.get("labels"),
             secret_keys=raw.get("secret_keys"),
             idle_timeout_seconds=raw.get("idle_timeout_seconds"),
+            idle_action=raw.get("idle_action"),
             expires_at=raw["expires_at"],
             created_at=raw["created_at"],
             node=raw["node"],

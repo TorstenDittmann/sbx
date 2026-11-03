@@ -101,7 +101,7 @@ sbx shell $id
 sbx rm $id
 ```
 
-`create` prints the new id, or the whole sandbox with `--json`. The positional argument is the template, the same as `--template`. Other flags are `--image`, `--backend`, `--cpu`, `--memory` and `--disk` (MiB), `--idle-timeout`, and the repeatable `--env`, `--label`, `--secret` (all `KEY=VALUE`), and `--volume VOLUME_ID:/path`. Durations are seconds or values such as `5m`.
+`create` prints the new id, or the whole sandbox with `--json`. The positional argument is the template, the same as `--template`. Other flags are `--image`, `--backend`, `--cpu`, `--memory` and `--disk` (MiB), `--idle-timeout`, `--idle-action` (`stop`, `pause`, or `hibernate`), and the repeatable `--env`, `--label`, `--secret` (all `KEY=VALUE`), and `--volume VOLUME_ID:/path`. Durations are seconds or values such as `5m`.
 
 `ls` prints a table of id, status, template (or image), backend, network, age, expiry, and labels. It takes the same filters as `GET /v1/sandboxes`; `--quiet` prints only ids, so `sbx rm $(sbx ls --quiet --label team:web)` removes a group. `get` prints one sandbox as JSON.
 

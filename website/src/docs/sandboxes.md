@@ -32,7 +32,8 @@ Pass a `template` or an `image`. Everything else is optional: fields you leave o
 | `disk_mb` | Size of the writable `/workspace`. Default 1024, max 10240. |
 | `pids` | Process limit. Default 256, max 4096. |
 | `ttl_seconds` | Lifetime. Default 300, max 86400. |
-| `idle_timeout_seconds` | Stop after this long without API activity. 0 (the default) turns it off. |
+| `idle_timeout_seconds` | Act after this long without API activity. 0 (the default) turns it off. |
+| `idle_action` | What happens once idle: `stop` (the default), `pause`, or `hibernate`. See [Auto-pause and hibernation](#auto-pause-and-hibernation). |
 | `env` | Environment variables, returned by get and list. |
 | `secrets` | Environment variables that are never returned. See [Secrets](#secrets). |
 | `labels` | Key-value pairs for filtering. |
@@ -50,7 +51,8 @@ A create returns `201` with the sandbox once it is running. Sandbox ids look lik
 |---|---|
 | `creating` | The server is pulling the image, building steps, or starting the container. |
 | `running` | Ready for exec, files, terminals, and previews. |
-| `paused` | Frozen with `POST /v1/sandboxes/{id}/pause`. Resume with `POST …/resume`. |
+| `paused` | Frozen with `POST /v1/sandboxes/{id}/pause`, or by the reaper with `idle_action: pause`. Resume with `POST …/resume`. |
+| `hibernated` | Saved to a snapshot by the reaper with `idle_action: hibernate`. It has no container until it is woken. |
 | `stopped` | Deleted by the API or the reaper, or lost because its container exited or disappeared. The row is kept for a day (`retain_stopped_seconds`), then pruned. |
 | `error` | Creation failed. |
 | `warm` | Started ahead of time for a template's warm pool. Hidden from normal lists. |
@@ -70,7 +72,32 @@ curl -s $SBX_URL/v1/sandboxes/$ID/timeout \
 
 `ttl_seconds` here is the new remaining lifetime from now, up to `max_ttl_seconds`.
 
-With `idle_timeout_seconds`, the reaper also stops a sandbox that has had no activity for that long. Exec, file operations, and other calls that use the sandbox count as activity.
+With `idle_timeout_seconds`, the reaper also acts on a sandbox that has had no activity for that long. Exec, file operations, previews, and other calls that use the sandbox count as activity. By default it stops the sandbox.
+
+### Auto-pause and hibernation
+
+`idle_action` keeps an idle sandbox around instead of stopping it, and brings it back when it is needed:
+
+```bash
+curl -s $SBX_URL/v1/sandboxes \
+  -H "Authorization: Bearer $SBX_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"template": "python", "ttl_seconds": 86400, "idle_timeout_seconds": 300, "idle_action": "hibernate"}'
+```
+
+| `idle_action` | Once idle | What survives | Frees |
+|---|---|---|---|
+| `stop` | Stops the sandbox (the default). | Nothing. | Everything. |
+| `pause` | Freezes the container in place. | Everything, running processes included. | CPU. Memory stays allocated. |
+| `hibernate` | Takes a [snapshot](/docs/templates/#snapshots), `/workspace` included, then removes the container. | The filesystem and `/workspace`. Processes and memory do not. | CPU, memory, and the node's sandbox slot. |
+
+A paused or hibernated sandbox wakes on its own: the next exec, file call, process, terminal, or preview request resumes it first and then runs as usual. `POST /v1/sandboxes/{id}/resume` wakes it too. A hibernated sandbox comes back in a new container from its snapshot with the same resources, env, secrets, network policy, labels, and volumes, so the first request after hibernation waits for a container start. A volume mounted at `/workspace` is reattached rather than snapshotted.
+
+The TTL still applies. `expires_at` counts while the sandbox is paused or hibernated, and the reaper stops it then and removes its snapshot. `POST …/timeout` extends a hibernated sandbox like any other. A hibernated sandbox counts toward its key's `max_sandboxes_per_key` but not the node's `max_sandboxes`, and waking one fails with `429` while the node is full.
+
+`pause` needs a backend that can pause (all of them can). `hibernate` needs snapshots, so it works on `docker` only; other backends reject it with `400 unsupported`. Hibernation does not need build rights: the snapshot belongs to the sandbox, is replaced at the next hibernation, and is removed when the sandbox stops. Like any snapshot it needs `/bin/sh`, `tar`, and `cp` in the image. If a hibernation snapshot fails, the sandbox is paused instead. A sandbox you paused yourself keeps refusing exec with `409` unless its `idle_action` is `pause` or `hibernate`.
+
+Events: an idle pause sends `sandbox.paused` with `reason: idle`, a hibernation sends `sandbox.hibernated`, and a wake sends `sandbox.resumed` with `auto: true` when a request woke it and `from: snapshot` when it came back from a hibernation.
 
 ### Events
 
