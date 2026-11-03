@@ -161,13 +161,19 @@ func TestAgentAPI(t *testing.T) {
 	if err := conn.Write(ws.OpBinary, []byte("echo\n")); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	cols, rows := h.docker.ProcSize(created.ID, term.ID)
-	if cols != 120 || rows != 50 {
-		t.Fatalf("size %d %d", cols, rows)
-	}
-	if !strings.Contains(string(h.docker.ProcStdin(created.ID, term.ID)), "echo") {
-		t.Fatalf("pty stdin %q", h.docker.ProcStdin(created.ID, term.ID))
+	// The socket hands frames to the terminal asynchronously; wait for both
+	// instead of sleeping a fixed time, which is too short under -race.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cols, rows := h.docker.ProcSize(created.ID, term.ID)
+		stdin := string(h.docker.ProcStdin(created.ID, term.ID))
+		if cols == 120 && rows == 50 && strings.Contains(stdin, "echo") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("size %d %d, pty stdin %q", cols, rows, stdin)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	conn.Close()
 
