@@ -9,6 +9,8 @@ The workflow:
 3. Publishes `ghcr.io/torstendittmann/sbx` for `linux/amd64` and `linux/arm64`, tagged with the version, the git tag, and `latest` on a final release.
 4. Sets `sdk/typescript` to the same version and runs `npm publish --provenance` for `@sbx.torsten.work/sbx` through npm trusted publishing, so no npm token is stored. Prereleases use the dist-tag `next` and do not move `latest`. If that version is already on npm, the job skips the publish and passes.
 
+The Go SDK in `sdk/go` is a separate module and is not part of this workflow. Release it with a tag prefixed by its directory, such as `sdk/go/v0.1.0`; the Go module proxy serves it from that tag, so nothing is published.
+
 `sbx` archives are linux and darwin, amd64 and arm64. `sbx-agent` archives are linux only. `sbx version` prints the version, commit, and build time from `-ldflags`.
 
 Pull requests run the same GoReleaser config as a snapshot. The snapshot does not create a release, push an image, or publish to npm. If `cmd/sbx-agent` is missing, the snapshot sets `SBX_SKIP_AGENT=true` and builds `sbx` only. A tag never takes that shortcut.
