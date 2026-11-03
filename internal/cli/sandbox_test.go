@@ -367,3 +367,69 @@ func TestCLIHelpers(t *testing.T) {
 		t.Fatalf("%+v %v", c, err)
 	}
 }
+
+func TestWatchPrintsChanges(t *testing.T) {
+	fd, out, errOut := liveServer(t)
+	if err := Run([]string{"create", "base", "--json"}); err != nil {
+		t.Fatal(err)
+	}
+	var sb sandbox
+	if err := json.Unmarshal([]byte(out.String()), &sb); err != nil {
+		t.Fatal(err)
+	}
+	out.buf.Reset()
+	done := make(chan error, 1)
+	go func() { done <- Run([]string{"watch", "-r", "-n", "2", "--json", sb.ID, "app"}) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(errOut.String(), "watching /workspace/app") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no ready line: %q", errOut.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The fake driver registers its watcher just after the ready event.
+	time.Sleep(50 * time.Millisecond)
+	ctx := context.Background()
+	for _, p := range []string{"/workspace/app/a.txt", "/workspace/app/sub/b.txt"} {
+		if err := fd.WriteFile(ctx, sb.ID, p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not exit after two changes")
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], `"path":"/workspace/app/a.txt"`) || !strings.Contains(lines[1], "sub/b.txt") {
+		t.Fatalf("output %q", out.String())
+	}
+
+	if err := Run([]string{"watch"}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Fatalf("usage: %v", err)
+	}
+	if err := Run([]string{"watch", "-n", "1", "sbx_missing"}); err == nil {
+		t.Fatal("expected an error for a missing sandbox")
+	}
+}
+
+func TestReadWatchStreamPlainAndErrors(t *testing.T) {
+	_, out, _ := liveServer(t)
+	stream := "event: ready\ndata: {\"path\":\"/workspace\"}\n\n: ping\n\nevent: change\ndata: {\"type\":\"create\",\"path\":\"/workspace/x\"}\n\n"
+	if err := readWatchStream(strings.NewReader(stream), 1, false); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "create\t/workspace/x\n" {
+		t.Fatalf("%q", out.String())
+	}
+	err := readWatchStream(strings.NewReader("event: error\ndata: {\"code\":\"unsupported\",\"message\":\"no agent\"}\n\n"), 0, false)
+	if err == nil || err.Error() != "no agent" {
+		t.Fatalf("%v", err)
+	}
+	if err := readWatchStream(strings.NewReader(""), 0, false); err == nil {
+		t.Fatal("expected an ended stream error")
+	}
+}

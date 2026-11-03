@@ -38,6 +38,8 @@ Errors have one shape:
 
 Streaming routes use server-sent events. [Lifecycle events](#lifecycle-events) have their own format. Exec and process streams send `stdout` and `stderr` events with `{"data": "…"}`, then `exit` with `{"exit_code", "duration_ms", "truncated"}`, or `error` with `{"code", "message"}`.
 
+A stream that has been quiet for 15 seconds sends a `: ping` comment, so proxies and load balancers keep it open while a command runs without output. An exec stream sends its headers with the first output or the first ping, so an error before then, such as a missing sandbox, is still a plain JSON error with its status code. Breaking out of an SDK stream closes the connection, which stops a watch.
+
 ## Service
 
 These routes need no key.
@@ -139,6 +141,7 @@ See [Network](/docs/network/) for how these combine.
 | `DELETE /v1/sandboxes/{id}` | | The stopped Sandbox |
 | `POST /v1/sandboxes/{id}/timeout` | `{"ttl_seconds": 900}` | Sandbox with the new `expires_at` |
 | `PUT /v1/sandboxes/{id}/secrets` | `{"secrets": {"NAME": "value"}}` | Sandbox. Replaces the whole map. |
+| `PATCH /v1/sandboxes/{id}/network` | `{"allow": [...], "deny": [...], "egress_kbps": 0, "max_connections": 0}`, each optional, plus `mode` (`full` or `allow`) | Sandbox with the new egress rules. See [Network](/docs/network/#change-rules-on-a-running-sandbox). |
 | `POST /v1/sandboxes/{id}/pause` | | Paused Sandbox |
 | `POST /v1/sandboxes/{id}/resume` | | Running Sandbox |
 | `POST /v1/sandboxes/{id}/snapshot` | `{"template": "name", "description": "..."}`, both optional | Snapshot: `id`, `image`, `sandbox_id`, `base`, `workspace`, `template` (or `null`), `duration_ms`. See [Snapshots](/docs/templates/#snapshots). |
@@ -179,6 +182,7 @@ data: {"id":42,"type":"sandbox.lost","sandbox_id":"sbx_…","time":"…","data":
 | `sandbox.expired` | The reaper stopped it. | `ttl`, `idle` |
 | `sandbox.paused`, `sandbox.resumed` | Pause and resume. An idle pause has reason `idle`. A resume has `data.auto` when a request woke the sandbox and `data.from` `snapshot` after hibernation. | `idle` |
 | `sandbox.hibernated` | The reaper saved an idle sandbox to a snapshot and removed its container. | `idle` |
+| `sandbox.network_updated` | `PATCH /v1/sandboxes/{id}/network` changed the egress rules. `data` holds the new `network`, `allow`, `deny`, `egress_kbps`, and `max_connections`. | |
 | `sandbox.oom` | The kernel OOM-killed a process in the sandbox. The sandbox usually keeps running. Docker backends only. | |
 | `sandbox.lost` | It stopped without sbx stopping it. `exit_code` and `oom_killed` are set when the container is still there to inspect. | `exited`, `missing` |
 

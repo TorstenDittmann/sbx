@@ -1083,3 +1083,23 @@ func (s *Store) HibernateSandbox(ctx context.Context, id, image string, activity
 	}
 	return nil
 }
+
+// UpdateNetwork replaces the egress policy of a sandbox that is still running
+// or paused. A sandbox that stopped meanwhile returns ErrNotFound.
+func (s *Store) UpdateNetwork(ctx context.Context, sb Sandbox) error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE sandboxes SET network = ?, allow_json = ?, deny_json = ?, egress_kbps = ?, max_conns = ?
+		WHERE id = ? AND status IN ('running', 'paused')`,
+		sb.Network, mustJSON(nonNilSlice(sb.Allow)), mustJSON(nonNilSlice(sb.Deny)), sb.EgressKbps, sb.MaxConns, sb.ID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

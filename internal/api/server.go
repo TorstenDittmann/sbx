@@ -87,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.auth("sandbox", s.deleteSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/timeout", s.auth("sandbox", s.timeoutSandbox))
 	mux.HandleFunc("PUT /v1/sandboxes/{id}/secrets", s.auth("sandbox", s.setSecrets))
+	mux.HandleFunc("PATCH /v1/sandboxes/{id}/network", s.auth("sandbox", s.updateNetwork))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/pause", s.auth("sandbox", s.pauseSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/resume", s.auth("sandbox", s.resumeSandbox))
 	mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.auth("sandbox", s.snapshotSandbox))
@@ -830,6 +831,30 @@ func (s *Server) setSecrets(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sandboxJSON(sb))
 }
 
+// updateNetwork changes the egress policy of a running sandbox. Omitted
+// fields keep their current value; see core.NetworkUpdate.
+func (s *Server) updateNetwork(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode       string    `json:"mode"`
+		Allow      *[]string `json:"allow"`
+		Deny       *[]string `json:"deny"`
+		EgressKbps *int      `json:"egress_kbps"`
+		MaxConns   *int      `json:"max_connections"`
+	}
+	if err := decodeJSON(r, 1<<20, &body); err != nil {
+		writeDecodeErr(w, err)
+		return
+	}
+	sb, err := s.mgr.UpdateNetwork(r.Context(), actor(r), r.PathValue("id"), core.NetworkUpdate{
+		Mode: body.Mode, Allow: body.Allow, Deny: body.Deny, EgressKbps: body.EgressKbps, MaxConns: body.MaxConns,
+	})
+	if err != nil {
+		writeManager(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sandboxJSON(sb))
+}
+
 func (s *Server) pauseSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := s.mgr.Pause(r.Context(), actor(r), r.PathValue("id"))
 	if err != nil {
@@ -868,46 +893,8 @@ func (s *Server) execSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) streamExec(w http.ResponseWriter, r *http.Request, sandboxID string, in core.ExecInput) {
-	flusher, _ := w.(http.Flusher)
-	headerSent := false
-	send := func(event string, payload any) {
-		if !headerSent {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("X-Accel-Buffering", "no")
-			w.WriteHeader(http.StatusOK)
-			headerSent = true
-		}
-		b, err := json.Marshal(payload)
-		if err != nil {
-			return
-		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b)
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-	res, err := s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, func(chunk driver.ExecChunk) error {
-		send(string(chunk.Kind), map[string]string{"data": string(chunk.Data)})
-		return nil
-	})
-	if err != nil && !headerSent {
-		writeManager(w, err)
-		return
-	}
-	if err != nil {
-		var op *core.OpError
-		code, msg := "driver", err.Error()
-		if errors.As(err, &op) {
-			code, msg = op.Code, op.Msg
-		}
-		send("error", map[string]string{"code": code, "message": msg})
-		return
-	}
-	send("exit", map[string]any{
-		"exit_code":   res.ExitCode,
-		"duration_ms": res.Duration.Milliseconds(),
-		"truncated":   res.Truncated,
+	s.streamChunks(w, r, func(emit func(driver.ExecChunk) error) (driver.ExecResult, error) {
+		return s.mgr.ExecStream(r.Context(), actor(r), sandboxID, in, emit)
 	})
 }
 

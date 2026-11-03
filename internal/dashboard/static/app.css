@@ -63,7 +63,8 @@ button.danger { color: var(--danger); }
 button.ghost { border-color: transparent; color: var(--dim); }
 button.ghost:hover { color: var(--fg); }
 button:disabled { opacity: .5; cursor: default; }
-button.sm { padding: 2px 8px; font-size: 12px; }
+button.sm, .btn.sm { padding: 2px 8px; font-size: 12px; }
+a.btn:hover { text-decoration: none; border-color: var(--dim); }
 input, select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
@@ -82,6 +83,7 @@ td.actions button + button { margin-left: 6px; }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
 .pill.running::before, .pill.active::before, .pill.exited-0::before { background: var(--ok); }
 .pill.paused::before, .pill.hibernated::before, .pill.creating::before, .pill.warm::before { background: var(--warn); }
+.pill.public::before { background: var(--warn); }
 .pill.error::before, .pill.revoked::before, .pill.expired::before, .pill.exited::before { background: var(--danger); }
 
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 16px; background: var(--panel); }
@@ -113,6 +115,10 @@ dl.meta dd { margin: 0; font-family: var(--mono); font-size: 12.5px; word-break:
 pre.log { margin: 0; height: min(65vh, 620px); overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--code); font: 12.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all; }
 pre.log .stderr { color: var(--danger); }
 pre.log .sys { color: var(--dim); font-style: italic; }
+
+.scroll { overflow-x: auto; }
+table.previews td.url { word-break: break-all; min-width: 220px; }
+@media (max-width: 800px) { table.previews th:nth-child(4), table.previews td:nth-child(4) { display: none; } }
 
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; max-width: 90vw; }
 .toast.bad { background: var(--danger); color: #fff; }

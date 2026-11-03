@@ -98,6 +98,7 @@ box.pause()
 box.resume()
 box.refresh()        # re-read every field
 box.set_secrets({"TOKEN": "new"})
+box.update_network(NetworkPolicy(allow=["pypi.org"], max_connections=32))  # change egress rules live
 box.kill()           # delete
 ```
 
@@ -270,6 +271,7 @@ client.get_sandbox(id)
 client.list_sandboxes(status="running", template="python", q="demo", labels={"project": "demo"})
 client.delete_sandbox(id)
 client.set_secrets(id, {"TOKEN": "new"})
+client.update_network(id, {"mode": "full"})
 ```
 
 ### Volumes

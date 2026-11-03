@@ -83,6 +83,82 @@ func TestIntegrationBandwidthRule(t *testing.T) {
 	}
 }
 
+// TestIntegrationLiveNetPolicyUpdate re-applies a different policy to a
+// running container, as PATCH /v1/sandboxes/{id}/network does, and checks
+// that the chain is rewritten in place and the bandwidth qdisc goes away.
+func TestIntegrationLiveNetPolicyUpdate(t *testing.T) {
+	skipIntegration(t)
+	if _, err := exec.LookPath("iptables"); err != nil {
+		t.Skip("iptables is not installed")
+	}
+	if _, err := exec.LookPath("tc"); err != nil {
+		t.Skip("tc is not installed")
+	}
+	d := newNetDriver(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	sbID := id.Sandbox()
+	spec := driver.SandboxSpec{
+		ID: sbID, Image: "alpine:3.20", CPU: 0.5, MemoryMB: 64, DiskMB: 32, PIDs: 64,
+		Network: driver.NetFull,
+		Policy: driver.NetPolicy{
+			DNS: []string{"1.1.1.1"}, BlockPrivate: true, BlockMetadata: true,
+			Allow: []string{"1.1.1.1/32"}, EgressKbps: 20000, MaxConns: 20,
+		},
+	}
+	h, err := d.Create(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Delete(context.Background(), h.ID) })
+	chain, err := netpolicy.ChainName(sbID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := func() string {
+		bin, args := "iptables", []string{"-S", chain}
+		if os.Geteuid() != 0 {
+			bin, args = "sudo", append([]string{"-n", "iptables"}, args...)
+		}
+		out, err := exec.Command(bin, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("iptables %v %s", err, out)
+		}
+		return string(out)
+	}
+	before := rules()
+	if !strings.Contains(before, "-d 1.1.1.1/32 -j RETURN") || !strings.Contains(before, "connlimit-above 20") {
+		t.Fatalf("initial chain:\n%s", before)
+	}
+
+	spec.Policy.Allow = []string{"8.8.8.8/32"}
+	spec.Policy.Deny = []string{"203.0.113.0/24"}
+	spec.Policy.EgressKbps, spec.Policy.MaxConns = 0, 5
+	if err := d.ApplyNetPolicy(ctx, h.ID, spec); err != nil {
+		t.Fatal(err)
+	}
+	after := rules()
+	for _, want := range []string{"-d 8.8.8.8/32 -j RETURN", "-d 203.0.113.0/24 -j REJECT", "connlimit-above 5"} {
+		if !strings.Contains(after, want) {
+			t.Fatalf("updated chain is missing %q:\n%s", want, after)
+		}
+	}
+	if strings.Contains(after, "connlimit-above 20") {
+		t.Fatalf("old limit survived the update:\n%s", after)
+	}
+	qdisc := exec.Command("tc", "qdisc", "show")
+	if os.Geteuid() != 0 {
+		qdisc = exec.Command("sudo", "-n", "tc", "qdisc", "show")
+	}
+	out, err := qdisc.CombinedOutput()
+	if err != nil {
+		t.Fatalf("tc %v %s", err, out)
+	}
+	if strings.Contains(string(out), "rate 20Mbit") {
+		t.Fatalf("bandwidth qdisc survived dropping egress_kbps to 0:\n%s", out)
+	}
+}
+
 func runWorkload(t *testing.T, runtime string, full bool) {
 	t.Helper()
 	d := newNetDriver(t, runtime)

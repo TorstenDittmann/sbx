@@ -138,3 +138,21 @@ func TestPrivateAllowAroundMetadata(t *testing.T) {
 		t.Fatal("Blocked disagrees with the rendered rules")
 	}
 }
+
+func TestRenderSandboxClearsBandwidth(t *testing.T) {
+	base := Sandbox{Chain: "SBXABC", Bridge: "sbx0", IPv4: netip.MustParseAddr("172.30.0.8"), PID: 42}
+	out, err := RenderSandbox(base)
+	if err != nil || strings.Contains(out, "tc qdisc") {
+		t.Fatalf("no limit and no clear should not touch tc: %v\n%s", err, out)
+	}
+	base.ClearBandwidth = true
+	out, err = RenderSandbox(base)
+	if err != nil || !strings.Contains(out, "tc qdisc del dev \"$dev\" root") || strings.Contains(out, "tbf") {
+		t.Fatalf("clear: %v\n%s", err, out)
+	}
+	base.EgressKbps = 64
+	out, err = RenderSandbox(base)
+	if err != nil || strings.Contains(out, "qdisc del") || !strings.Contains(out, "rate 64kbit") {
+		t.Fatalf("a set limit replaces instead of clearing: %v\n%s", err, out)
+	}
+}

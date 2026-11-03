@@ -41,6 +41,27 @@ Three layers set the policy: the server (`network.*` in the [configuration](/doc
 
 `allow` with an empty allow list is rejected. A warm pool sandbox is only handed to a key whose effective network matches the pool's exactly.
 
+## Change rules on a running sandbox
+
+`PATCH /v1/sandboxes/{id}/network` replaces the egress rules of a running or paused sandbox without restarting it. The body is the same object as `network` on create, and every field is optional:
+
+```bash
+curl -X PATCH "$SBX_URL/v1/sandboxes/$id/network" \
+  -H "Authorization: Bearer $SBX_API_KEY" -H 'content-type: application/json' \
+  -d '{"allow": ["pypi.org", "files.pythonhosted.org"], "max_connections": 32}'
+```
+
+- An omitted field keeps its current value. `allow: []` or `deny: []` clears the sandbox's own list.
+- `mode` switches between `full` and `allow`. `mode: "full"` without `allow` drops back to the key or server allow list, so it opens egress again when neither has one. A sandbox cannot switch to or from `none` while it runs, because the network interface is attached when it is created.
+- The new policy goes through the same [inheritance](#inheritance) as a create, using the API key that owns the sandbox, even when an admin key sends the request. Server and key deny entries stay, limits cannot rise above the server or key limit, and a key's `max_mode` still applies.
+- If the rules cannot be installed, for example because a hostname does not resolve, the old rules stay and the request fails.
+- Connections that are already open keep going. The new rules apply to new connections.
+- Each change emits a `sandbox.network_updated` [event](/docs/api/#lifecycle-events).
+
+Docker, gVisor, and Kata support live changes. Firecracker returns `400 unsupported`, so create a new sandbox there.
+
+From the CLI, `sbx network ID` prints the rules and `sbx network ID --allow pypi.org --deny 203.0.113.0/24` changes them. The SDKs have `box.updateNetwork(...)` and `box.update_network(...)`.
+
 ## What stays blocked
 
 With the defaults, traffic from the bridge is rejected to:

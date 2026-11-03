@@ -29,7 +29,7 @@ npm install @sbx.torsten.work/sbx
 bun add @sbx.torsten.work/sbx
 ```
 
-`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
+`sbx` on npm is a different project. This client is [`@sbx.torsten.work/sbx`](sdk/typescript/README.md): ESM, with types, for Node and Bun. The Python client is [`sbx-sdk`](sdk/python/README.md) (`pip install sbx-sdk`, imported as `sbx`), with no runtime dependencies, for Python 3.9+. The Go client is [`github.com/TorstenDittmann/sbx/sdk/go`](sdk/go/README.md) (package `sbx`), standard library only, for Go 1.23+. More detail is in [docs/install.md](docs/install.md). Cutting a release is [docs/releasing.md](docs/releasing.md).
 
 ## Quickstart
 
@@ -98,7 +98,7 @@ sbx shell $id
 sbx rm $id
 ```
 
-`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
+`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. `sbx preview $id 3000` publishes a port and prints its URL. See [CLI](website/src/docs/cli.md#sandbox-commands).
 
 A running sandbox can be committed to an image with `POST /v1/sandboxes/{id}/snapshot`, so a prepared environment can be forked. `/workspace` and root filesystem changes are kept, secrets are not, and `{"template": "name"}` also saves it as a template. Docker backend only; see [Snapshots](website/src/docs/templates.md#snapshots).
 
@@ -132,13 +132,13 @@ Config lives in `sbx.yaml` (see `sbx.yaml.example`). Flags override environment 
 - Secure defaults: no network, all capabilities dropped, non-root, read-only rootfs, memory without swap, PID limit. `disk_mb` is the size of the writable `/workspace` tmpfs. Firecracker uses an ext4 rootfs of that size, with `sbx-agent` as init.
 - Named volumes (`POST /v1/volumes`) that outlive a sandbox. Mount one at `/workspace` to keep a project or package cache across sandboxes. `disk_mb` does not cap a volume mounted at `/workspace`. A sandbox key only sees its own volumes. Deleting a sandbox does not delete the volume; deleting a volume fails while a live sandbox mounts it. Firecracker does not attach Docker volumes.
 
-`network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
+`network: none` is the default. `network: full` (or `allow`) joins the `sbx` bridge and can reach the public internet: DNS, IPv4, IPv6 when the daemon has it, git, and package registries. Metadata and private ranges stay blocked unless the operator opts out. A server default, an API-key default, and a per-sandbox override share one policy, including domain and CIDR allow and deny lists and per-sandbox bandwidth and connection limits. `PATCH /v1/sandboxes/{id}/network` (or `sbx network ID --allow ...`) changes those rules on a running sandbox without a restart. Preview ports are reachable through the server on `/p/{id}/{port}/` and, with `preview_domain`, on `<port>-sbx-<id>.sbx.example.com`. The setup for Caddy, Traefik, and Dokploy is in [docs/NETWORK.md](docs/NETWORK.md).
 
 When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it, sandboxes start that binary and do not need a shell for exec, files, terminals, archives, or previews. The compose image ships both binaries. Without the agent, exec and files still use a shell inside the image (`sh`, `cat`, `find`, `stat`, `tar`). Firecracker always needs the agent: it is the guest init. The design notes are in [docs/DESIGN.md](docs/DESIGN.md) and [docs/AGENT.md](docs/AGENT.md). Kata setup is [docs/kata.md](docs/kata.md). Firecracker setup is [docs/firecracker.md](docs/firecracker.md).
 
 ## Dashboard
 
-`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
+`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, publishes preview URLs, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
 
 ## Deploying the website with Dokploy
 
@@ -162,6 +162,7 @@ SBX_INTEGRATION=1 go test -count=1 -timeout 40m ./internal/driver/docker/ ./test
 npm test --prefix sdk/typescript
 bun test --cwd sdk/typescript test
 (cd sdk/python && PYTHONPATH=src python3 -m unittest discover -s tests -t .)
+(cd sdk/go && go test -race ./...)
 ```
 
 Integration tests talk to a real Docker daemon and are skipped unless `SBX_INTEGRATION=1`. The live SDK tests are skipped unless `SBX_LIVE=1` (the server must already be running). CI runs unit tests with the race detector and prints the coverage total, then the Docker integration job, the SDK tests, and a website image build. Pull requests also run a GoReleaser snapshot that builds the archives and the image without publishing.
