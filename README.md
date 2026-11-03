@@ -98,7 +98,7 @@ sbx shell $id
 sbx rm $id
 ```
 
-`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. See [CLI](website/src/docs/cli.md#sandbox-commands).
+`sbx ls`, `get`, `pause`, `resume`, and `ttl` cover the rest. `sbx preview $id 3000` publishes a port and prints its URL. See [CLI](website/src/docs/cli.md#sandbox-commands).
 
 A running sandbox can be committed to an image with `POST /v1/sandboxes/{id}/snapshot`, so a prepared environment can be forked. `/workspace` and root filesystem changes are kept, secrets are not, and `{"template": "name"}` also saves it as a template. Docker backend only; see [Snapshots](website/src/docs/templates.md#snapshots).
 
@@ -138,7 +138,7 @@ When `sbx-agent` sits next to the `sbx` binary, or `SBX_AGENT_BIN` points at it,
 
 ## Dashboard
 
-`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
+`sbx serve` also serves a small web UI at `http://127.0.0.1:8080/ui/` (a browser opening `/` is sent there). Sign in with an API key. It lists and searches sandboxes, creates, pauses, resumes, and deletes them, opens a terminal in one, runs background commands and follows their output, publishes preview URLs, and, with an admin key, creates and revokes API keys. The UI is static files embedded in the binary with no build step; every action is a normal `/v1` call with the key you signed in with, so a sandbox key sees only its own sandboxes. Terminals and logs need `sbx-agent`. Turn the UI off with `dashboard: false` or `SBX_DASHBOARD=false`. More in [website/src/docs/dashboard.md](website/src/docs/dashboard.md).
 
 ## Deploying the website with Dokploy
 
