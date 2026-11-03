@@ -429,3 +429,43 @@ test("client sends key registry credentials", async () => {
     server.close()
   }
 })
+
+test("breaking out of watch and execStream closes the connection and skips pings", async () => {
+  const closed: string[] = []
+  const server = createServer((req, res) => {
+    req.resume()
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    const kind = req.url?.includes("/files/watch") ? "watch" : "exec"
+    res.on("close", () => closed.push(kind))
+    if (kind === "watch") {
+      res.write('event: ready\ndata: {"path":"/workspace"}\n\n: ping\n\n')
+      res.write('event: change\ndata: {"type":"create","path":"/workspace/a.txt"}\n\n')
+    } else {
+      res.write(': ping\n\nevent: stdout\ndata: {"data":"first"}\n\n')
+    }
+    // Never end: only the client hanging up closes these streams.
+  })
+  server.listen(0, "127.0.0.1")
+  await once(server, "listening")
+  try {
+    const address = server.address()
+    assert.ok(address && typeof address === "object")
+    const client = new SbxClient({ baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "sbx_testkey" })
+
+    for await (const change of client.watch("sbx_test", "/workspace")) {
+      assert.deepEqual(change, { type: "create", path: "/workspace/a.txt" })
+      break
+    }
+    for await (const event of client.execStream("sbx_test", "sleep 60")) {
+      assert.equal(event.type, "stdout")
+      assert.equal(event.data, "first")
+      break
+    }
+    const deadline = Date.now() + 2000
+    while (closed.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10))
+    assert.deepEqual(closed.sort(), ["exec", "watch"])
+  } finally {
+    server.closeAllConnections()
+    server.close()
+  }
+})

@@ -601,7 +601,8 @@ paths:
       description: |
         Waits for the process and returns stdout, stderr, and the exit code.
         `?stream=1` switches the response to Server-Sent Events (`stdout`,
-        `stderr`, `exit`, `error`).
+        `stderr`, `exit`, `error`). A quiet stream sends a `: ping` comment
+        every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - in: query
@@ -741,7 +742,8 @@ paths:
       description: |
         Server-Sent Events. `ready`, then `change` events with `type`
         (`create`, `write`, or `remove`) and `path`. The agent uses inotify
-        and falls back to a 200 ms poll when inotify is unavailable.
+        and falls back to a 200 ms poll when inotify is unavailable. A quiet
+        stream sends a `: ping` comment every 15 seconds.
       parameters:
         - $ref: "#/components/parameters/SandboxID"
         - $ref: "#/components/parameters/Path"
