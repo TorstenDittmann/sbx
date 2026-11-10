@@ -32,7 +32,7 @@ jobs:
       - name: Build website
         working-directory: website
         run: bun install --frozen-lockfile && ./build.sh
-      - uses: TorstenDittmann/orch@v0.1.15
+      - uses: TorstenDittmann/orch@12adfaa6d9202c459175a4a6a689865ea6e2b31b # v1.0.0
         with:
           cluster: ${{ vars.ORCH_CLUSTER }}
           version: ${{ vars.ORCH_VERSION }}
